@@ -32,14 +32,14 @@ pip install opencv-python numpy pytesseract python-chess moviepy tqdm
 
 ### Phase 1: Move Extraction
 
-The primary entry point is `phase1_extract_moves.py`:
+The primary entry point is `extract_moves.py`:
 
 ```bash
 # Basic usage
-python phase1_extract_moves.py "path/to/video.mp4"
+python extract_moves.py "path/to/video.mp4"
 
 # Specify custom board asset, output path
-python phase1_extract_moves.py "path/to/video.mp4" \
+python extract_moves.py "path/to/video.mp4" \
   --board-asset "assets/board/custom_board.png" \
   --output "output/my_game.json"
 ```

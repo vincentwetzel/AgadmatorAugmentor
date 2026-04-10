@@ -10,7 +10,7 @@ All 4 phases are implemented and tested on sample videos.
 
 ### ✅ Phase 1: Move Extraction
 
-**Files:** `phase1_extract_moves.py`, `video_extractor.py`
+**Files:** `extract_moves.py`, `video_extractor.py`
 
 The core extraction pipeline is fully operational:
 
