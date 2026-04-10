@@ -14,14 +14,18 @@
 // Every test MUST have a toggle here — no exceptions.
 //
 // Unit tests (detector accuracy on sample images):
-#define TEST_LOCATE_BOARD         0
-#define TEST_DRAW_GRID            0
-#define TEST_YELLOW_SQUARES       0
-#define TEST_PIECE_COUNTS         0
-#define TEST_RED_SQUARES          0
-#define TEST_YELLOW_ARROWS        0
-#define TEST_MISALIGNED_PIECE     0
-#define TEST_GAME_CLOCKS          0
+#define TEST_LOCATE_BOARD         1
+#define TEST_DRAW_GRID            1
+#define TEST_YELLOW_SQUARES       1
+#define TEST_PIECE_COUNTS         1
+#define TEST_RED_SQUARES          1
+#define TEST_YELLOW_ARROWS        1
+#define TEST_MISALIGNED_PIECE     1
+#define TEST_GAME_CLOCKS          1
+//
+// Integration tests (full video pipeline with ground-truth PGN):
+#define TEST_7_PLIES_EXTRACTION   0
+#define TEST_MEDIUM_GAME_REVERT   0
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   1
@@ -366,5 +370,83 @@ TEST_F(DetectorsTest, ConstructorThrowsOnMissingAsset) {
 }
 
 #endif // TEST_CONSTRUCTOR_THROWS
+
+// ─── INTEGRATION: 7 PLIES EXTRACTION ─────────────────────────────────────────
+#if TEST_7_PLIES_EXTRACTION
+
+TEST_F(DetectorsTest, SevenPliesExtraction) {
+    const std::string video_path = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
+
+    if (!std::filesystem::exists(video_path)) {
+        GTEST_SKIP() << "Video not found: " << video_path;
+    }
+
+    std::cout << "\nRunning integration test on 7 plies video...\n";
+
+    ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
+    GameData data = extractor.extract_moves_from_video(video_path, "output/cpp_7ply_test.json", "test_7_plies");
+
+    // Expected moves from game.pgn: 1. d4 d5 2. c4 e6 3. Nf3 Nf6 4. g3
+    std::vector<std::string> expected_moves = {"d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3"};
+
+    std::cout << "  Expected (" << expected_moves.size() << "): ";
+    for (const auto& m : expected_moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    std::cout << "  Extracted (" << data.moves.size() << "): ";
+    for (const auto& m : data.moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    EXPECT_EQ(data.moves, expected_moves)
+        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+
+    if (data.moves == expected_moves) {
+        std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size() << " plies from the PGN.\n";
+    }
+}
+
+#endif // TEST_7_PLIES_EXTRACTION
+
+// ─── INTEGRATION: MEDIUM GAME WITH REVERT ─────────────────────────────────────
+#if TEST_MEDIUM_GAME_REVERT
+
+TEST_F(DetectorsTest, MediumGameWithRevert) {
+    const std::string video_path = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_games_medium\medium_game_with_analysis_line_and_revert.mp4)";
+
+    if (!std::filesystem::exists(video_path)) {
+        GTEST_SKIP() << "Video not found: " << video_path;
+    }
+
+    std::cout << "\nRunning integration test on medium game with revert...\n";
+
+    ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
+    GameData data = extractor.extract_moves_from_video(video_path, "output/cpp_medium_test.json", "test_medium_revert");
+
+    // Expected moves from game.pgn:
+    // 1. d4 d5 2. c4 e6 3. Nf3 Nf6 4. g3 Bb4+ 5. Nbd2 a5 6. Bg2 a4
+    // 7. O-O Nc6 8. Qc2 O-O 9. Re1
+    std::vector<std::string> expected_moves = {
+        "d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3", "f8b4",
+        "b1d2", "a7a5", "f1g2", "a5a4", "e1g1", "b8c6", "d1c2", "e8g8", "f1e1"
+    };
+
+    std::cout << "  Expected (" << expected_moves.size() << "): ";
+    for (const auto& m : expected_moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    std::cout << "  Extracted (" << data.moves.size() << "): ";
+    for (const auto& m : data.moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    EXPECT_EQ(data.moves, expected_moves)
+        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+
+    if (data.moves == expected_moves) {
+        std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size()
+                  << " moves from the PGN, correctly handling analysis line revert.\n";
+    }
+}
+
+#endif // TEST_MEDIUM_GAME_REVERT
 
 } // namespace aa

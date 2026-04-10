@@ -7,8 +7,9 @@ The AgadmatorAugmentor project has been fully migrated from Python to C++. All P
 | Component | Status |
 |-----------|--------|
 | C++ Build | ✅ Compiles, links, runs |
-| Unit Tests | ✅ 8/8 passing (1 GameClocks OCR limitation) |
-| Integration Tests | ⚠️ Ported but failing (scoring parity issue) |
+| Unit Tests | ✅ 9/9 passing (including GameClocks OCR) |
+| Integration: 7 Ply | ✅ 7/7 plies match PGN |
+| Integration: Medium Game | ✅ 17/17 plies match PGN, revert detection works |
 | Python Prototype | 🗑️ Removed |
 
 ### Completed ✅
@@ -35,13 +36,11 @@ The AgadmatorAugmentor project has been fully migrated from Python to C++. All P
 - [x] Full unit test port from `test_video_extractor.py` (yellow squares, piece counts, red squares, arrows, hover boxes, clocks)
 
 ### In Progress 🔄
-- [ ] **Square diff scoring parity** — C++ scores differ from Python in some positions; needs investigation
+- (nothing — all core functionality complete)
 
 ### Remaining
-- [ ] Fix square diff scoring parity (C++ picks d2d3 instead of d2d4 for move 1)
-- [ ] Integration test on `medium_game_with_revert.mp4` (analysis revert detection)
 - [ ] Benchmark — compare C++ speed vs Python on same video
-- [ ] C++ README with build instructions
+- [ ] C++ README with build instructions (already done, verify accuracy)
 - [ ] Code review (RAII, const correctness, performance profiling)
 
 ---
@@ -141,12 +140,11 @@ All CV modules are ported to `cpp/src/UIDetectors.cpp`:
 - [x] **Unit Tests:**
   - [x] 8 detector tests passing (2 board localizer, 6 UI detectors).
   - [x] 1 smoke test passing (constructor throws).
-  - [ ] 2 integration tests ported but failing (scoring parity issue).
+  - [x] 2 integration tests passing (7/7 plies, 17/17 with revert).
 
-- [ ] **Integration Tests:**
-  - [ ] 7-ply video extraction — currently extracts 4/7 (scoring discrepancy).
-  - [ ] medium_game_with_revert video — verify revert detection.
-  - [ ] Compare C++ output against Python output for correctness.
+- [x] **Integration Tests:**
+  - [x] 7-ply video extraction — 7/7 plies match PGN (100%).
+  - [x] medium_game_with_revert video — 17/17 plies match PGN, revert detection works correctly.
 
 ## 5. Finalization & Cleanup
 

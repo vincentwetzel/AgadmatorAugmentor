@@ -397,6 +397,73 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             std::string to_name = sq_name(best.to_sq);
             std::string move_uci = from_name + to_name;
 
+            // ── Move settling: peek ahead 0.4s to confirm the move has settled ──
+            // At the moment a change is first detected, the piece may still be animating.
+            // Wait 2 fine steps and check that the same move still has the highest score.
+            double settle_t = round_t(t + fine_step * 2);
+            int settle_frame = static_cast<int>(settle_t * fps);
+            bool move_confirmed = false;
+
+            if (settle_frame < cap.get(cv::CAP_PROP_FRAME_COUNT)) {
+                // Save current stream position
+                int saved_frame = current_frame;
+
+                // Seek to settle_t
+                if (settle_frame > current_frame && settle_frame - current_frame < fps * 3) {
+                    for (int i = 0; i < settle_frame - current_frame - 1; ++i) cap.grab();
+                    cap >> frame;
+                    current_frame = settle_frame + 1;
+                } else {
+                    cap.set(cv::CAP_PROP_POS_FRAMES, settle_frame);
+                    cap >> frame;
+                    current_frame = settle_frame + 1;
+                }
+
+                if (!frame.empty()) {
+                    cv::Mat settle_bgr = frame(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh));
+                    cv::Mat settle_gray;
+                    cv::cvtColor(settle_bgr, settle_gray, cv::COLOR_BGR2GRAY);
+
+                    cv::Mat settle_diff;
+                    cv::absdiff(settle_gray, prev_gray, settle_diff);
+
+                    auto settle_best = score_moves_for_board(settle_diff);
+                    if (settle_best.score > 25.0 && settle_best.from_sq >= 0) {
+                        std::string settle_from = sq_name(settle_best.from_sq);
+                        std::string settle_to = sq_name(settle_best.to_sq);
+                        // If same move or better score, confirm
+                        if ((settle_from == from_name && settle_to == to_name) ||
+                            settle_best.score >= best.score) {
+                            move_confirmed = true;
+                            t = settle_t; // Advance time to settled position
+                            board_bgr = settle_bgr;
+                            board_gray = settle_gray;
+                            diff = settle_diff;
+                            best = settle_best;
+                            from_name = settle_from;
+                            to_name = settle_to;
+                            move_uci = settle_from + settle_to;
+                        }
+                    }
+                }
+
+                // Restore stream position if settle didn't confirm
+                if (!move_confirmed) {
+                    // Seek back to original position and accept current candidate
+                    cap.set(cv::CAP_PROP_POS_FRAMES, target_frame);
+                    cap >> frame;
+                    current_frame = target_frame + 1;
+                    move_confirmed = true; // Accept the original candidate
+                }
+            } else {
+                move_confirmed = true; // End of video, accept
+            }
+
+            if (!move_confirmed) {
+                t = round_t(t + fine_step);
+                continue;
+            }
+
             // Inverse move filter: reject if this is the reverse of a recent move
             bool inverse_recent = false;
             std::string reverse_uci = to_name + from_name;

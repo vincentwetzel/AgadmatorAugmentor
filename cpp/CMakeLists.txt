@@ -91,7 +91,6 @@ if(BUILD_TESTS)
 
     add_executable(test_extract_moves
         tests/test_ui_detectors.cpp
-        tests/test_chess_video_extractor.cpp
         src/BoardLocalizer.cpp
         src/UIDetectors.cpp
         src/ChessVideoExtractor.cpp
