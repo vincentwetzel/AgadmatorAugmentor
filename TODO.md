@@ -41,6 +41,16 @@ The AgadmatorAugmentor project has been fully migrated from Python to C++. All P
 ### Remaining
 - [ ] Benchmark — compare C++ speed vs Python on same video (Python files removed)
 
+### Optimization Results
+
+| Optimization | Before | After | Savings |
+|-------------|--------|-------|---------|
+| Board localization 1/4-res (passes 1-2) | 8.6s | ~3.6s | 58% |
+| FAST mode: 1.0s → 2.0s poll interval | — | — | ~1s |
+| Settle peek: 0.4s → 0.2s | — | — | ~1.5s |
+| Elapsed timestamps (profiling) | — | — | 0 |
+| **Total (7-ply video)** | **23.1s** | **18.2s** | **21%** |
+
 ---
 
 ## 1. Project Setup & Dependencies
