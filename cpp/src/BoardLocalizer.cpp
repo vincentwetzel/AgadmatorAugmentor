@@ -3,23 +3,35 @@
 
 namespace aa {
 
+// Downscale factor for passes 1-2: 1/4 resolution → 16x faster matchTemplate
+static constexpr int DOWNSCALE = 4;
+
 BoardGeometry locate_board(const cv::Mat& img_bgr, const cv::Mat& board_template) {
     BoardGeometry geo;
     double best_scale = 1.0;
     double best_val = -1.0;
 
-    // Pass 1: Coarse search (0.3x to 1.5x, 25 steps)
+    // Downscale image and template for passes 1-2 (coarse + fine)
+    cv::Mat img_ds, tpl_ds;
+    int ds_w = std::max(img_bgr.cols / DOWNSCALE, 1);
+    int ds_h = std::max(img_bgr.rows / DOWNSCALE, 1);
+    cv::resize(img_bgr, img_ds, cv::Size(ds_w, ds_h), 0, 0, cv::INTER_AREA);
+    int tpl_dw = std::max(board_template.cols / DOWNSCALE, 1);
+    int tpl_dh = std::max(board_template.rows / DOWNSCALE, 1);
+    cv::resize(board_template, tpl_ds, cv::Size(tpl_dw, tpl_dh), 0, 0, cv::INTER_AREA);
+
+    // Pass 1: Coarse search (0.3x to 1.5x, 25 steps) — 1/4 resolution
     for (int i = 0; i < 25; ++i) {
         double scale = 0.3 + (1.5 - 0.3) * i / 24.0;
-        int rw = static_cast<int>(board_template.cols * scale);
-        int rh = static_cast<int>(board_template.rows * scale);
-        if (rh <= 0 || rw <= 0 || rh > img_bgr.rows || rw > img_bgr.cols) continue;
+        int rw = static_cast<int>(tpl_ds.cols * scale);
+        int rh = static_cast<int>(tpl_ds.rows * scale);
+        if (rh <= 0 || rw <= 0 || rh > img_ds.rows || rw > img_ds.cols) continue;
 
         cv::Mat resized;
-        cv::resize(board_template, resized, cv::Size(rw, rh), 0, 0, cv::INTER_AREA);
+        cv::resize(tpl_ds, resized, cv::Size(rw, rh), 0, 0, cv::INTER_AREA);
 
         cv::Mat result;
-        cv::matchTemplate(img_bgr, resized, result, cv::TM_CCOEFF_NORMED);
+        cv::matchTemplate(img_ds, resized, result, cv::TM_CCOEFF_NORMED);
         double max_val;
         cv::minMaxLoc(result, nullptr, &max_val);
         if (max_val > best_val) {
@@ -28,19 +40,19 @@ BoardGeometry locate_board(const cv::Mat& img_bgr, const cv::Mat& board_template
         }
     }
 
-    // Pass 2: Fine search (best_scale ± 0.05, 21 steps)
+    // Pass 2: Fine search (best_scale ± 0.05, 21 steps) — 1/4 resolution
     best_val = -1.0;
     for (int i = 0; i < 21; ++i) {
         double scale = best_scale - 0.05 + 0.1 * i / 20.0;
-        int rw = static_cast<int>(board_template.cols * scale);
-        int rh = static_cast<int>(board_template.rows * scale);
-        if (rh <= 0 || rw <= 0 || rh > img_bgr.rows || rw > img_bgr.cols) continue;
+        int rw = static_cast<int>(tpl_ds.cols * scale);
+        int rh = static_cast<int>(tpl_ds.rows * scale);
+        if (rh <= 0 || rw <= 0 || rh > img_ds.rows || rw > img_ds.cols) continue;
 
         cv::Mat resized;
-        cv::resize(board_template, resized, cv::Size(rw, rh), 0, 0, cv::INTER_AREA);
+        cv::resize(tpl_ds, resized, cv::Size(rw, rh), 0, 0, cv::INTER_AREA);
 
         cv::Mat result;
-        cv::matchTemplate(img_bgr, resized, result, cv::TM_CCOEFF_NORMED);
+        cv::matchTemplate(img_ds, resized, result, cv::TM_CCOEFF_NORMED);
         double max_val;
         cv::minMaxLoc(result, nullptr, &max_val);
         if (max_val > best_val) {
@@ -49,7 +61,9 @@ BoardGeometry locate_board(const cv::Mat& img_bgr, const cv::Mat& board_template
         }
     }
 
-    // Pass 3: Exact search (best_scale ± 0.01, 21 steps)
+    // Scale is invariant to downscaling — pass 3 continues from same scale range
+
+    // Pass 3: Exact search (best_scale ± 0.01, 21 steps) — full resolution
     best_val = -1.0;
     cv::Point best_loc;
     cv::Size best_shape = board_template.size();

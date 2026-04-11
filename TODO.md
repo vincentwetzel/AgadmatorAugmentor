@@ -144,16 +144,23 @@ All CV modules are ported to `cpp/src/UIDetectors.cpp`:
   - [x] 7-ply video extraction — 7/7 plies match PGN (100%).
   - [x] medium_game_with_revert video — 17/17 plies match PGN, revert detection works correctly.
 
-## 5. Finalization & Cleanup
+## 5. Performance Optimization Gameplan (Post-Migration)
 
-- [ ] **Create a `README.md` for the C++ version:**
-  - [ ] Document build instructions using CMake.
-  - [ ] Explain how to use E:\vcpkg and E:\libchess.
-  - [ ] Update the usage examples for the new C++ executable.
-- [ ] **Code Review and Refactoring:**
-  - [ ] Ensure C++ best practices (RAII, smart pointers, const correctness).
-  - [ ] Profile the application to identify performance bottlenecks.
-  - [ ] Benchmark C++ speed vs Python.
+Based on architectural analysis, here is the roadmap to maximize C++ processing speed:
+
+### High Priority (Highest ROI)
+- [ ] **Parallel Frame Prefetching:** Decouple `cv::VideoCapture::read()` from the main loop. Use a background worker thread to pre-decode frames and pre-compute `cv::cvtColor` (grayscale) into a thread-safe queue. The main state-machine loop should never block waiting for FFmpeg.
+- [ ] **Enable Static Linking (LTO):** Switch the CMake/vcpkg triplet from `x64-windows` to `x64-windows-static`. This eliminates DLL dispatch overhead and allows the compiler to perform Whole Program Optimization across your dependencies.
+
+### Medium Priority
+- [ ] **GPU Acceleration (CUDA):** Rebuild OpenCV in vcpkg with the `[cuda]` feature flag. Offload the initial `cv::matchTemplate` and the heavy per-frame `cv::absdiff` / `cv::cvtColor` operations to the GPU using the `cv::cuda::` namespace.
+- [ ] **Optimize 64-Square Operations:** Instead of looping 64 times per frame to call `cv::mean` on individual square ROIs, construct a single operation using SIMD/matrix multiplication or `cv::reduce` to process all 64 squares simultaneously.
+- [ ] **Conditional Clock OCR:** OCR is still heavy even without subprocesses. Cache the bounding box of the clock ROIs and compute a quick structural diff. Only invoke Tesseract `api.get_text()` if the clock pixels have meaningfully changed since the last validated frame.
+
+### Completed in Initial C++ Migration ✅
+- [x] **Remove Pytesseract Subprocess Bottleneck:** Replaced Python `pytesseract` with direct dynamic loading of the Tesseract C API (`TessBaseAPI`).
+- [x] **Cache Board Location:** `locate_board()` is now strictly run once on the first frame and passed as `geo_`.
+- [x] **Skip Redundant Frames:** Implemented adaptive FAST/FINE mode to aggressively step over unchanged sequences.
 
 ---
 
@@ -170,3 +177,14 @@ All CV modules are ported to `cpp/src/UIDetectors.cpp`:
 | `os`, `shutil`                | C++17 `<filesystem>`           |
 | `unittest`                    | Google Test                    |
 | `tqdm`                        | Manual progress output (TODO)  |
+
+## 6. Finalization & Cleanup
+
+- [ ] **Create a `README.md` for the C++ version:**
+  - [ ] Document build instructions using CMake.
+  - [ ] Explain how to use E:\vcpkg and E:\libchess.
+  - [ ] Update the usage examples for the new C++ executable.
+- [ ] **Code Review and Refactoring:**
+  - [ ] Ensure C++ best practices (RAII, smart pointers, const correctness).
+  - [ ] Profile the application to identify performance bottlenecks.
+  - [ ] Benchmark C++ speed vs Python.

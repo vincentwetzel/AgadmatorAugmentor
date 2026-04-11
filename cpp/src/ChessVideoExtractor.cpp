@@ -14,8 +14,24 @@
 #include <stdexcept>
 #include <memory>
 #include <cmath>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
 
 namespace aa {
+
+// ── Utility: format elapsed seconds as [H:MM:SS.mmm] ────────────────────────
+static std::string ts(double elapsed) {
+    int total_ms = static_cast<int>(elapsed * 1000.0);
+    int h = total_ms / 3600000;
+    int m = (total_ms % 3600000) / 60000;
+    int s = (total_ms % 60000) / 1000;
+    int ms = total_ms % 1000;
+    std::ostringstream oss;
+    if (h > 0) oss << h << ":" << std::setfill('0') << std::setw(2);
+    oss << m << ":" << std::setfill('0') << std::setw(2) << s << "." << std::setfill('0') << std::setw(3) << ms;
+    return "[" + oss.str() + "]";
+}
 
 // ── Square helpers (convention matches libchess: a1=0, h8=63) ────────────────
 
@@ -177,6 +193,11 @@ ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const 
 GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_path,
                                                         const std::string& output_path,
                                                         const std::string& debug_label) {
+    auto t_start = std::chrono::steady_clock::now();
+    auto elapsed = [&]() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    };
+
     // Initialize libchess position
     pos_ptr_ = std::make_unique<libchess::Position>("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
@@ -189,14 +210,14 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     double total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
     double duration = total_frames / fps;
 
-    std::cout << "Locating board coordinates using template matching...\n";
+    std::cout << ts(elapsed()) << " Locating board coordinates using template matching...\n";
     cv::Mat first_frame;
     cap >> first_frame;
     if (first_frame.empty()) {
         throw std::runtime_error("Cannot read first frame of video.");
     }
 
-    std::cout << "Performing multi-pass template matching to find exact board scale...\n";
+    std::cout << ts(elapsed()) << " Performing multi-pass template matching to find exact board scale...\n";
     geo_ = locate_board(first_frame, board_template_);
 
     std::string debug_dir_name = debug_label;
@@ -211,7 +232,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     }
 
     if (debug_level_ != DebugLevel::None) {
-        std::cout << "Generating debug screenshot for initial board...\n";
+        std::cout << ts(elapsed()) << " Generating debug screenshot for initial board...\n";
         std::filesystem::create_directories(debug_dir);
         cv::Mat debug_board = first_frame.clone();
         draw_board_grid(debug_board, geo_, cv::Scalar(0, 255, 0), 2, true);
@@ -250,20 +271,22 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     cv::cvtColor(first_frame, first_gray, cv::COLOR_BGR2GRAY);
     board_image_history.push_back(first_gray(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh)).clone());
 
-    std::cout << "Scanning video frames at fixed intervals to calculate moves...\n";
+    std::cout << ts(elapsed()) << " Scanning video frames to calculate moves...\n";
 
     auto round_t = [](double val) { return std::round(val * 100.0) / 100.0; };
 
-    // Convert absolute pixel diff scores to a human-readable 0-100% confidence scale.
+    // ── Profiling counters ────────────────────────────────────────────────
+    int frame_count = 0;
+
     auto score_to_confidence = [](double s) {
-        if (s >= 60.0) return 99.9; // A perfect pawn move scores ~65, which is maximum confidence
+        if (s >= 60.0) return 99.9;
         if (s <= 0.0) return 0.0;
-        if (s >= 25.0) return 50.0 + ((s - 25.0) / 35.0) * 49.9; // Scale 25-60 -> 50%-99.9%
-        return (s / 25.0) * 50.0; // Scale 0-25 -> 0%-50%
+        if (s >= 25.0) return 50.0 + ((s - 25.0) / 35.0) * 49.9;
+        return (s / 25.0) * 50.0;
     };
 
     int current_frame = 1;
-    double fast_step = 1.0;
+    double fast_step = 2.0;  // Poll every 2s in FAST mode (piece animation takes ~0.5s)
     double fine_step = 0.2;
     double t = 0.0;
     bool mode_fast = true;
@@ -292,6 +315,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         }
 
         if (frame.empty()) break;
+        ++frame_count;
 
         cv::Mat board_bgr = frame(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh));
         cv::Mat board_gray;
@@ -342,10 +366,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 if (best_idx >= 0 && best_diff_val < 15.0) {
                     ++branch_counter;
                     int reverted = static_cast<int>(data.moves.size()) - best_idx;
-                    std::cout << "\n--- ANALYSIS REVERT at " << t << "s (board matched past state) ---\n";
-                    std::cout << "Snapped back to ply " << best_idx << " (Branch " << branch_counter << ")\n";
+                    std::cout << "\n" << ts(elapsed()) << " --- ANALYSIS REVERT at " << t << "s (board matched past state) ---\n";
+                    std::cout << ts(elapsed()) << " Snapped back to ply " << best_idx << " (Branch " << branch_counter << ")\n";
                     if (reverted > 0) {
-                        std::cout << "  Rolling back " << reverted << " analysis moves\n";
+                        std::cout << ts(elapsed()) << "   Rolling back " << reverted << " analysis moves\n";
                     }
 
                     data.moves.resize(best_idx);
@@ -392,10 +416,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             std::string to_name = sq_name(best.to_sq);
             std::string move_uci = from_name + to_name;
 
-            // ── Move settling: peek ahead 0.4s to confirm the move has settled ──
+            // ── Move settling: peek ahead 0.2s to confirm the move has settled ──
             // At the moment a change is first detected, the piece may still be animating.
             // Peek ahead and accept the highest-scoring candidate (same move or different).
-            double settle_t = round_t(t + fine_step * 2);  // 0.4s ahead
+            double settle_t = round_t(t + fine_step);  // 0.2s ahead
             int settle_frame = static_cast<int>(settle_t * fps);
 
             if (settle_frame < cap.get(cv::CAP_PROP_FRAME_COUNT)) {
@@ -511,7 +535,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             double y_to = is_yellow(to_name);
             if (y_from < 40.0 || y_to < 40.0) {
                 if (debug_level_ != DebugLevel::None) {
-                    std::cout << "    [Debug] " << t << "s: " << move_uci << " rejected (Missing yellow highlights)\n";
+                    std::cout << "    " << ts(elapsed()) << " [Debug] " << t << "s: " << move_uci << " rejected (Missing yellow highlights)\n";
                 }
                 t = round_t(t + fine_step);
                 continue;
@@ -564,7 +588,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             if (has_hover_box(to_name)) {
                 if (debug_level_ != DebugLevel::None) {
-                    std::cout << "    [Debug] " << t << "s: " << move_uci << " rejected (Piece is still mid-drag)\n";
+                    std::cout << "    " << ts(elapsed()) << " [Debug] " << t << "s: " << move_uci << " rejected (Piece is still mid-drag)\n";
                 }
                 t = round_t(t + fine_step);
                 continue;
@@ -576,7 +600,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 std::string expected = (pos_ptr_->turn() == libchess::Side::White) ? "black" : "white";
                 if (clocks.active_player != expected) {
                     if (debug_level_ != DebugLevel::None) {
-                        std::cout << "    [Debug] " << t << "s: " << move_uci << " rejected (Waiting for clock to flip)\n";
+                        std::cout << "    " << ts(elapsed()) << " [Debug] " << t << "s: " << move_uci << " rejected (Waiting for clock to flip)\n";
                     }
                     t = round_t(t + fine_step);
                     continue;
@@ -587,7 +611,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             data.moves.push_back(move_uci);
             data.timestamps.push_back(t);
 
-            std::cout << "[Branch " << branch_counter << "] Ply " << data.moves.size()
+            std::cout << ts(elapsed()) << " [Branch " << branch_counter << "] Ply " << data.moves.size()
                       << ": detected " << move_uci << " at " << t << "s (confidence: " << round_t(score_to_confidence(best.score)) << "%)\n";
 
             // --- ADDED VISIBILITY: Print Top 3 Candidates ---
@@ -645,7 +669,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 }
                 std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b){ return a.score > b.score; });
                 
-                std::cout << "    > Top candidates: ";
+                std::cout << "    " << ts(elapsed()) << " > Top candidates: ";
                 for (size_t i = 0; i < std::min<size_t>(3, cands.size()); ++i) {
                     std::cout << cands[i].uci << " (" << round_t(score_to_confidence(cands[i].score)) << "%)   ";
                 }
@@ -680,7 +704,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     cap.release();
 
     // Write JSON output
-    std::cout << "Writing output to " << output_path << "\n";
+    double total_scan = elapsed();
+    std::cout << ts(total_scan) << " Writing output to " << output_path << "\n";
     nlohmann::json j;
     j["moves"] = data.moves;
     j["timestamps"] = data.timestamps;

@@ -131,3 +131,14 @@ The current implementation is a linear pipeline. The long-term vision is a set o
 - **Extraction** and **Verification** could run as a coupled pair (tight feedback loop).
 - **Commentary** could process audio in parallel while visual extraction runs.
 - **Augmentation** could start rendering overlays as soon as the first batch of verified moves is available, without waiting for the full video to be processed.
+
+---
+
+## AI Rules & Requirements
+
+### Git — HARD REQUIREMENTS
+
+- **NEVER** run `git push` unless the user explicitly instructs you to do so.
+- **NEVER** assume "yes, push" or auto-push after a commit.
+- You may `git add`, `git commit`, and `git status` freely. Pushing requires an explicit user command like "git push" or "push to remote".
+- This rule applies to all conversations in this project. No exceptions.
