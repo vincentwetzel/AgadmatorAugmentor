@@ -24,8 +24,8 @@
 #define TEST_GAME_CLOCKS          0
 //
 // Integration tests (full video pipeline with ground-truth PGN):
-#define TEST_7_PLIES_EXTRACTION   0
-#define TEST_MEDIUM_GAME_REVERT   1
+#define TEST_7_PLIES_EXTRACTION   1
+#define TEST_MEDIUM_GAME_REVERT   0
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   1

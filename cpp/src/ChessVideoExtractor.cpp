@@ -418,11 +418,11 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // ── Move settling: peek ahead 0.2s to confirm the move has settled ──
             // At the moment a change is first detected, the piece may still be animating.
-            // Peek ahead and accept the highest-scoring candidate (same move or different).
+            // Skip settle check if score > 50 (≈90% confidence) — the move is clearly settled.
             double settle_t = round_t(t + fine_step);  // 0.2s ahead
             int settle_frame = static_cast<int>(settle_t * fps);
 
-            if (settle_frame < cap.get(cv::CAP_PROP_FRAME_COUNT)) {
+            if (best.score < 50.0 && settle_frame < cap.get(cv::CAP_PROP_FRAME_COUNT)) {
                 // Seek to settle_t
                 if (settle_frame > current_frame && settle_frame - current_frame < fps * 3) {
                     for (int i = 0; i < settle_frame - current_frame - 1; ++i) cap.grab();
