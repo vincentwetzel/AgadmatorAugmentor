@@ -40,7 +40,6 @@ The AgadmatorAugmentor project has been fully migrated from Python to C++. All P
 
 ### Remaining
 - [ ] Benchmark — compare C++ speed vs Python on same video
-- [ ] C++ README with build instructions (already done, verify accuracy)
 - [ ] Code review (RAII, const correctness, performance profiling)
 
 ---
