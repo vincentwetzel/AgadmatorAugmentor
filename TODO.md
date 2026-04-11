@@ -48,8 +48,9 @@ The AgadmatorAugmentor project has been fully migrated from Python to C++. All P
 | Board localization 1/4-res (passes 1-2) | 8.6s | ~3.6s | 58% |
 | FAST mode: 1.0s → 2.0s poll interval | — | — | ~1s |
 | Settle peek: 0.4s → 0.2s | — | — | ~1.5s |
+| Skip settle when confidence >90% | — | — | ~6s |
 | Elapsed timestamps (profiling) | — | — | 0 |
-| **Total (7-ply video)** | **23.1s** | **18.2s** | **21%** |
+| **Total (7-ply video)** | **23.1s** | **10.8s** | **53%** |
 
 ---
 
