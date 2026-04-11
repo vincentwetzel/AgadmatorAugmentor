@@ -1,7 +1,6 @@
 #include "ChessVideoExtractor.h"
 #include <CLI/CLI.hpp>
 #include <iostream>
-#include <filesystem>
 
 int main(int argc, char* argv[]) {
     CLI::App app{"Agadmator Augmentor — Extract chess moves from video"};

@@ -4,7 +4,7 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
-#include <map>
+#include <memory>
 
 // Forward declare libchess types — headers included in .cpp
 namespace libchess { class Position; }
@@ -54,13 +54,15 @@ public:
                                       const std::string& output_path,
                                       const std::string& debug_label = "");
 
+    ~ChessVideoExtractor();
+
 private:
     cv::Mat board_template_;
     cv::Mat red_board_template_;
     DebugLevel debug_level_;
 
-    // libchess position state (stored as unique_ptr to avoid header dependency here)
-    void* position_;  // Actually a libchess::Position*, forward-declared to avoid #include
+    // libchess position state
+    std::unique_ptr<libchess::Position> pos_ptr_;
 
     // Square slice for efficient per-pixel diff extraction
     struct SquareSlice {

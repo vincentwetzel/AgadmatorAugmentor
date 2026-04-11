@@ -7,17 +7,11 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
-#include <array>
-#include <chrono>
-#include <thread>
 #include <filesystem>
 #include <algorithm>
 #include <stdexcept>
-#include <system_error>
-#include <cstdio>
 #include <memory>
 #include <cmath>
 
@@ -73,7 +67,7 @@ static char get_piece_at(const std::string& fen, int sq) {
 ChessVideoExtractor::ChessVideoExtractor(const std::string& board_asset_path,
                                           const std::string& red_board_asset_path,
                                           DebugLevel debug_level)
-    : debug_level_(debug_level), position_(nullptr) {
+    : debug_level_(debug_level) {
     board_template_ = cv::imread(board_asset_path);
     if (board_template_.empty()) {
         throw std::runtime_error("Could not load board asset at: " + board_asset_path);
@@ -83,6 +77,8 @@ ChessVideoExtractor::ChessVideoExtractor(const std::string& board_asset_path,
         red_board_template_ = cv::imread(red_board_asset_path);
     }
 }
+
+ChessVideoExtractor::~ChessVideoExtractor() = default;
 
 // ── Square diff calculation ──────────────────────────────────────────────────
 
@@ -108,7 +104,9 @@ cv::Mat ChessVideoExtractor::get_max_square_diff(const cv::Mat& img_a, const cv:
 // ── Move scoring using libchess ──────────────────────────────────────────────
 
 ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const cv::Mat& diff_image) {
-    auto& pos = *static_cast<libchess::Position*>(position_);
+    if (!pos_ptr_) return {};
+
+    auto& pos = *pos_ptr_;
 
     // Compute per-square diff means (our index convention matches libchess)
     std::vector<double> sq_diffs(64, 0.0);
@@ -180,8 +178,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                                         const std::string& output_path,
                                                         const std::string& debug_label) {
     // Initialize libchess position
-    auto pos_ptr = std::make_unique<libchess::Position>("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-    position_ = pos_ptr.get();
+    pos_ptr_ = std::make_unique<libchess::Position>("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
     cv::VideoCapture cap(video_path);
     if (!cap.isOpened()) {
@@ -241,7 +238,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     // Initialize game data
     GameData data;
-    data.fens.push_back(pos_ptr->get_fen());
+    data.fens.push_back(pos_ptr_->get_fen());
 
     // Extract initial clocks
     ClockState init_clocks = extract_clocks(first_frame, board_template_, geo_);
@@ -358,9 +355,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     board_image_history.resize(best_idx + 1);
 
                     // Rebuild libchess position from the correct FEN
-                    auto new_pos = std::make_unique<libchess::Position>(data.fens.back());
-                    position_ = new_pos.get();
-                    pos_ptr = std::move(new_pos);
+                    pos_ptr_ = std::make_unique<libchess::Position>(data.fens.back());
 
                     mode_fast = true;
                     t = round_t(t + fast_step);
@@ -404,9 +399,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             int settle_frame = static_cast<int>(settle_t * fps);
 
             if (settle_frame < cap.get(cv::CAP_PROP_FRAME_COUNT)) {
-                // Save stream position
-                int saved_frame = current_frame;
-
                 // Seek to settle_t
                 if (settle_frame > current_frame && settle_frame - current_frame < fps * 3) {
                     for (int i = 0; i < settle_frame - current_frame - 1; ++i) cap.grab();
@@ -465,7 +457,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             libchess::Move validated_move;
             bool move_valid = false;
             try {
-                validated_move = pos_ptr->parse_move(move_uci);
+                validated_move = pos_ptr_->parse_move(move_uci);
                 move_valid = true;
             } catch (...) {
                 move_valid = false;
@@ -581,7 +573,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             // ── Validation 3: Clock turn check ───────────────────────────────
             ClockState clocks = extract_clocks(frame, board_template_, geo_);
             if (!clocks.active_player.empty()) {
-                std::string expected = (pos_ptr->turn() == libchess::Side::White) ? "black" : "white";
+                std::string expected = (pos_ptr_->turn() == libchess::Side::White) ? "black" : "white";
                 if (clocks.active_player != expected) {
                     if (debug_level_ != DebugLevel::None) {
                         std::cout << "    [Debug] " << t << "s: " << move_uci << " rejected (Waiting for clock to flip)\n";
@@ -609,9 +601,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 struct Cand { std::string uci; double score; };
                 std::vector<Cand> cands;
                 
-                std::string fen = pos_ptr->get_fen();
+                std::string fen = pos_ptr_->get_fen();
                 
-                for (const auto& m : pos_ptr->legal_moves()) {
+                for (const auto& m : pos_ptr_->legal_moves()) {
                     int f = static_cast<int>(static_cast<unsigned int>(m.from()));
                     int raw_to = static_cast<int>(static_cast<unsigned int>(m.to()));
                     int to = raw_to;
@@ -661,10 +653,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             // Apply the move in libchess to update position state
-            pos_ptr->makemove(validated_move);
+            pos_ptr_->makemove(validated_move);
 
             // Update FEN, board image history, and clock history
-            data.fens.push_back(pos_ptr->get_fen());
+            data.fens.push_back(pos_ptr_->get_fen());
             board_image_history.push_back(board_gray.clone());
 
             data.clocks.push_back({clocks.active_player, clocks.white_time, clocks.black_time});
