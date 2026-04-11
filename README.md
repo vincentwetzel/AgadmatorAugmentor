@@ -100,11 +100,22 @@ Set to `0` to disable. Every test **must** have a toggle — no exceptions.
 
 The extractor treats the chess.com UI as a deterministic state machine:
 
-1. **Board Localization** — Multi-pass template matching with sub-pixel scale sweeping
-2. **Frame Polling** — Adaptive FAST/FINE scanning at ~5 FPS effective rate
+1. **Board Localization** — Multi-pass template matching with 1/4-resolution for passes 1-2 (16x speedup), full-res confirmation in pass 3
+2. **Frame Polling** — Adaptive FAST/FINE scanning (2.0s FAST, 0.2s FINE)
 3. **Square Diffing** — `cv::absdiff` with pre-computed square slices
 4. **Legal Move Scoring** — libchess generates legal moves, highest visual diff wins
 5. **4-Layer Validation** — Yellow highlights, hover-box rejection, clock turn check, revert detection
-6. **Output** — `output/analysis.json` with moves (UCI), timestamps, FENs, and clocks
+6. **Move Settling** — Adaptive 0.2s peek-ahead, skipped when confidence >90%
+7. **Output** — `output/analysis.json` with moves (UCI), timestamps, FENs, and clocks
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| 7-ply video (16s) | 10.8s processing |
+| Board localization | ~3.6s |
+| Video scanning loop | ~7.2s |
+| Unit tests | 9/9 passing |
+| Integration tests | 7/7 plies, 17/17 with revert |
 
 See [architecture.md](architecture.md) for full details.
