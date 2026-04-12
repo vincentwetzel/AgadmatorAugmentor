@@ -21,15 +21,6 @@
 - [ ] Profile with real video — run `extract_moves.exe` on a multi-minute game and verify no regressions
 - [ ] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
 
-## Further Speedup Opportunities (Investigated, Not Implemented)
-
-| Attempt | Result | Reason |
-|---------|--------|--------|
-| Adaptive Polling (0.3s/0.4s) | ❌ Wrong moves | Yellow highlights visible for <0.3s |
-| GPU MinMax Change Detection | ❌ Move regressions | GPU/CPU sync subtleties |
-| Batch Frame Prefetch (2-3 ahead) | 🤷 Marginal gains | Single-frame prefetch already overlaps well |
-| Custom 64F GPU Integral | 🔧 Not started | Requires `.cu` compilation unit |
-
 ## Test Control Panel
 
 Toggle tests in `cpp/tests/test_ui_detectors.cpp`:

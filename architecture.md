@@ -128,7 +128,20 @@ The detector code is split into three focused modules to keep files manageable (
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
 
-## 7. Future Integrations
+## 7. Attempted Speedup Optimizations
+
+The following optimizations were investigated but abandoned due to correctness regressions or complexity vs ROI:
+
+| Attempt | Approach | Result | Reason Abandoned |
+|---------|----------|--------|------------------|
+| **Adaptive Polling** | Increase polling interval from 0.2s to 0.3s/0.4s to scan fewer frames | ❌ Wrong moves | Some yellow highlight windows are only visible for <0.3s — wider intervals miss them entirely. Would require restructuring the entire sequential scan loop to detect-then-refine. |
+| **GPU MinMax Change Detection** | Use NPP `nppiAbsDiff` on GPU-resident frames, then download only the max pixel value (1 byte) instead of the 32F integral image | ❌ Move regressions | Subtle synchronization differences between the GPU fast-path and CPU scoring path caused incorrect move selection (e.g., `d1d2` vs `b1d2`, `c1d2` vs `b1d2`). |
+| **Batch Frame Prefetch** | Prefetcher decodes 2–3 frames ahead instead of 1 to hide more FFmpeg I/O latency | 🤷 Marginal gains | Single-frame prefetch already overlaps decode with processing. Additional batching showed no proportional performance improvement. |
+| **Custom 64F GPU Integral Kernel** | Write a custom CUDA kernel for 64F integral computation to eliminate the 3.3MB 32F integral download | 🔧 Not started | Requires a separate `.cu` compilation unit and careful device memory management. ROI unclear given current 9.9x real-time performance. |
+
+**Current bottleneck:** Frame decode from the prefetcher at ~15ms/frame. The theoretical minimum for 788 frames at 15ms decode is ~11.8s; the system achieves ~15s with ~3s overhead for scoring, validation, and revert detection.
+
+## 8. Future Integrations
 
 - **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — not yet implemented).
 - **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 3 — not yet implemented).
@@ -137,3 +150,12 @@ The detector code is split into three focused modules to keep files manageable (
 - **Transcripts & Context:** Aligning detected red squares and yellow arrows with speech-to-text outputs to contextualize streamer commentary.
 - **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection.
 - **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md`.
+
+## 8. Architectural Trade-offs & Rejected Optimizations
+
+During the C++ migration and optimization phase, several optimizations were investigated but ultimately abandoned. They are documented here to prevent future redundant efforts:
+
+- **Adaptive Polling:** Attempted using wide intervals (1–2s) in static regions and narrow (0.2s) after detecting movement. **Rejected** because some yellow highlight UI windows are only visible for <0.3s. Polling at 0.3s or 0.4s produced missed moves. Implementing this safely would require a complete restructuring of the sequential scan loop.
+- **Batch Frame Prefetch:** Considered decoding 2–3 frames ahead instead of 1 to hide more FFmpeg I/O latency. **Rejected** because the current single-frame prefetch already fully overlaps decode with CPU/GPU processing; additional batching adds memory overhead without proportional speed gains.
+- **GPU MinMax Change Detection:** Attempted using NPP `nppiMinMax` on the GPU diff to download only 1 byte instead of a 32F integral image to detect changes. **Rejected** because it caused move scoring regressions due to subtle precision and synchronization differences between GPU and CPU code paths.
+- **Custom 64F GPU Integral Kernel:** Considered writing a custom CUDA kernel for 64F integral computation to eliminate the 3.3MB 32F integral download and achieve true zero-copy performance. **Rejected** because it requires introducing a `.cu` compilation unit, which significantly complicates the pure C++ CMake build system for a relatively minor performance gain (ROI concern).
