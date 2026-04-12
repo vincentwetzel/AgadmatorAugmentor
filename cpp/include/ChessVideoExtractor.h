@@ -78,8 +78,6 @@ private:
 
     // Scratch buffers to avoid per-frame allocations in hot paths
     struct ScratchBuffers {
-        std::vector<cv::Mat> channels;   // reused by convertTo+split
-        cv::Mat float_mat;               // CV_32FC3 for yellowness
         cv::Mat white_mask;              // hover box detection
         cv::Mat reduced;                 // for cv::reduce output
     } scratch_;
@@ -97,16 +95,12 @@ private:
 
     cv::Mat get_max_square_diff(const cv::Mat& img_a, const cv::Mat& img_b);
 
-    /// GPU-accelerated square diff means using the zero-copy pipeline.
-    /// Returns empty vector if pipeline unavailable (caller falls back to CPU).
-    std::vector<double> get_square_diff_means_gpu();
-
     struct MoveScore {
         int from_sq = -1, to_sq = -1;
         double score = -1.0;
         libchess::Move move;
     };
-    MoveScore score_moves_for_board(const cv::Mat& diff_image);
+    MoveScore score_moves_for_board(const std::vector<double>& sq_diffs);
 };
 
 } // namespace aa

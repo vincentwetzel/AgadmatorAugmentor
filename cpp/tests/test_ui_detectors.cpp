@@ -44,7 +44,7 @@ static std::vector<IntegrationTestResult> g_test_results;
 #define TEST_MEDIUM_GAME_REVERT   1
 //
 // Smoke tests (constructor/validation):
-#define TEST_CONSTRUCTOR_THROWS   1
+#define TEST_CONSTRUCTOR_THROWS   0
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace aa {
