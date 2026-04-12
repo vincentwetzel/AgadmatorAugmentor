@@ -126,6 +126,24 @@ The system is designed for **high accuracy** rather than speed — it treats the
 
 ## 3. Component Architecture
 
+### 3.1 Module Organization
+
+Detector code is split into focused modules (soft limit: ~400 lines):
+
+| Module | File | Responsibility |
+|--------|------|----------------|
+| Board Localizer | `BoardLocalizer.h/.cpp` | GSS board localization, grid drawing |
+| Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow squares, piece counting, red squares, hover boxes |
+| Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
+| Clock Recognizer | `ClockRecognizer.h/.cpp` | Hu Moments digit recognizer, clock extraction, conditional caching |
+| Orchestrator | `ChessVideoExtractor.h/.cpp` | Video scanning loop, move verification, revert detection, JSON output |
+| GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
+| Frame Prefetcher | `FramePrefetcher.h/.cpp` | Async frame pre-decoding in background thread |
+
+`UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
+
+### 3.2 Data Flow Diagram
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                        main.cpp                              │
@@ -139,24 +157,23 @@ The system is designed for **high accuracy** rather than speed — it treats the
 │                                                              │
 │  ┌─────────────────────┐   ┌──────────────────────────────┐  │
 │  │   BoardGeometry     │   │      FramePrefetcher          │  │
-│  │  (locate_board)     │   │  (Background I/O thread)      │  │
+│  │  (BoardLocalizer)   │   │  (Background I/O thread)      │  │
 │  └─────────┬───────────┘   └──────────────┬───────────────┘  │
 │            │                              │                   │
 │            ▼                              ▼                   │
 │  ┌─────────────────────────────────────────────────────────┐  │
-│  │              Adaptive FAST/FINE Scanner                 │  │
-│  │   (2.0s polls → detect change → 0.2s fine scan)        │  │
+│  │              Sequential 5 FPS Forward Scanner           │  │
 │  └─────────────────────────┬───────────────────────────────┘  │
 │                            │                                   │
 │            ┌───────────────┼───────────────┐                   │
 │            ▼               ▼               ▼                   │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐       │
-│  │ Square Diff  │ │    Clocks    │ │  UI Detectors    │       │
-│  │  Scoring     │ │ (Hu Moments) │ │ (Yellow, Red,    │       │
-│  │              │ │              │ │  Arrows, Hover)  │       │
-│  └──────┬───────┘ └──────┬───────┘ └────────┬─────────┘       │
-│         │                │                   │                 │
-│         ▼                ▼                   ▼                 │
+│  ┌──────────────┐ ┌────────────────┐ ┌──────────────────┐     │
+│  │ Square Diff  │ │    Clocks      │ │  UI Detectors    │     │
+│  │  Scoring     │ │(ClockRecognizer│ │ (BoardAnalysis,  │     │
+│  │              │ │ + Hu Moments)  │ │  ArrowDetector)  │     │
+│  └──────┬───────┘ └──────┬─────────┘ └────────┬─────────┘     │
+│         │                │                     │                │
+│         ▼                ▼                     ▼                │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │           libchess::Position (Move Validation)          │  │
 │  │         (Legal moves, scoring, inverse filter)           │  │

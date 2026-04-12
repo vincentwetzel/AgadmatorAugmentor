@@ -1,24 +1,28 @@
 # Agents & Modules
 
-The Agadmator Augmentor pipeline is conceptually divided into several autonomous "Agents" or modules. While currently implemented as linear functional pipelines in Python, the architecture is designed to support independent, asynchronous agents in the future.
+The Agadmator Augmentor pipeline is conceptually divided into several autonomous "Agents" or modules. The current implementation is a C++20 linear pipeline designed for maximum performance.
 
 ## 1. The Extraction Agent (Computer Vision) — ✅ Implemented
 
-**File:** `video_extractor.py` (`ChessVideoExtractor`)
+**Files:**
+- `BoardLocalizer.h/.cpp` — `locate_board()` (GSS board localization)
+- `BoardAnalysis.h/.cpp` — Square means, yellow squares, piece counting, red squares, hover boxes
+- `ArrowDetector.h/.cpp` — `find_yellow_arrows()` (HSV masking + ray-casting)
+- `ClockRecognizer.h/.cpp` — `extract_clocks()` (Hu Moments OCR)
 
 Responsible for observing the raw video feed and translating it into structured sensory data.
 
 ### Sub-modules
 
-| Sub-module | Method | Description |
-|------------|--------|-------------|
-| **Board Localizer** | `locate_board()` | Multi-pass template matching to find board coordinates |
-| **Yellow Square Detector** | `extract_move_from_yellow_squares()` | Detects origin/destination highlights using mathematical yellowness |
-| **Red Square Detector** | `find_red_squares()` | Finds streamer emphasis marks with dynamic thresholding |
-| **Yellow Arrow Detector** | `find_yellow_arrows()` | HSV masking + ray-casting to find drawn arrows |
-| **Hover Box Detector** | `find_misaligned_piece()` | 1D projection on white edges to reject mid-drag frames |
-| **Clock Extractor** | `extract_clocks()` | OCR-based time and active player extraction |
-| **Piece Counter** | `count_pieces_in_image()` | Canny edge detection to count pieces on board |
+| Sub-module | Method | File | Description |
+|------------|--------|------|-------------|
+| **Board Localizer** | `locate_board()` | `BoardLocalizer.cpp` | Golden Section Search template matching (39 vs 67 linear steps) |
+| **Yellow Square Detector** | `extract_move_from_yellow_squares()` | `BoardAnalysis.cpp` | Detects origin/destination highlights using mathematical yellowness `(R+G)/2 - B` |
+| **Red Square Detector** | `find_red_squares()` | `BoardAnalysis.cpp` | Finds streamer emphasis marks with dynamic thresholding |
+| **Yellow Arrow Detector** | `find_yellow_arrows()` | `ArrowDetector.cpp` | HSV masking + ray-casting to find drawn arrows |
+| **Hover Box Detector** | `find_misaligned_piece()` | `BoardAnalysis.cpp` | 1D projection on white edges to reject mid-drag frames |
+| **Clock Extractor** | `extract_clocks()` | `ClockRecognizer.cpp` | Hu Moments digit recognizer (zero external dependencies) |
+| **Piece Counter** | `count_pieces_in_image()` | `BoardAnalysis.cpp` | Canny edge detection to count pieces on board |
 
 ### Role
 
@@ -26,13 +30,13 @@ It does not know the rules of chess on its own; it reports *what* changed, *when
 
 ## 2. The Verification Agent (Chess Engine Logic) — ✅ Implemented
 
-**Integrated in:** `ChessVideoExtractor.extract_moves_from_video()`
+**Integrated in:** `ChessVideoExtractor.extract_moves_from_video()` (`ChessVideoExtractor.cpp`)
 
 Acts as the game logic authority and state machine filter.
 
 ### Responsibilities
 
-- Maintains an internal `python-chess` board state throughout video scanning.
+- Maintains an internal `libchess::Position` board state throughout video scanning.
 - Generates all strictly legal moves for the current position.
 - Scores each legal move against the visual square diffs of the current frame.
 - Validates candidates against UI rules:
@@ -66,11 +70,9 @@ Designed to contextualize the human element of the video.
 
 Red square and yellow arrow detection are fully implemented and produce structured output. Audio processing and speech-to-text are not yet integrated.
 
-## 4. The Stockfish Analysis Agent — ✅ Implemented
+## 4. The Stockfish Analysis Agent — 🔜 Not Started
 
-**File:** `stockfish_analysis.py`
-
-### Responsibilities
+### Responsibilities (Planned)
 
 - Consumes `output/analysis.json` from Phase 1.
 - Feeds each FEN position to Stockfish via UCI protocol.
@@ -78,17 +80,9 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Handles edge cases (checkmate, stalemate).
 - Produces `output/analysis_analyzed.json` with engine analysis for every position.
 
-### Auto-Detection
+## 5. The Augmentation Agent (Overlay & Composition) — 🔜 Not Started
 
-Stockfish binary is auto-detected at: `C:\stockfish-windows-x86-64-avx2\stockfish\`
-
-## 5. The Augmentation Agent (Overlay & Composition) — ✅ Implemented
-
-**Files:** `overlay_renderer.py`, `video_compositor.py`
-
-The final orchestrator that builds the end-user experience.
-
-### Responsibilities
+### Responsibilities (Planned)
 
 - Takes verified moves, timestamps, and Stockfish metadata.
 - Generates visual overlays per frame:
@@ -106,23 +100,35 @@ The final orchestrator that builds the end-user experience.
 Raw Video
     ↓
 [Extraction Agent] → Board coords, yellow squares, red squares, arrows, clocks
-    ↓
+    ↓                    (BoardAnalysis, ArrowDetector, ClockRecognizer)
 [Verification Agent] → Validated move list, FENs, timestamps, clocks
-    ↓
+    ↓                    (ChessVideoExtractor + libchess)
         ├──→ analysis.json (Phase 1 output)
         │
         ↓
-[Stockfish Analysis Agent] → Engine evaluations, PV lines
+[Stockfish Analysis Agent] → Engine evaluations, PV lines  (Phase 2 — not started)
         ↓
         ├──→ analysis_analyzed.json (Phase 2 output)
         │
         ↓
-[Augmentation Agent: Overlay Renderer] → Per-frame visual overlays
+[Augmentation Agent: Overlay Renderer] → Per-frame visual overlays  (Phase 3 — not started)
     ↓
-[Augmentation Agent: Video Compositor] → Final composited video
+[Augmentation Agent: Video Compositor] → Final composited video  (Phase 4 — not started)
     ↓
     └──→ output_with_analysis.mp4 (Phase 4 output)
 ```
+
+## Source Module Map
+
+| Conceptual Agent | Implementation File(s) |
+|-----------------|------------------------|
+| Board Localization | `BoardLocalizer.h/.cpp` |
+| UI Detection (yellow, red, hover, pieces) | `BoardAnalysis.h/.cpp` |
+| Arrow Detection | `ArrowDetector.h/.cpp` |
+| Clock OCR | `ClockRecognizer.h/.cpp` |
+| Verification + Orchestrator | `ChessVideoExtractor.h/.cpp` |
+| GPU Pipeline | `GPUAccelerator.h/.cpp` |
+| Frame I/O | `FramePrefetcher.h/.cpp` |
 
 ## Future: Parallel Agent Architecture
 

@@ -112,7 +112,23 @@ The extraction produces a single JSON file:
 }
 ```
 
-## 6. Future Integrations
+## 6. Source Module Organization
+
+The detector code is split into three focused modules to keep files manageable (soft limit: ~400 lines):
+
+| Module | File | Lines | Responsibility |
+|--------|------|-------|----------------|
+| Board Localizer | `BoardLocalizer.h/.cpp` | 213 | GSS board localization, grid drawing |
+| Board Analysis | `BoardAnalysis.h/.cpp` | 356 | Square means, yellow squares, piece counting, red squares, hover boxes |
+| Arrow Detector | `ArrowDetector.h/.cpp` | 141 | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
+| Clock Recognizer | `ClockRecognizer.h/.cpp` | 264 | Hu Moments digit recognizer, clock extraction, conditional caching |
+| Orchestrator | `ChessVideoExtractor.h/.cpp` | 804 | Video scanning loop, move verification, revert detection, JSON output |
+| GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
+| Frame Prefetcher | `FramePrefetcher.h/.cpp` | 125 | Async frame pre-decoding in background thread |
+
+`UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
+
+## 7. Future Integrations
 
 - **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — not yet implemented).
 - **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 3 — not yet implemented).

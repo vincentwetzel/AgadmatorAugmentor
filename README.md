@@ -64,15 +64,20 @@ ChessVideoAugmentor/
 ├── cpp/
 │   ├── CMakeLists.txt
 │   ├── include/
-│   │   ├── BoardLocalizer.h
-│   │   ├── UIDetectors.h
-│   │   ├── ChessVideoExtractor.h
+│   │   ├── BoardLocalizer.h         # Board geometry detection
+│   │   ├── BoardAnalysis.h          # Square means, yellow squares, piece count, red squares, hover
+│   │   ├── ArrowDetector.h          # Yellow arrow detection
+│   │   ├── ClockRecognizer.h        # Hu Moments OCR + clock extraction
+│   │   ├── UIDetectors.h            # Umbrella header (includes all detectors)
+│   │   ├── ChessVideoExtractor.h    # Orchestrator class
 │   │   ├── FramePrefetcher.h        # Async frame pre-decoding
 │   │   └── GPUAccelerator.h         # GPUMat + GPUPipeline + GPUAccelerator
 │   ├── src/
 │   │   ├── main.cpp                 # CLI entry point
-│   │   ├── BoardLocalizer.cpp       # GSS board localization
-│   │   ├── UIDetectors.cpp          # All 6 UI detectors + Hu Moments OCR
+│   │   ├── BoardLocalizer.cpp       # GSS board localization (213 lines)
+│   │   ├── BoardAnalysis.cpp        # Square means, yellow, red, hover, debug (356 lines)
+│   │   ├── ArrowDetector.cpp        # Yellow arrow detection (141 lines)
+│   │   ├── ClockRecognizer.cpp      # Hu Moments OCR + clocks (264 lines)
 │   │   ├── ChessVideoExtractor.cpp  # Orchestrator + libchess + GPU pipeline
 │   │   ├── FramePrefetcher.cpp      # Async frame pre-decoding
 │   │   └── GPUAccelerator.cpp       # GPU/CUDA acceleration + GPUPipeline
@@ -88,7 +93,7 @@ ChessVideoAugmentor/
 ├── output/                          # Generated JSON files
 ├── docs/
 │   └── USAGE.md
-├── TODO.md                          # Optimization status & remaining work
+├── TODO.md                          # Optimization status & project conventions
 ├── README.md
 ├── architecture.md
 ├── spec.md
