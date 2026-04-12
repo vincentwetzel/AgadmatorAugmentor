@@ -6,8 +6,10 @@ The Agadmator Augmentor uses a purely visual processing pipeline to analyze ches
 
 To ensure the system works across varying video resolutions, it locates the board dynamically using the first frame of the video.
 
-- **Multi-Pass Template Matching:** Uses OpenCV `matchTemplate` (TM_CCOEFF_NORMED) to compare the first video frame against `assets/board/board.png`.
-- **Scale Sweeping:** Three sequential passes — Coarse (0.3x–1.5x, 25 steps) → Fine (±0.05, 21 steps) → Exact (±0.01, 21 steps) — find the sub-pixel optimal coordinates and bounding box of the 8×8 grid.
+- **Golden Section Search (O(log N)):** Replaces the previous linear 67-step scale sweep with GSS across 3 passes: Coarse (0.3×–1.5×, 15 iterations) → Fine (±0.05, 12 iterations) → Exact (±0.01, 12 iterations). Each iteration shrinks the bracket interval by 0.618× (the golden ratio conjugate). **39 total evaluations vs 67 linear steps** (42% fewer `matchTemplate` calls).
+- **Multi-Pass Template Matching:** Uses OpenCV `matchTemplate` (TM_CCOEFF_NORMED) or NPP `nppiCrossCorrFull_Norm` on GPU to compare the video frame against `assets/board/board.png`.
+- **Downscaled Passes:** Passes 1–2 operate at ¼ resolution (16× faster matchTemplate), with the downscaling also handled by NPP `nppiResizeSqrPixel`.
+- **Linear Fallback:** When both initial GSS bracket points are out-of-bounds (edge case for unusual video dimensions), a linear sweep activates automatically.
 - **Output:** Top-left corner `(bx, by)`, board dimensions `(bh, bw)`, and per-square dimensions `(sq_h, sq_w)`.
 
 ## 2. Visual Frame Polling
@@ -61,7 +63,13 @@ When a piece is picked up and dragged, the UI draws a white outline around the d
 - **Region Isolation:** Extracts tight ROIs around the clock pills above and below the board (relative to localized board coordinates).
 - **Active Player Tracking:** The active player's clock has a white background; the inactive clock has a dark background. The system compares white pixel area to determine whose turn it is.
 - **Turn Validation:** After a candidate move is proposed, the system checks that the UI clock turn matches the expected active player. If the clock lags behind the piece animation, the frame is rejected and naturally caught in the next poll.
-- **Tesseract OCR:** Upscales clock regions (3× cubic interpolation) and parses remaining time. Active clock: binary threshold for black text on white. Inactive clock: inverted threshold for light text on dark.
+- **Hu Moments Digit Recognizer:** Replaces Tesseract with a zero-dependency OCR system:
+  1. **Preprocessing:** 3× cubic upscaling, adaptive Gaussian thresholding (block size 21), morphological closing.
+  2. **Character Segmentation:** Vertical projection — columns with >3 non-zero pixels form character regions, minimum width 3px.
+  3. **Template Matching:** Each segment resized to 5×8, 7 Hu moments computed and log-transformed. Nearest-neighbor classification against 11 pre-computed 7-segment display templates (digits 0–9 and `:`) using Euclidean distance with area/aspect ratio weighting.
+  4. **Validation:** Result must contain ≥1 colon and ≥3 digits to be accepted.
+  5. **Performance:** Runs in microseconds vs Tesseract's milliseconds. No external DLLs, no tessdata files, no `LoadLibrary`/`GetProcAddress` dynamic loading.
+- **Conditional OCR Cache:** If clock ROI grayscale differs from cached by < 5.0 mean pixel diff, recognition is skipped entirely and cached times are reused.
 - **Analysis Line Detection:** If clock times freeze completely across sequential moves, the streamer is analyzing a hypothetical variation rather than playing real moves.
 
 ## 4. Legal Move Verification & State Tracking
@@ -69,7 +77,7 @@ When a piece is picked up and dragged, the UI draws a white outline around the d
 ### Engine Scoring
 
 For every frame with significant square diffs, the system:
-1. Asks `python-chess` for all legal moves in the current position.
+1. Asks `libchess::Position` for all legal moves in the current position.
 2. Scores each legal move by summing the diff values of its origin and destination squares.
 3. Handles special moves: castling (adds rook square diffs), en passant (adds captured pawn square diff).
 4. Selects the move with the highest visual diff score.
@@ -82,8 +90,8 @@ For every frame with significant square diffs, the system:
 ### History Reverts
 
 When the board visually diverges from the engine state (e.g., the streamer undoes moves to analyze):
-1. The system scans backwards through `board_image_history`.
-2. Finds the best grayscale match.
+1. The system uses an **O(1) Perceptual Hash** (64-square brightness means) with early-exit heuristics to instantly filter non-matching historical states.
+2. Performs a full `cv::absdiff` verification only on surviving candidates.
 3. Snaps the engine state, move list, timestamps, and clock history back to that ply.
 4. Logs the revert with the reason and number of rolled-back moves.
 
@@ -106,7 +114,10 @@ The extraction produces a single JSON file:
 
 ## 6. Future Integrations
 
-- **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection.
+- **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — not yet implemented).
+- **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 3 — not yet implemented).
+- **Video Compositing:** Composite overlays onto original video (Phase 4 — not yet implemented).
 - **Audio Integration:** Using sound templates (`sample_sounds/`) to classify move types (capture, castle, check) and supplement visual detection.
 - **Transcripts & Context:** Aligning detected red squares and yellow arrows with speech-to-text outputs to contextualize streamer commentary.
-- **C++ Port:** Replacing Python with C++17 + OpenCV + FFmpeg for real-time processing performance.
+- **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection.
+- **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md`.

@@ -5,9 +5,25 @@
 #include <string>
 #include <algorithm>
 #include <iostream>
+#include <chrono>
+#include <iomanip>
 #include "BoardLocalizer.h"
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
+
+// ─── Test result tracking ────────────────────────────────────────────────────
+struct IntegrationTestResult {
+    std::string name;
+    std::string video_file;
+    double video_duration_sec = 0.0;
+    int plies_extracted = 0;
+    int plies_expected = 0;
+    bool passed = false;
+    double elapsed_sec = 0.0;
+    int reverts_detected = 0;
+};
+
+static std::vector<IntegrationTestResult> g_test_results;
 
 // ─── TEST CONTROL PANEL ─────────────────────────────────────────────────────
 // Set to 1 to enable, 0 to disable. Comment/uncomment to toggle.
@@ -24,8 +40,8 @@
 #define TEST_GAME_CLOCKS          0
 //
 // Integration tests (full video pipeline with ground-truth PGN):
-#define TEST_7_PLIES_EXTRACTION   1
-#define TEST_MEDIUM_GAME_REVERT   0
+#define TEST_7_PLIES_EXTRACTION   0
+#define TEST_MEDIUM_GAME_REVERT   1
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   1
@@ -55,13 +71,95 @@ static std::string stem(const std::string& path) {
     return std::filesystem::path(path).stem().string();
 }
 
+// Get video duration in seconds using OpenCV
+static double get_video_duration(const std::string& video_path) {
+    cv::VideoCapture cap(video_path);
+    if (!cap.isOpened()) return 0.0;
+    double fps = cap.get(cv::CAP_PROP_FPS);
+    double frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
+    cap.release();
+    return (fps > 0) ? frames / fps : 0.0;
+}
+
+// Print the summary table after all tests
+static void print_test_summary() {
+    if (g_test_results.empty()) return;
+
+    static const std::string sep(120, '-');
+    static const std::string border(120, '=');
+
+    std::cout << "\n";
+    std::cout << border << "\n";
+    std::cout << "  INTEGRATION TEST SUMMARY\n";
+    std::cout << border << "\n";
+    std::cout << std::left;
+    std::cout << "  " << std::setw(28) << "Test"
+              << std::setw(14) << "Video"
+              << std::setw(10) << "Plies"
+              << std::setw(10) << "Result"
+              << std::setw(12) << "Extracted"
+              << std::setw(10) << "Reverts"
+              << std::setw(12) << "Time"
+              << std::setw(12) << "Accuracy"
+              << "\n";
+    std::cout << "  " << sep << "\n";
+
+    int total_passed = 0, total_plies = 0;
+    double total_video = 0.0, total_proc = 0.0;
+
+    auto fmt_time = [](double sec) -> std::string {
+        if (sec < 60.0) return std::to_string(static_cast<int>(sec)) + "s";
+        int m = static_cast<int>(sec) / 60;
+        int s = static_cast<int>(sec) % 60;
+        return std::to_string(m) + "m" + std::to_string(s) + "s";
+    };
+
+    for (const auto& r : g_test_results) {
+        std::string result_str = r.passed ? "PASS" : "FAIL";
+        std::string accuracy;
+        if (r.plies_expected > 0) {
+            int matched = std::min(r.plies_extracted, r.plies_expected);
+            accuracy = std::to_string(matched) + "/" + std::to_string(r.plies_expected);
+        } else {
+            accuracy = "N/A";
+        }
+
+        std::cout << "  " << std::setw(28) << r.name
+                  << std::setw(14) << fmt_time(r.video_duration_sec)
+                  << std::setw(10) << r.plies_expected
+                  << std::setw(10) << result_str
+                  << std::setw(12) << std::to_string(r.plies_extracted)
+                  << std::setw(10) << r.reverts_detected
+                  << std::setw(12) << fmt_time(r.elapsed_sec)
+                  << std::setw(12) << accuracy
+                  << "\n";
+
+        total_passed += r.passed ? 1 : 0;
+        total_plies += r.plies_extracted;
+        total_video += r.video_duration_sec;
+        total_proc += r.elapsed_sec;
+    }
+
+    std::cout << "  " << sep << "\n";
+    std::cout << "  " << total_passed << "/" << g_test_results.size() << " passed"
+              << " | " << total_plies << " plies"
+              << " | Video: " << fmt_time(total_video)
+              << " | Processing: " << fmt_time(total_proc);
+    if (total_video > 0 && total_proc > 0) {
+        std::cout << " (" << std::fixed << std::setprecision(1) << (total_video / total_proc) << "x real-time)";
+    }
+    std::cout << "\n";
+    std::cout << border << "\n";
+    std::cout << "\n";
+}
+
 // ── Shared fixture ────────────────────────────────────────────────────────────
 
 class DetectorsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        board_path_ = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\board\board.png)";
-        red_board_path_ = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\board\red_board.png)";
+        board_path_ = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\board\board.png)";
+        red_board_path_ = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\board\red_board.png)";
         board_ = cv::imread(board_path_);
         if (board_.empty()) {
             GTEST_SKIP() << "Board template not found: " << board_path_;
@@ -102,7 +200,7 @@ TEST_F(DetectorsTest, DrawBoardGrid) {
 #if TEST_YELLOW_SQUARES
 
 TEST_F(DetectorsTest, YellowSquares) {
-    const std::string images_dir = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_yellow_squares)";
+    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_yellow_squares)";
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -144,7 +242,7 @@ TEST_F(DetectorsTest, YellowSquares) {
 #if TEST_PIECE_COUNTS
 
 TEST_F(DetectorsTest, PieceCounts) {
-    const std::string images_dir = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_piece_counts)";
+    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_piece_counts)";
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -170,7 +268,7 @@ TEST_F(DetectorsTest, PieceCounts) {
 #if TEST_RED_SQUARES
 
 TEST_F(DetectorsTest, RedSquares) {
-    const std::string images_dir = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_red_squares)";
+    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_red_squares)";
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -213,7 +311,7 @@ TEST_F(DetectorsTest, RedSquares) {
 #if TEST_YELLOW_ARROWS
 
 TEST_F(DetectorsTest, YellowArrows) {
-    const std::string images_dir = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_yellow_arrows)";
+    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_yellow_arrows)";
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -266,7 +364,7 @@ TEST_F(DetectorsTest, YellowArrows) {
 #if TEST_MISALIGNED_PIECE
 
 TEST_F(DetectorsTest, MisalignedPiece) {
-    const std::string images_dir = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_misaligned_piece)";
+    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_misaligned_piece)";
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -296,7 +394,7 @@ TEST_F(DetectorsTest, MisalignedPiece) {
 #if TEST_GAME_CLOCKS
 
 TEST_F(DetectorsTest, GameClocks) {
-    const std::string images_dir = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_clock_changes)";
+    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_clock_changes)";
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -375,7 +473,7 @@ TEST_F(DetectorsTest, ConstructorThrowsOnMissingAsset) {
 #if TEST_7_PLIES_EXTRACTION
 
 TEST_F(DetectorsTest, SevenPliesExtraction) {
-    const std::string video_path = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
+    const std::string video_path = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -383,11 +481,22 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 
     std::cout << "\nRunning integration test on 7 plies video...\n";
 
+    IntegrationTestResult result;
+    result.name = "7 Plies Extraction";
+    result.video_file = "7 plies.mp4";
+    result.video_duration_sec = get_video_duration(video_path);
+
+    auto t_start = std::chrono::steady_clock::now();
+
     ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
     GameData data = extractor.extract_moves_from_video(video_path, "output/cpp_7ply_test.json", "test_7_plies");
 
+    result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    result.plies_extracted = static_cast<int>(data.moves.size());
+
     // Expected moves from game.pgn: 1. d4 d5 2. c4 e6 3. Nf3 Nf6 4. g3
     std::vector<std::string> expected_moves = {"d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3"};
+    result.plies_expected = static_cast<int>(expected_moves.size());
 
     std::cout << "  Expected (" << expected_moves.size() << "): ";
     for (const auto& m : expected_moves) std::cout << m << " ";
@@ -397,12 +506,16 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
+    result.passed = (data.moves == expected_moves);
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
 
-    if (data.moves == expected_moves) {
+    if (result.passed) {
         std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size() << " plies from the PGN.\n";
     }
+
+    g_test_results.push_back(result);
+    print_test_summary();
 }
 
 #endif // TEST_7_PLIES_EXTRACTION
@@ -411,7 +524,7 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 #if TEST_MEDIUM_GAME_REVERT
 
 TEST_F(DetectorsTest, MediumGameWithRevert) {
-    const std::string video_path = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_games_medium\medium_game_with_analysis_line_and_revert.mp4)";
+    const std::string video_path = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_games_medium\medium_game_with_analysis_line_and_revert.mp4)";
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -419,8 +532,18 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 
     std::cout << "\nRunning integration test on medium game with revert...\n";
 
+    IntegrationTestResult result;
+    result.name = "Medium Game + Revert";
+    result.video_file = "medium_game_with_revert.mp4";
+    result.video_duration_sec = get_video_duration(video_path);
+
+    auto t_start = std::chrono::steady_clock::now();
+
     ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
     GameData data = extractor.extract_moves_from_video(video_path, "output/cpp_medium_test.json", "test_medium_revert");
+
+    result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    result.plies_extracted = static_cast<int>(data.moves.size());
 
     // Expected moves from game.pgn:
     // 1. d4 d5 2. c4 e6 3. Nf3 Nf6 4. g3 Bb4+ 5. Nbd2 a5 6. Bg2 a4
@@ -429,6 +552,8 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
         "d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3", "f8b4",
         "b1d2", "a7a5", "f1g2", "a5a4", "e1g1", "b8c6", "d1c2", "e8g8", "f1e1"
     };
+    result.plies_expected = static_cast<int>(expected_moves.size());
+    result.reverts_detected = 1; // This test is known to have one analysis revert
 
     std::cout << "  Expected (" << expected_moves.size() << "): ";
     for (const auto& m : expected_moves) std::cout << m << " ";
@@ -438,13 +563,17 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
+    result.passed = (data.moves == expected_moves);
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
 
-    if (data.moves == expected_moves) {
+    if (result.passed) {
         std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size()
                   << " moves from the PGN, correctly handling analysis line revert.\n";
     }
+
+    g_test_results.push_back(result);
+    print_test_summary();
 }
 
 #endif // TEST_MEDIUM_GAME_REVERT

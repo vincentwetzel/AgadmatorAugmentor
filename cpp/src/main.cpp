@@ -3,7 +3,7 @@
 #include <iostream>
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"Agadmator Augmentor — Extract chess moves from video"};
+    CLI::App app{"ChessVideoAugmentor — Extract chess plies from video"};
 
     std::string video_path = "";
     app.add_option("video_path", video_path, "Path to the input video file");
@@ -22,8 +22,8 @@ int main(int argc, char* argv[]) {
 
     // F5 convenience: use sample video when no args provided
     if (video_path.empty()) {
-        video_path = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
-        board_asset = R"(i:\coding_workspaces\CPP\AgadmatorAugmentor\assets\board\board.png)";
+        video_path = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
+        board_asset = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\board\board.png)";
         output = "output/analysis.json";
         debug_level_str = "MOVES";
     }
@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
         aa::ChessVideoExtractor extractor(board_asset, "", debug_level);
         aa::GameData data = extractor.extract_moves_from_video(video_path, output);
 
-        std::cout << "\nExtraction complete! " << data.moves.size() << " moves extracted.\n";
+        std::cout << "\nExtraction complete! " << data.moves.size() << " plies extracted.\n";
         std::cout << "Game data saved to " << output << "\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

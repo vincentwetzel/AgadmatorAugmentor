@@ -1,4 +1,4 @@
-# Project Plan — AgadmatorAugmentor
+# Project Plan — ChessVideoAugmentor
 
 ## Current Status
 
@@ -120,7 +120,7 @@ Video Frames → Board Localization (template matching)
 - [ ] Improve OCR reliability with better preprocessing
 
 ### Medium Term
-- [ ] C++ port for performance (OpenCV + FFmpeg)
+- [x] C++ port for performance (OpenCV + Hardware Acceleration)
 - [ ] Piece type classification via contour matching
 - [ ] Audio integration (sound templates in `sample_sounds/`)
 
@@ -151,7 +151,7 @@ Located in `sample_sounds/`:
 | Component | Technology |
 |-----------|-----------|
 | Prototype | Python 3 + OpenCV + NumPy |
-| Production (planned) | C++17 + OpenCV + FFmpeg |
+| Production (Current) | C++17 + OpenCV + Hardware Acceleration |
 | Chess Engine | Stockfish 16+ (UCI protocol) |
 | Chess Logic | python-chess |
 | OCR | Tesseract + pytesseract |

@@ -1,5 +1,7 @@
 #include "ChessVideoExtractor.h"
 #include "UIDetectors.h"
+#include "FramePrefetcher.h"
+#include "GPUAccelerator.h"
 #include "libchess/position.hpp"
 #include "libchess/move.hpp"
 #include "libchess/square.hpp"
@@ -17,6 +19,8 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
+#include <array>
 
 namespace aa {
 
@@ -35,47 +39,34 @@ static std::string ts(double elapsed) {
 
 // ── Square helpers (convention matches libchess: a1=0, h8=63) ────────────────
 
-static std::string sq_name(int idx) {
-    int file = idx & 7;
-    int rank = idx >> 3;
-    char name[3];
-    name[0] = 'a' + file;
-    name[1] = '1' + rank;
-    name[2] = '\0';
-    return std::string(name);
+// Pre-computed square name table — avoids per-call string allocation
+static const char* SQ_NAMES[64] = {
+    "a1","b1","c1","d1","e1","f1","g1","h1",
+    "a2","b2","c2","d2","e2","f2","g2","h2",
+    "a3","b3","c3","d3","e3","f3","g3","h3",
+    "a4","b4","c4","d4","e4","f4","g4","h4",
+    "a5","b5","c5","d5","e5","f5","g5","h5",
+    "a6","b6","c6","d6","e6","f6","g6","h6",
+    "a7","b7","c7","d7","e7","f7","g7","h7",
+    "a8","b8","c8","d8","e8","f8","g8","h8"
+};
+
+static const char* sq_name(int idx) {
+    return SQ_NAMES[idx];
 }
 
-static int parse_square_idx(const std::string& name) {
-    if (name.size() < 2) return -1;
-    int file = name[0] - 'a';
-    int rank = name[1] - '1';
-    if (file < 0 || file > 7 || rank < 0 || rank > 7) return -1;
-    return file | (rank << 3);
-}
-
-// Safely extracts the piece character at a given square (0-63) from a FEN string
-static char get_piece_at(const std::string& fen, int sq) {
-    int target_rank = 7 - (sq >> 3); // FEN string starts at rank 8 (index 0) down to rank 1 (index 7)
-    int target_file = sq & 7;
-    int current_rank = 0;
-    int current_file = 0;
+// Pre-computes a 64-char array from a FEN string for O(1) piece lookups
+static std::array<char, 64> expand_fen(const std::string& fen) {
+    std::array<char, 64> board;
+    board.fill(' ');
+    int sq = 56; // Start at a8 (index 56)
     for (char c : fen) {
         if (c == ' ') break; // End of board layout
-        if (c == '/') {
-            current_rank++;
-            current_file = 0;
-        } else if (c >= '1' && c <= '8') {
-            int empty_count = c - '0';
-            if (current_rank == target_rank && target_file >= current_file && target_file < current_file + empty_count) {
-                return ' '; // Target square falls within this empty space
-            }
-            current_file += empty_count;
-        } else {
-            if (current_rank == target_rank && current_file == target_file) return c;
-            current_file++;
-        }
+        if (c == '/') { sq -= 16; } // Move down a rank (e.g., from rank 8 to 7)
+        else if (c >= '1' && c <= '8') { sq += (c - '0'); } // Skip empty squares
+        else { board[sq++] = c; }
     }
-    return ' ';
+    return board;
 }
 
 // ── Constructor ──────────────────────────────────────────────────────────────
@@ -96,20 +87,27 @@ ChessVideoExtractor::ChessVideoExtractor(const std::string& board_asset_path,
 
 ChessVideoExtractor::~ChessVideoExtractor() = default;
 
+// ── GPU-accelerated square diff means ────────────────────────────────────────
+
+std::vector<double> ChessVideoExtractor::get_square_diff_means_gpu() {
+    if (!gpu_pipeline_active_) return {};
+    return gpu_pipeline_.compute_square_diff_means(geo_, margin_h_, margin_w_);
+}
+
 // ── Square diff calculation ──────────────────────────────────────────────────
 
 cv::Mat ChessVideoExtractor::get_max_square_diff(const cv::Mat& img_a, const cv::Mat& img_b) {
     cv::Mat diff;
-    cv::absdiff(img_a, img_b, diff);
+    GPUAccelerator::absdiff(img_a, img_b, diff);
 
     double max_val = 0;
     cv::minMaxLoc(diff, nullptr, &max_val);
     if (max_val < 15.0) return cv::Mat();
 
+    // Batch compute all 64 square means via integral image
+    auto sq_means = compute_all_square_means(diff, geo_, margin_h_, margin_w_);
     double max_sq_diff = 0.0;
-    for (const auto& sl : sq_slices_) {
-        cv::Mat region = diff(cv::Rect(sl.x1, sl.y1, sl.x2 - sl.x1, sl.y2 - sl.y1));
-        double sd = cv::mean(region)[0];
+    for (double sd : sq_means) {
         if (sd > max_sq_diff) max_sq_diff = sd;
     }
 
@@ -124,17 +122,17 @@ ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const 
 
     auto& pos = *pos_ptr_;
 
-    // Compute per-square diff means (our index convention matches libchess)
-    std::vector<double> sq_diffs(64, 0.0);
-    for (const auto& sl : sq_slices_) {
-        cv::Mat region = diff_image(cv::Rect(sl.x1, sl.y1, sl.x2 - sl.x1, sl.y2 - sl.y1));
-        sq_diffs[parse_square_idx(sl.name)] = cv::mean(region)[0];
-    }
+    // Compute all 64 square means in one pass using integral image
+    auto sq_diffs = compute_all_square_means(diff_image, geo_, margin_h_, margin_w_);
 
     // Get legal moves from libchess
     auto legal_moves = pos.legal_moves();
 
-    std::string fen = pos.get_fen();
+    // Cache FEN for castling detection (avoid repeated get_fen() calls)
+    const std::string& fen = pos.get_fen();
+
+    // Expand FEN into an O(1) lookup array to avoid linear string scans per move
+    std::array<char, 64> board_map = expand_fen(fen);
 
     MoveScore best;
     for (const auto& move : legal_moves) {
@@ -154,7 +152,7 @@ ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const 
         } else {
             if ((from_sq == 4 && (to_sq == 6 || to_sq == 2)) || 
                 (from_sq == 60 && (to_sq == 62 || to_sq == 58))) {
-                char p = get_piece_at(fen, from_sq);
+                char p = board_map[from_sq];
                 if (p == 'K' || p == 'k') {
                     is_castling = true;
                 }
@@ -201,7 +199,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // Initialize libchess position
     pos_ptr_ = std::make_unique<libchess::Position>("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
-    cv::VideoCapture cap(video_path);
+    cv::VideoCapture cap(video_path, cv::CAP_ANY, {
+        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+    });
     if (!cap.isOpened()) {
         throw std::runtime_error("Cannot open video: " + video_path);
     }
@@ -239,23 +239,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         cv::imwrite(debug_dir + "/00_initial_board_0.00s.png", debug_board);
     }
 
-    // Set up square slices for efficient per-pixel diff
+    // Set up margins for batch square mean computation
     margin_h_ = static_cast<int>(geo_.sq_h * 0.15);
     margin_w_ = static_cast<int>(geo_.sq_w * 0.15);
-
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 8; ++col) {
-            int y1 = static_cast<int>(row * geo_.sq_h) + margin_h_;
-            int y2 = static_cast<int>((row + 1) * geo_.sq_h) - margin_h_;
-            int x1 = static_cast<int>(col * geo_.sq_w) + margin_w_;
-            int x2 = static_cast<int>((col + 1) * geo_.sq_w) - margin_w_;
-            char name[3];
-            name[0] = 'a' + col;
-            name[1] = '1' + (7 - row);  // row 0 = rank 8, row 7 = rank 1
-            name[2] = '\0';
-            sq_slices_.push_back({y1, y2, x1, x2, name});
-        }
-    }
 
     // Initialize game data
     GameData data;
@@ -267,11 +253,27 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     // Board image history for revert detection
     std::vector<cv::Mat> board_image_history;
+    std::vector<std::vector<double>> history_hashes;
     cv::Mat first_gray;
     cv::cvtColor(first_frame, first_gray, cv::COLOR_BGR2GRAY);
-    board_image_history.push_back(first_gray(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh)).clone());
+    cv::Mat board_gray_crop = first_gray(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh)).clone();
+    board_image_history.push_back(board_gray_crop);
+    history_hashes.push_back(compute_all_square_means(board_image_history.back(), geo_, margin_h_, margin_w_));
 
-    std::cout << ts(elapsed()) << " Scanning video frames to calculate moves...\n";
+    // ── Initialize zero-copy GPU pipeline ────────────────────────────────────
+    // Uploads the first board grayscale to GPU. The GPU pipeline performs
+    // absdiff on GPU (eliminating 2x H→D copies per frame), then downloads
+    // the diff for CPU-based square means computation to maintain precision.
+    gpu_pipeline_.init();
+    gpu_pipeline_active_ = gpu_pipeline_.is_available();
+    if (gpu_pipeline_active_) {
+        std::cout << ts(elapsed()) << " Zero-copy GPU pipeline enabled — absdiff on GPU, CPU integral for precision\n";
+        gpu_pipeline_.update_current(board_gray_crop);
+    } else {
+        std::cout << ts(elapsed()) << " Using CPU pipeline for frame diff computation\n";
+    }
+
+    std::cout << ts(elapsed()) << " Scanning video frames to calculate plies...\n";
 
     auto round_t = [](double val) { return std::round(val * 100.0) / 100.0; };
 
@@ -285,75 +287,146 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         return (s / 25.0) * 50.0;
     };
 
-    int current_frame = 1;
-    double fast_step = 2.0;  // Poll every 2s in FAST mode (piece animation takes ~0.5s)
     double fine_step = 0.2;
     double t = 0.0;
-    bool mode_fast = true;
-    double fine_target_t = 0.0;
-
     int branch_counter = 0;
 
-    while (t < duration) {
-        // Seek to target frame
-        int target_frame = static_cast<int>(t * fps);
-        cv::Mat frame;
+    // ── Initialize frame prefetcher for async I/O hiding ─────────────────
+    // The worker thread decodes frames (seek + read + crop + grayscale) in the
+    // background while the main thread processes the current frame's results.
+    prefetcher_ = std::make_unique<FramePrefetcher>(video_path);
+    prefetcher_->init(geo_);
 
-        if (target_frame > current_frame && target_frame - current_frame < fps * 3) {
-            for (int i = 0; i < target_frame - current_frame - 1; ++i) {
-                cap.grab();
+    // Kick off the first frame decode (non-blocking — starts background thread)
+    prefetcher_->request_next(t, fps);
+
+    // Direct VideoCapture for settle peek (one-off seeks that don't benefit from prefetching)
+    cv::VideoCapture settle_cap(video_path, cv::CAP_ANY, {
+        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+    });
+
+    // Optimized sequential grab logic to avoid CAP_PROP_POS_FRAMES seek penalty
+    auto get_settle_frame = [&](int target_frame, cv::Mat& out_img) {
+        int current_frame = static_cast<int>(settle_cap.get(cv::CAP_PROP_POS_FRAMES));
+        if (target_frame > current_frame && target_frame - current_frame <= fps * 2) {
+            for (int i = 0; i < target_frame - current_frame; ++i) {
+                settle_cap.grab();
             }
-            cap >> frame;
-            current_frame = target_frame + 1;
+            settle_cap >> out_img;
         } else if (target_frame == current_frame) {
-            cap >> frame;
-            ++current_frame;
+            settle_cap >> out_img;
         } else {
-            cap.set(cv::CAP_PROP_POS_FRAMES, target_frame);
-            cap >> frame;
-            current_frame = target_frame + 1;
+            settle_cap.set(cv::CAP_PROP_POS_FRAMES, target_frame);
+            settle_cap >> out_img;
         }
+    };
 
-        if (frame.empty()) break;
+    // Progress tracking
+    double last_progress_t = -1.0;
+    auto print_progress = [&]() {
+        double pct = duration > 0 ? (t / duration) * 100.0 : 0.0;
+        char buf[128]; // Increased from 60 to prevent string truncation
+        snprintf(buf, sizeof(buf), "  [%.1f%%] t=%.1fs / %.1fs  |  plies: %zu  |  frames scanned: %d",
+                 pct, t, duration, data.moves.size(), frame_count);
+        std::cout << "\r" << buf << std::flush;
+    };
+
+    while (t < duration) {
+        // Get the pre-decoded frame from the background worker.
+        // Blocks only if the worker hasn't finished yet (should already be done
+        // since we kicked off the request while processing the previous frame).
+        FramePrefetcher::FrameData fd = prefetcher_->get_result();
+        if (!fd.valid) break;
         ++frame_count;
 
-        cv::Mat board_bgr = frame(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh));
-        cv::Mat board_gray;
-        cv::cvtColor(board_bgr, board_gray, cv::COLOR_BGR2GRAY);
+        // Print progress every ~1 second of video time
+        if (t - last_progress_t >= 1.0) {
+            print_progress();
+            last_progress_t = t;
+        }
+
+        cv::Mat& full_bgr = fd.bgr;
+        cv::Mat& board_bgr = fd.board_bgr;
+        cv::Mat& board_gray = fd.board_gray;
         const cv::Mat& prev_gray = board_image_history.back();
 
-        if (mode_fast) {
-            auto diff_result = get_max_square_diff(board_gray, prev_gray);
-            if (!diff_result.empty()) {
-                fine_target_t = t;
-                t = std::max(0.0, round_t(t - fast_step + fine_step));
-                mode_fast = false;
-            } else {
-                t = round_t(t + fast_step);
+        // ── Upload current board grayscale to GPU pipeline ────────────────────
+        // Swaps internal buffers: prev becomes the old current, new frame becomes current.
+        // Only 1 H→D upload per frame (vs 2 H→D + 1 D→H with per-frame absdiff).
+        if (gpu_pipeline_active_) {
+            gpu_pipeline_.update_current(board_gray);
+        }
+
+        // --- FRAME EVALUATION ---
+        // GPU pipeline: GPU absdiff + GPU integral (32F) computes 64 square means
+        // entirely on device. Only 64 doubles are downloaded. If a significant
+        // diff is found, CPU computes diff + integral (64F) for accurate scoring.
+        std::vector<double> sq_means;
+        double max_sd = 0;
+        cv::Mat diff;
+
+        bool should_score = false;
+        if (gpu_pipeline_active_) {
+            auto gpu_means = get_square_diff_means_gpu();
+            if (!gpu_means.empty()) {
+                for (double sd : gpu_means) {
+                    if (sd > max_sd) max_sd = sd;
+                }
+                if (max_sd >= 15.0) should_score = true;
             }
+        } else {
+            // CPU-only path: compute full diff + check max
+            GPUAccelerator::absdiff(board_gray, prev_gray, diff);
+            double max_val = 0;
+            cv::minMaxLoc(diff, nullptr, &max_val);
+            if (max_val >= 15.0) should_score = true;
+        }
+
+        if (should_score) {
+            // Accurate scoring with CPU integral (64F precision)
+            if (diff.empty()) {
+                GPUAccelerator::absdiff(board_gray, prev_gray, diff);
+            }
+            sq_means = compute_all_square_means(diff, geo_, margin_h_, margin_w_);
+            max_sd = 0;
+            for (double sd : sq_means) {
+                if (sd > max_sd) max_sd = sd;
+            }
+        }
+
+        if (max_sd < 15.0) {
+            t = round_t(t + fine_step);
+            prefetcher_->request_next(t, fps);
             continue;
         }
 
-        // --- FINE MODE ---
-        // Check for revert (board silently changed to match a past state)
+        // O(1) Perceptual Hash Revert Detection
         if (board_image_history.size() > 1) {
-            auto diff_check = get_max_square_diff(board_gray, prev_gray);
-            if (!diff_check.empty()) {
                 int best_idx = -1;
                 double best_diff_val = 1e18;
+                auto current_hash = compute_all_square_means(board_gray, geo_, margin_h_, margin_w_);
 
-                for (int idx = static_cast<int>(board_image_history.size()) - 2; idx >= 0; --idx) {
+                for (int idx = static_cast<int>(history_hashes.size()) - 2; idx >= 0; --idx) {
+                    // Fast rejection using O(1) perceptual hash
+                    double max_hash_diff = 0.0;
+                    for (int i = 0; i < 64; ++i) {
+                        double d_val = std::abs(current_hash[i] - history_hashes[idx][i]);
+                        if (d_val > max_hash_diff) max_hash_diff = d_val;
+                        if (max_hash_diff >= 15.0) break; // EARLY EXIT
+                    }
+                    if (max_hash_diff >= 15.0) continue; // Guaranteed to not match
+
+                    // Passed fast filter, do full verification
                     cv::Mat d;
-                    cv::absdiff(board_gray, board_image_history[idx], d);
-                    
+                    GPUAccelerator::absdiff(board_gray, board_image_history[idx], d);
+
                     double sq_diff = 0.0;
-                    double max_val = 0;
-                    cv::minMaxLoc(d, nullptr, &max_val);
-                    if (max_val >= 15.0) {
-                        for (const auto& sl : sq_slices_) {
-                            cv::Mat region = d(cv::Rect(sl.x1, sl.y1, sl.x2 - sl.x1, sl.y2 - sl.y1));
-                            double sd = cv::mean(region)[0];
-                            if (sd > sq_diff) sq_diff = sq_diff = sd;
+                    double max_d_val = 0;
+                    cv::minMaxLoc(d, nullptr, &max_d_val);
+                    if (max_d_val >= 15.0) {
+                        auto hist_sq_means = compute_all_square_means(d, geo_, margin_h_, margin_w_);
+                        for (double sd : hist_sq_means) {
+                            if (sd > sq_diff) sq_diff = sd;
                         }
                     }
 
@@ -369,7 +442,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     std::cout << "\n" << ts(elapsed()) << " --- ANALYSIS REVERT at " << t << "s (board matched past state) ---\n";
                     std::cout << ts(elapsed()) << " Snapped back to ply " << best_idx << " (Branch " << branch_counter << ")\n";
                     if (reverted > 0) {
-                        std::cout << ts(elapsed()) << "   Rolling back " << reverted << " analysis moves\n";
+                        std::cout << ts(elapsed()) << "   Rolling back " << reverted << " analysis plies\n";
                     }
 
                     data.moves.resize(best_idx);
@@ -377,44 +450,29 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     data.fens.resize(best_idx + 1);
                     data.clocks.resize(best_idx + 1);
                     board_image_history.resize(best_idx + 1);
+                    history_hashes.resize(best_idx + 1);
 
                     // Rebuild libchess position from the correct FEN
                     pos_ptr_ = std::make_unique<libchess::Position>(data.fens.back());
 
-                    mode_fast = true;
-                    t = round_t(t + fast_step);
+                    t = round_t(t + fine_step);
+                    prefetcher_->request_next(t, fps);
                     continue;
                 }
-            }
-        }
-
-        // Compute per-square diffs
-        cv::Mat diff;
-        cv::absdiff(board_gray, prev_gray, diff);
-        double max_sd = 0;
-        for (const auto& sl : sq_slices_) {
-            cv::Mat region = diff(cv::Rect(sl.x1, sl.y1, sl.x2 - sl.x1, sl.y2 - sl.y1));
-            int idx = parse_square_idx(sl.name);
-            double sd = cv::mean(region)[0];
-            if (sd > max_sd) max_sd = sd;
-        }
-
-        if (max_sd < 15.0) {
-            if (t >= fine_target_t) {
-                mode_fast = true;
-                t = round_t(t + fast_step);
-            } else {
-                t = round_t(t + fine_step);
-            }
-            continue;
         }
 
         // Score moves using libchess legal move generation
         auto best = score_moves_for_board(diff);
         if (best.score > 25.0 && best.from_sq >= 0) {
-            std::string from_name = sq_name(best.from_sq);
-            std::string to_name = sq_name(best.to_sq);
-            std::string move_uci = from_name + to_name;
+            const char* from_name = sq_name(best.from_sq);
+            const char* to_name = sq_name(best.to_sq);
+
+            // Build UCI strings only when needed (avoid allocation in scoring loop)
+            char move_uci_buf[5];
+            move_uci_buf[0] = from_name[0]; move_uci_buf[1] = from_name[1];
+            move_uci_buf[2] = to_name[0];   move_uci_buf[3] = to_name[1];
+            move_uci_buf[4] = '\0';
+            std::string move_uci(move_uci_buf);
 
             // ── Move settling: peek ahead 0.2s to confirm the move has settled ──
             // At the moment a change is first detected, the piece may still be animating.
@@ -422,58 +480,54 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             double settle_t = round_t(t + fine_step);  // 0.2s ahead
             int settle_frame = static_cast<int>(settle_t * fps);
 
-            if (best.score < 50.0 && settle_frame < cap.get(cv::CAP_PROP_FRAME_COUNT)) {
-                // Seek to settle_t
-                if (settle_frame > current_frame && settle_frame - current_frame < fps * 3) {
-                    for (int i = 0; i < settle_frame - current_frame - 1; ++i) cap.grab();
-                    cap >> frame;
-                    current_frame = settle_frame + 1;
-                } else {
-                    cap.set(cv::CAP_PROP_POS_FRAMES, settle_frame);
-                    cap >> frame;
-                    current_frame = settle_frame + 1;
-                }
+            if (best.score < 50.0 && settle_frame < settle_cap.get(cv::CAP_PROP_FRAME_COUNT)) {
+                cv::Mat settle_frame_img;
+                get_settle_frame(settle_frame, settle_frame_img);
 
-                if (!frame.empty()) {
-                    cv::Mat settle_bgr = frame(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh));
-                    cv::Mat settle_gray;
-                    cv::cvtColor(settle_bgr, settle_gray, cv::COLOR_BGR2GRAY);
+                if (!settle_frame_img.empty()) {
+                    cv::Mat settle_bgr = settle_frame_img(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh));
+                    cv::Mat settle_gray_tmp;
+                    cv::cvtColor(settle_bgr, settle_gray_tmp, cv::COLOR_BGR2GRAY);
 
                     cv::Mat settle_diff;
-                    cv::absdiff(settle_gray, board_image_history.back(), settle_diff);
-                    auto settle_best = score_moves_for_board(settle_diff);
+                    GPUAccelerator::absdiff(settle_gray_tmp, board_image_history.back(), settle_diff);
+                    auto settle_best_tmp = score_moves_for_board(settle_diff);
 
-                    if (settle_best.score > 25.0 && settle_best.from_sq >= 0) {
-                        std::string settle_from = sq_name(settle_best.from_sq);
-                        std::string settle_to = sq_name(settle_best.to_sq);
+                    if (settle_best_tmp.score > 25.0 && settle_best_tmp.from_sq >= 0) {
+                        const char* settle_from = sq_name(settle_best_tmp.from_sq);
+                        const char* settle_to = sq_name(settle_best_tmp.to_sq);
                         // Accept if same move or strictly better score
-                        if (settle_best.score > best.score) {
+                        if (settle_best_tmp.score > best.score) {
                             t = settle_t;
-                            board_gray = settle_gray;
+                            board_gray = settle_gray_tmp;
+                            board_bgr = settle_bgr;
+                            full_bgr = settle_frame_img;
                             diff = settle_diff;
-                            best = settle_best;
+                            best = settle_best_tmp;
                             from_name = settle_from;
                             to_name = settle_to;
-                            move_uci = settle_from + settle_to;
+                            move_uci_buf[0] = settle_from[0]; move_uci_buf[1] = settle_from[1];
+                            move_uci_buf[2] = settle_to[0];   move_uci_buf[3] = settle_to[1];
+                            move_uci = move_uci_buf;
                         }
                     }
                 }
-
-                // Restore stream position to just after the originally detected frame
-                cap.set(cv::CAP_PROP_POS_FRAMES, target_frame);
-                cap >> frame;
-                current_frame = target_frame + 1;
             }
 
             // Inverse move filter: reject if this is the reverse of a recent move
             bool inverse_recent = false;
-            std::string reverse_uci = to_name + from_name;
+            char reverse_uci_buf[5];
+            reverse_uci_buf[0] = to_name[0]; reverse_uci_buf[1] = to_name[1];
+            reverse_uci_buf[2] = from_name[0]; reverse_uci_buf[3] = from_name[1];
+            reverse_uci_buf[4] = '\0';
+            std::string_view reverse_uci(reverse_uci_buf, 4);
             size_t start = data.moves.size() > 4 ? data.moves.size() - 4 : 0;
             for (size_t i = start; i < data.moves.size(); ++i) {
                 if (data.moves[i] == reverse_uci) { inverse_recent = true; break; }
             }
             if (inverse_recent && best.score < 70.0) {
                 t = round_t(t + fine_step);
+                prefetcher_->request_next(t, fps);
                 continue;
             }
 
@@ -489,20 +543,22 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             if (!move_valid) {
                 t = round_t(t + fine_step);
+                prefetcher_->request_next(t, fps);
                 continue;
             }
 
             // ── Validation 1: Yellow square check ────────────────────────────
             // board_bgr is already cropped to the board region (same as Python)
-            auto is_yellow = [board_bgr = board_bgr, geo = geo_](const std::string& sq_name) {
+            auto is_yellow = [this, &board_bgr](const char* sq_name) {
                 int col = sq_name[0] - 'a';
-                int row = 8 - (sq_name[1] - '0');
-                int y1 = static_cast<int>(row * geo.sq_h);
-                int y2 = static_cast<int>((row + 1) * geo.sq_h);
-                int x1 = static_cast<int>(col * geo.sq_w);
-                int x2 = static_cast<int>((col + 1) * geo.sq_w);
-                int ch = static_cast<int>(geo.sq_h * 0.12);
-                int cw = static_cast<int>(geo.sq_w * 0.12);
+                int rank = sq_name[1] - '1';
+                int row = 7 - rank;
+                int y1 = static_cast<int>(row * geo_.sq_h);
+                int y2 = static_cast<int>((row + 1) * geo_.sq_h);
+                int x1 = static_cast<int>(col * geo_.sq_w);
+                int x2 = static_cast<int>((col + 1) * geo_.sq_w);
+                int ch = static_cast<int>(geo_.sq_h * 0.12);
+                int cw = static_cast<int>(geo_.sq_w * 0.12);
 
                 // Clamp to frame bounds
                 int fh = board_bgr.rows, fw = board_bgr.cols;
@@ -521,11 +577,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 double y_score = 0;
                 for (const auto& c : corners) {
                     if (c.width <= 0 || c.height <= 0) continue;
-                    cv::Mat patch;
-                    board_bgr(c).convertTo(patch, CV_32FC3);
-                    std::vector<cv::Mat> ch;
-                    cv::split(patch, ch);
-                    cv::Scalar m = cv::mean((ch[2] + ch[1]) / 2.0f - ch[0]);
+                    // Reuse scratch buffers instead of reallocating
+                    board_bgr(c).convertTo(scratch_.float_mat, CV_32FC3);
+                    scratch_.channels.clear();
+                    scratch_.channels.reserve(3);
+                    cv::split(scratch_.float_mat, scratch_.channels);
+                    cv::Scalar m = cv::mean((scratch_.channels[2] + scratch_.channels[1]) / 2.0f - scratch_.channels[0]);
                     y_score += m[0];
                 }
                 return y_score / 4.0;
@@ -538,17 +595,19 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     std::cout << "    " << ts(elapsed()) << " [Debug] " << t << "s: " << move_uci << " rejected (Missing yellow highlights)\n";
                 }
                 t = round_t(t + fine_step);
+                prefetcher_->request_next(t, fps);
                 continue;
             }
 
             // ── Validation 2: Hover box rejection ────────────────────────────
-            auto has_hover_box = [board_bgr = board_bgr, geo = geo_](const std::string& sq_name) {
+            auto has_hover_box = [this, &board_bgr](const char* sq_name) {
                 int col = sq_name[0] - 'a';
-                int row = 8 - (sq_name[1] - '0');
-                int y1 = static_cast<int>(row * geo.sq_h);
-                int y2 = static_cast<int>((row + 1) * geo.sq_h);
-                int x1 = static_cast<int>(col * geo.sq_w);
-                int x2 = static_cast<int>((col + 1) * geo.sq_w);
+                int rank = sq_name[1] - '1';
+                int row = 7 - rank;
+                int y1 = static_cast<int>(row * geo_.sq_h);
+                int y2 = static_cast<int>((row + 1) * geo_.sq_h);
+                int x1 = static_cast<int>(col * geo_.sq_w);
+                int x2 = static_cast<int>((col + 1) * geo_.sq_w);
 
                 // Clamp to frame bounds
                 int fh = board_bgr.rows, fw = board_bgr.cols;
@@ -557,32 +616,30 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 x2 = std::max(x1 + 1, std::min(x2, fw));
                 y2 = std::max(y1 + 1, std::min(y2, fh));
 
-                cv::Mat sq_bgr = board_bgr(cv::Rect(x1, y1, x2 - x1, y2 - y1));
-                cv::Mat white_mask;
-                cv::inRange(sq_bgr, cv::Scalar(160, 160, 160), cv::Scalar(255, 255, 255), white_mask);
+                // Reuse scratch white_mask buffer
+                int sw = x2 - x1, sh = y2 - y1;
+                if (scratch_.white_mask.rows < sh || scratch_.white_mask.cols < sw) {
+                    scratch_.white_mask = cv::Mat(sh, sw, CV_8UC1);
+                }
+                cv::Mat white_mask_roi = scratch_.white_mask(cv::Rect(0, 0, sw, sh));
+                cv::inRange(board_bgr(cv::Rect(x1, y1, sw, sh)), cv::Scalar(160, 160, 160), cv::Scalar(255, 255, 255), white_mask_roi);
 
-                int thickness = std::max(3, static_cast<int>(geo.sq_w * 0.08));
-                cv::Mat top = white_mask(cv::Rect(0, 0, x2 - x1, thickness));
-                cv::Mat bottom = white_mask(cv::Rect(0, y2 - y1 - thickness, x2 - x1, thickness));
-                cv::Mat left = white_mask(cv::Rect(0, 0, thickness, y2 - y1));
-                cv::Mat right = white_mask(cv::Rect(x2 - x1 - thickness, 0, thickness, y2 - y1));
+                int thickness = std::max(3, static_cast<int>(geo_.sq_w * 0.08));
+                cv::Mat top = white_mask_roi(cv::Rect(0, 0, sw, thickness));
+                cv::Mat bottom = white_mask_roi(cv::Rect(0, sh - thickness, sw, thickness));
+                cv::Mat left = white_mask_roi(cv::Rect(0, 0, thickness, sh));
+                cv::Mat right = white_mask_roi(cv::Rect(sw - thickness, 0, thickness, sh));
 
-                int w = x2 - x1, h = y2 - y1;
-                cv::Mat col_max_top, col_max_bot;
-                cv::reduce(top, col_max_top, 0, cv::REDUCE_MAX);
-                cv::reduce(bottom, col_max_bot, 0, cv::REDUCE_MAX);
-                cv::Mat row_max_left, row_max_right;
-                cv::reduce(left, row_max_left, 1, cv::REDUCE_MAX);
-                cv::reduce(right, row_max_right, 1, cv::REDUCE_MAX);
+                cv::reduce(top, scratch_.reduced, 0, cv::REDUCE_MAX);
+                double r0 = static_cast<double>(cv::countNonZero(scratch_.reduced)) / std::max(1, sw);
+                cv::reduce(bottom, scratch_.reduced, 0, cv::REDUCE_MAX);
+                double r1 = static_cast<double>(cv::countNonZero(scratch_.reduced)) / std::max(1, sw);
+                cv::reduce(left, scratch_.reduced, 1, cv::REDUCE_MAX);
+                double r2 = static_cast<double>(cv::countNonZero(scratch_.reduced)) / std::max(1, sh);
+                cv::reduce(right, scratch_.reduced, 1, cv::REDUCE_MAX);
+                double r3 = static_cast<double>(cv::countNonZero(scratch_.reduced)) / std::max(1, sh);
 
-                double ratios[4] = {
-                    static_cast<double>(cv::countNonZero(col_max_top)) / std::max(1, w),
-                    static_cast<double>(cv::countNonZero(col_max_bot)) / std::max(1, w),
-                    static_cast<double>(cv::countNonZero(row_max_left)) / std::max(1, h),
-                    static_cast<double>(cv::countNonZero(row_max_right)) / std::max(1, h)
-                };
-                int visible = 0;
-                for (double r : ratios) { if (r > 0.10) ++visible; }
+                int visible = (r0 > 0.10) + (r1 > 0.10) + (r2 > 0.10) + (r3 > 0.10);
                 return visible >= 2;
             };
 
@@ -591,11 +648,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     std::cout << "    " << ts(elapsed()) << " [Debug] " << t << "s: " << move_uci << " rejected (Piece is still mid-drag)\n";
                 }
                 t = round_t(t + fine_step);
+                prefetcher_->request_next(t, fps);
                 continue;
             }
 
             // ── Validation 3: Clock turn check ───────────────────────────────
-            ClockState clocks = extract_clocks(frame, board_template_, geo_);
+            ClockState clocks = extract_clocks(full_bgr, board_template_, geo_, &clock_cache_);
             if (!clocks.active_player.empty()) {
                 std::string expected = (pos_ptr_->turn() == libchess::Side::White) ? "black" : "white";
                 if (clocks.active_player != expected) {
@@ -603,6 +661,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         std::cout << "    " << ts(elapsed()) << " [Debug] " << t << "s: " << move_uci << " rejected (Waiting for clock to flip)\n";
                     }
                     t = round_t(t + fine_step);
+                    prefetcher_->request_next(t, fps);
                     continue;
                 }
             }
@@ -616,16 +675,14 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // --- ADDED VISIBILITY: Print Top 3 Candidates ---
             if (debug_level_ != DebugLevel::None) {
-                std::vector<double> sq_diffs(64, 0.0);
-                for (const auto& sl : sq_slices_) {
-                    cv::Mat region = diff(cv::Rect(sl.x1, sl.y1, sl.x2 - sl.x1, sl.y2 - sl.y1));
-                    sq_diffs[parse_square_idx(sl.name)] = cv::mean(region)[0];
-                }
-                
+                // Reuse already-computed square means
+                const auto& sq_diffs = sq_means;
+
                 struct Cand { std::string uci; double score; };
                 std::vector<Cand> cands;
                 
                 std::string fen = pos_ptr_->get_fen();
+                std::array<char, 64> board_map = expand_fen(fen);
                 
                 for (const auto& m : pos_ptr_->legal_moves()) {
                     int f = static_cast<int>(static_cast<unsigned int>(m.from()));
@@ -644,7 +701,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     } else {
                         if ((f == 4 && (to == 6 || to == 2)) || 
                             (f == 60 && (to == 62 || to == 58))) {
-                            char p = get_piece_at(fen, f);
+                            char p = board_map[f];
                             if (p == 'K' || p == 'k') {
                                 is_castling = true;
                             }
@@ -665,12 +722,19 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     if (m.type() == libchess::MoveType::enpassant) {
                         s += sq_diffs[(to & 7) | (f & 0x38)];
                     }
-                    cands.push_back({sq_name(f) + sq_name(to), s});
+                    std::string uci;
+                    uci.reserve(4);
+                    uci += sq_name(f);
+                    uci += sq_name(to);
+                    cands.push_back({std::move(uci), s});
                 }
-                std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b){ return a.score > b.score; });
                 
+                // O(N log K) partial sort since we only care about the top 3
+                size_t k = std::min<size_t>(3, cands.size());
+                std::partial_sort(cands.begin(), cands.begin() + k, cands.end(), [](const Cand& a, const Cand& b){ return a.score > b.score; });
+
                 std::cout << "    " << ts(elapsed()) << " > Top candidates: ";
-                for (size_t i = 0; i < std::min<size_t>(3, cands.size()); ++i) {
+                for (size_t i = 0; i < k; ++i) {
                     std::cout << cands[i].uci << " (" << round_t(score_to_confidence(cands[i].score)) << "%)   ";
                 }
                 std::cout << "\n";
@@ -682,6 +746,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             // Update FEN, board image history, and clock history
             data.fens.push_back(pos_ptr_->get_fen());
             board_image_history.push_back(board_gray.clone());
+            history_hashes.push_back(compute_all_square_means(board_gray, geo_, margin_h_, margin_w_));
 
             data.clocks.push_back({clocks.active_player, clocks.white_time, clocks.black_time});
 
@@ -690,18 +755,24 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 snprintf(fname, sizeof(fname), "%s/%02d_b%d_%s_%.2fs.png",
                          debug_dir.c_str(), static_cast<int>(data.moves.size()),
                          branch_counter, move_uci.c_str(), t);
-                cv::imwrite(fname, frame);
+                cv::imwrite(fname, full_bgr);
             }
 
-            mode_fast = true;
-            t = round_t(t + fast_step);
+            t = round_t(t + fine_step);
+            prefetcher_->request_next(t, fps);
             continue;
         }
 
         t = round_t(t + fine_step);
+        prefetcher_->request_next(t, fps);
     }
 
-    cap.release();
+    prefetcher_->stop();
+
+    // Final progress line
+    if (last_progress_t >= 0) {
+        std::cout << "\n";
+    }
 
     // Write JSON output
     double total_scan = elapsed();

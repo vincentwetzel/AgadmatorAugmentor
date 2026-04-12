@@ -1,6 +1,8 @@
 #pragma once
 
 #include "BoardLocalizer.h"
+#include "UIDetectors.h"  // for ClockCache
+#include "GPUAccelerator.h"  // for GPUPipeline
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
@@ -8,6 +10,11 @@
 
 // Forward declare libchess types — headers included in .cpp
 namespace libchess { class Position; }
+
+// Forward declare frame prefetcher
+namespace aa { class FramePrefetcher; }
+
+// GPU accelerator is included via GPUAccelerator.h (pulled in by .cpp)
 
 namespace aa {
 
@@ -64,16 +71,34 @@ private:
     // libchess position state
     std::unique_ptr<libchess::Position> pos_ptr_;
 
-    // Square slice for efficient per-pixel diff extraction
-    struct SquareSlice {
-        int y1, y2, x1, x2;
-        std::string name;
-    };
-    std::vector<SquareSlice> sq_slices_;
+    // Margins for batch square mean computation (integral image)
     BoardGeometry geo_;
     int margin_h_ = 0, margin_w_ = 0;
 
+    // Scratch buffers to avoid per-frame allocations in hot paths
+    struct ScratchBuffers {
+        std::vector<cv::Mat> channels;   // reused by convertTo+split
+        cv::Mat float_mat;               // CV_32FC3 for yellowness
+        cv::Mat white_mask;              // hover box detection
+        cv::Mat reduced;                 // for cv::reduce output
+    } scratch_;
+
+    // Clock OCR cache — avoids redundant Tesseract calls when pixels unchanged
+    ClockCache clock_cache_;
+
+    // Frame prefetcher — async video I/O hiding
+    std::unique_ptr<FramePrefetcher> prefetcher_;
+
+    // Zero-copy GPU pipeline — keeps grayscale frames on GPU to eliminate
+    /// per-frame Host↔Device memory copies during absdiff + integral.
+    GPUPipeline gpu_pipeline_;
+    bool gpu_pipeline_active_ = false;
+
     cv::Mat get_max_square_diff(const cv::Mat& img_a, const cv::Mat& img_b);
+
+    /// GPU-accelerated square diff means using the zero-copy pipeline.
+    /// Returns empty vector if pipeline unavailable (caller falls back to CPU).
+    std::vector<double> get_square_diff_means_gpu();
 
     struct MoveScore {
         int from_sq = -1, to_sq = -1;

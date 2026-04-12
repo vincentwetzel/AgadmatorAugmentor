@@ -1,18 +1,57 @@
 #include "UIDetectors.h"
 #include "BoardLocalizer.h"
+#include <opencv2/opencv.hpp>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <cctype>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
+#include <vector>
+#include <string>
+#include <array>
 
 namespace aa {
+
+// ── Batch 64-square mean via integral image ──────────────────────────────────
+
+std::vector<double> compute_all_square_means(const cv::Mat& img,
+                                              const BoardGeometry& geo,
+                                              int margin_h,
+                                              int margin_w) {
+    // Build integral image (sum type, 64-bit float for precision)
+    cv::Mat integral_img;
+    cv::integral(img, integral_img, CV_64F);
+
+    std::vector<double> means(64);
+    const int sq_w = static_cast<int>(geo.sq_w);
+    const int sq_h = static_cast<int>(geo.sq_h);
+
+    for (int row = 0; row < 8; ++row) {
+        for (int col = 0; col < 8; ++col) {
+            // Apply margins to exclude edges
+            int y1 = row * sq_h + margin_h;
+            int y2 = (row + 1) * sq_h - margin_h;
+            int x1 = col * sq_w + margin_w;
+            int x2 = (col + 1) * sq_w - margin_w;
+
+            // Clamp to image bounds
+            y1 = std::max(0, std::min(y1, img.rows - 1));
+            x1 = std::max(0, std::min(x1, img.cols - 1));
+            y2 = std::max(y1 + 1, std::min(y2, img.rows));
+            x2 = std::max(x1 + 1, std::min(x2, img.cols));
+
+            // Integral image sum: sum = I(y2,x2) - I(y1,x2) - I(y2,x1) + I(y1,x1)
+            double sum = integral_img.at<double>(y2, x2)
+                       - integral_img.at<double>(y1, x2)
+                       - integral_img.at<double>(y2, x1)
+                       + integral_img.at<double>(y1, x1);
+
+            int area = (y2 - y1) * (x2 - x1);
+            // Map image row (0=top/rank8) to libchess index (0=a1/bottom)
+            means[(7 - row) * 8 + col] = area > 0 ? sum / area : 0.0;
+        }
+    }
+    return means;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -431,92 +470,131 @@ std::string find_misaligned_piece(const cv::Mat& img_bgr,
     return best_square;
 }
 
-// ── Clock extraction ─────────────────────────────────────────────────────────
+// ── Clock extraction — Lightweight Digit Recognizer ──────────────────────────
+// Replaces Tesseract with a fast Hu moments-based character classifier.
+// Chess clocks use only digits 0-9 and ":" — a limited character set
+// well-suited for shape-based classification.
 
-// Tesseract C API — loaded dynamically via GetProcAddress to avoid /MD linkage
-typedef struct TessBaseAPI_TessBaseAPI TessBaseAPI;
-
-// Function pointer types
-typedef TessBaseAPI* (*TessCreateFn)(void);
-typedef void (*TessDeleteFn)(TessBaseAPI*);
-typedef int (*TessInitFn)(TessBaseAPI*, const char*, const char*);
-typedef void (*TessSetImageRawFn)(TessBaseAPI*, const unsigned char*, int, int, int, int);
-typedef char* (*TessGetTextFn)(TessBaseAPI*);
-typedef void (*TessDelTextFn)(char*);
-typedef void (*TessSetVarFn)(TessBaseAPI*, const char*, const char*);
-
-// Dynamic loader
-struct TessAPI {
-    TessCreateFn create;
-    TessDeleteFn del;
-    TessInitFn init;
-    TessSetImageRawFn set_image_raw;
-    TessGetTextFn get_text;
-    TessDelTextFn del_text;
-    TessSetVarFn set_var;
+struct DigitTemplate {
+    std::array<double, 7> hu;  // Hu moments (log-transformed)
+    double area;               // Normalized area ratio
+    double aspect;             // Width/height ratio
 };
 
-static TessAPI load_tesseract() {
-    TessAPI api = {};
-    const char* tess_paths[] = {
-        "E:/vcpkg/installed/x64-windows/bin/tesseract55.dll",
-        "tesseract55.dll"
-    };
-    HMODULE tess_mod = nullptr;
-    for (const char* p : tess_paths) {
-        tess_mod = LoadLibraryA(p);
-        if (tess_mod) break;
-    }
-    if (!tess_mod) return api;
+// Pre-computed Hu moment templates for digits 0-9 and ":"
+// These represent 7-segment digital clock style digit shapes
+static std::vector<DigitTemplate> build_digit_templates() {
+    std::vector<DigitTemplate> templates(11);
 
-    api.create = (TessCreateFn)GetProcAddress(tess_mod, "TessBaseAPICreate");
-    api.del = (TessDeleteFn)GetProcAddress(tess_mod, "TessBaseAPIDelete");
-    api.init = (TessInitFn)GetProcAddress(tess_mod, "TessBaseAPIInit3");
-    api.set_image_raw = (TessSetImageRawFn)GetProcAddress(tess_mod, "TessBaseAPISetImage");
-    api.get_text = (TessGetTextFn)GetProcAddress(tess_mod, "TessBaseAPIGetUTF8Text");
-    api.del_text = (TessDelTextFn)GetProcAddress(tess_mod, "TessDeleteText");
-    api.set_var = (TessSetVarFn)GetProcAddress(tess_mod, "TessBaseAPISetVariable");
-    return api;
-}
-
-// Find time pattern like "1:31:28" or "10:00" in OCR text
-static std::string extract_time_string(const std::string& raw) {
-    for (size_t i = 0; i + 4 < raw.size(); ++i) {
-        size_t start = i;
-        int colons = 0;
-        size_t j = i;
-        bool valid = true;
-        while (j < raw.size()) {
-            if (raw[j] == ':') {
-                ++colons;
-                ++j;
-                if (j + 1 < raw.size() && std::isdigit(raw[j]) && std::isdigit(raw[j + 1])) {
-                    j += 2;
-                } else {
-                    valid = false;
-                    break;
-                }
-            } else if (std::isdigit(raw[j])) {
-                ++j;
-            } else {
-                break;
+    auto make_template = [](const std::vector<std::string>& rows, DigitTemplate& tpl) {
+        int h = static_cast<int>(rows.size());
+        int w = h > 0 ? static_cast<int>(rows[0].size()) : 0;
+        cv::Mat img(h, w, CV_8UC1, cv::Scalar(0));
+        for (int r = 0; r < h; ++r) {
+            for (int c = 0; c < w && c < static_cast<int>(rows[r].size()); ++c) {
+                if (rows[r][c] == '#') img.at<uchar>(r, c) = 255;
             }
         }
-        if (valid && colons >= 1 && colons <= 2 && j > start + 3) {
-            return raw.substr(start, j - start);
+        cv::Moments m = cv::moments(img, true);
+        cv::HuMoments(m, tpl.hu.data());
+        for (int i = 0; i < 7; ++i) {
+            tpl.hu[i] = -std::copysign(std::log10(std::abs(tpl.hu[i]) + 1e-10), tpl.hu[i]);
         }
-    }
-    // Fallback
-    std::string cleaned;
-    for (char c : raw) {
-        if (std::isdigit(c) || c == ':') cleaned += c;
-    }
-    return cleaned;
+        tpl.area = static_cast<double>(cv::countNonZero(img)) / (w * h + 1);
+        tpl.aspect = (w > 0 && h > 0) ? static_cast<double>(w) / h : 1.0;
+    };
+
+    // 7-segment digital clock style digit templates (8 rows x 5 cols)
+    make_template({" ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### ", "     "}, templates[0]);
+    make_template({"  #  ", " ##  ", "# #  ", "  #  ", "  #  ", "  #  ", "#####", "     "}, templates[1]);
+    make_template({" ### ", "#   #", "    #", " ### ", "#    ", "#    ", "#####", "     "}, templates[2]);
+    make_template({" ### ", "#   #", "    #", " ### ", "    #", "#   #", " ### ", "     "}, templates[3]);
+    make_template({"#   #", "#   #", "#   #", " #####", "    #", "    #", "    #", "     "}, templates[4]);
+    make_template({"#####", "#    ", "#    ", "#####", "    #", "#   #", " ### ", "     "}, templates[5]);
+    make_template({" ### ", "#    ", "#    ", "#####", "#   #", "#   #", " ### ", "     "}, templates[6]);
+    make_template({"#####", "#   #", "   # ", "  #  ", " #   ", " #   ", " #   ", "     "}, templates[7]);
+    make_template({" ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### ", "     "}, templates[8]);
+    make_template({" ### ", "#   #", "#   #", " ####", "    #", "    #", " ### ", "     "}, templates[9]);
+    make_template({"     ", "  #  ", "     ", "     ", "  #  ", "     ", "     ", "     "}, templates[10]);
+
+    return templates;
 }
 
-static std::string ocr_time(const TessAPI& api, TessBaseAPI* handle,
-                            const cv::Mat& roi_bgr, bool is_active) {
-    if (!handle || !api.set_image_raw || !api.get_text || !api.del_text) return "";
+static const std::vector<DigitTemplate>& get_digit_templates() {
+    static std::vector<DigitTemplate> templates = build_digit_templates();
+    return templates;
+}
+
+// Segment a thresholded clock image into individual character regions
+static std::vector<std::tuple<int, int, cv::Mat>> segment_characters(const cv::Mat& thresh) {
+    std::vector<std::tuple<int, int, cv::Mat>> segments;
+    cv::Mat proj;
+    cv::reduce(thresh, proj, 0, cv::REDUCE_SUM, CV_32S);
+    int w = thresh.cols;
+    const int min_col_sum = 3;
+
+    int seg_start = -1;
+    for (int x = 0; x < w; ++x) {
+        int col_sum = proj.at<int>(0, x);
+        if (col_sum > min_col_sum) {
+            if (seg_start < 0) seg_start = x;
+        } else if (seg_start >= 0) {
+            int seg_end = x;
+            if (seg_end - seg_start >= 3) {
+                segments.emplace_back(seg_start, seg_end,
+                    thresh(cv::Rect(seg_start, 0, seg_end - seg_start, thresh.rows)).clone());
+            }
+            seg_start = -1;
+        }
+    }
+    if (seg_start >= 0 && w - seg_start >= 3) {
+        segments.emplace_back(seg_start, w,
+            thresh(cv::Rect(seg_start, 0, w - seg_start, thresh.rows)).clone());
+    }
+    return segments;
+}
+
+// Classify a character segment against digit templates
+static char classify_segment(const cv::Mat& char_img,
+                              const std::vector<DigitTemplate>& templates) {
+    cv::Mat resized;
+    cv::resize(char_img, resized, cv::Size(5, 8), 0, 0, cv::INTER_LINEAR);
+
+    cv::Moments m = cv::moments(resized, true);
+    std::array<double, 7> hu;
+    cv::HuMoments(m, hu.data());
+    for (int i = 0; i < 7; ++i) {
+        hu[i] = -std::copysign(std::log10(std::abs(hu[i]) + 1e-10), hu[i]);
+    }
+
+    double area = static_cast<double>(cv::countNonZero(resized)) / 40.0;
+    double aspect = 5.0 / 8.0;
+
+    double best_score = 1e18;
+    int best_idx = -1;
+
+    for (size_t i = 0; i < templates.size(); ++i) {
+        double dist = 0.0;
+        for (int j = 0; j < 7; ++j) {
+            double d = hu[j] - templates[i].hu[j];
+            dist += d * d;
+        }
+        dist += 5.0 * std::abs(area - templates[i].area);
+        dist += 3.0 * std::abs(aspect - templates[i].aspect);
+        if (dist < best_score) {
+            best_score = dist;
+            best_idx = static_cast<int>(i);
+        }
+    }
+
+    if (best_score > 15.0) return '?';
+    if (best_idx < 10) return static_cast<char>('0' + best_idx);
+    return ':';
+}
+
+// Recognize time from a clock ROI using lightweight digit classification
+static std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
+    if (roi_bgr.empty()) return "";
 
     cv::Mat scaled;
     cv::resize(roi_bgr, scaled, cv::Size(), 3.0, 3.0, cv::INTER_CUBIC);
@@ -526,25 +604,55 @@ static std::string ocr_time(const TessAPI& api, TessBaseAPI* handle,
 
     cv::Mat thresh;
     if (is_active) {
-        cv::threshold(gray, thresh, 150, 255, cv::THRESH_BINARY);
+        cv::adaptiveThreshold(gray, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
+                              cv::THRESH_BINARY, 21, -10);
+        thresh = ~thresh;
     } else {
-        cv::threshold(gray, thresh, 100, 255, cv::THRESH_BINARY_INV);
+        cv::adaptiveThreshold(gray, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
+                              cv::THRESH_BINARY, 21, 5);
     }
 
-    api.set_image_raw(handle, thresh.data, thresh.cols, thresh.rows, 1, static_cast<int>(thresh.step[0]));
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2, 2));
+    cv::morphologyEx(thresh, thresh, cv::MORPH_CLOSE, kernel);
 
-    char* text = api.get_text(handle);
+    std::vector<cv::Point> pts;
+    cv::findNonZero(thresh, pts);
+    if (pts.empty()) return "";
+
+    cv::Rect bbox = cv::boundingRect(pts);
+    bbox.x = std::max(0, bbox.x - 2);
+    bbox.y = std::max(0, bbox.y - 1);
+    bbox.width = std::min(bbox.width + 4, thresh.cols - bbox.x);
+    bbox.height = std::min(bbox.height + 2, thresh.rows - bbox.y);
+
+    cv::Mat text_region = thresh(bbox);
+    auto segments = segment_characters(text_region);
+    if (segments.empty()) return "";
+
+    const auto& templates = get_digit_templates();
     std::string result;
-    if (text) {
-        result = extract_time_string(text);
-        api.del_text(text);
+    result.reserve(segments.size());
+
+    for (const auto& [x1, x2, img] : segments) {
+        char c = classify_segment(img, templates);
+        result += c;
     }
+
+    // Validate: at least one colon, mostly digits
+    int colons = 0, digits = 0;
+    for (char c : result) {
+        if (c == ':') ++colons;
+        else if (std::isdigit(c)) ++digits;
+    }
+    if (colons < 1 || digits < 3) return "";
+
     return result;
 }
 
 ClockState extract_clocks(const cv::Mat& img_bgr,
                           const cv::Mat& board_template,
-                          const BoardGeometry& geo) {
+                          const BoardGeometry& geo,
+                          ClockCache* cache) {
     int roi_x1 = std::max(0, static_cast<int>(geo.bx + geo.bw - geo.sq_w * 1.18));
     int roi_x2 = std::min(img_bgr.cols, static_cast<int>(geo.bx + geo.bw + geo.sq_w * 0.05));
 
@@ -574,30 +682,52 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
         state.active_player = (bot_white > top_white) ? "white" : "black";
     }
 
-    // Initialize Tesseract once via dynamic loading and ensure cleanup on exit
-    struct TessContext {
-        TessAPI api;
-        TessBaseAPI* handle = nullptr;
-        TessContext() {
-            api = load_tesseract();
-            if (api.create && api.init) {
-                handle = api.create();
-                const char* tessdata_path = "E:/vcpkg/installed/x64-windows/share/tessdata";
-                if (api.init(handle, tessdata_path, "eng") == 0 && api.set_var) {
-                    api.set_var(handle, "tessedit_char_whitelist", "0123456789: ");
-                    api.set_var(handle, "tessedit_pageseg_mode", "7");
-                } else {
-                    if (api.del) api.del(handle);
-                    handle = nullptr;
-                }
-            }
-        }
-        ~TessContext() { if (handle && api.del) api.del(handle); }
-    };
-    static TessContext ctx;
+    // ── Conditional OCR: quick diff check against cached ROIs ────────────
+    cv::Mat top_gray, bot_gray;
+    cv::cvtColor(top_bgr, top_gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(bot_bgr, bot_gray, cv::COLOR_BGR2GRAY);
 
-    state.white_time = ocr_time(ctx.api, ctx.handle, bot_bgr, state.active_player == "white");
-    state.black_time = ocr_time(ctx.api, ctx.handle, top_bgr, state.active_player == "black");
+    bool need_ocr = true;
+    if (cache && cache->valid) {
+        // Quick pixel diff against cached ROIs
+        double top_diff = 0, bot_diff = 0;
+        if (top_gray.size() == cache->top_gray.size()) {
+            cv::Mat d;
+            cv::absdiff(top_gray, cache->top_gray, d);
+            top_diff = cv::mean(d)[0];
+        }
+        if (bot_gray.size() == cache->bot_gray.size()) {
+            cv::Mat d;
+            cv::absdiff(bot_gray, cache->bot_gray, d);
+            bot_diff = cv::mean(d)[0];
+        }
+
+        // If both clock ROIs haven't changed meaningfully (threshold: 5.0 mean pixel diff),
+        // reuse cached times and skip OCR calls
+        if (top_diff < 5.0 && bot_diff < 5.0) {
+            state.white_time = cache->white_time;
+            state.black_time = cache->black_time;
+            state.ocr_skipped = true;
+            need_ocr = false;
+        }
+    }
+
+    if (need_ocr) {
+        // Lightweight Hu moments-based digit recognizer
+        // No external dependencies — runs in microseconds vs Tesseract's milliseconds
+        state.white_time = recognize_time(bot_bgr, state.active_player == "white");
+        state.black_time = recognize_time(top_bgr, state.active_player == "black");
+        state.ocr_skipped = false;
+
+        // Update cache if provided
+        if (cache) {
+            cache->top_gray = top_gray.clone();
+            cache->bot_gray = bot_gray.clone();
+            cache->white_time = state.white_time;
+            cache->black_time = state.black_time;
+            cache->valid = true;
+        }
+    }
 
     return state;
 }
