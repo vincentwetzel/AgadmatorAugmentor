@@ -58,6 +58,15 @@ The ChessVideoAugmentor project has been fully migrated from Python to C++. All 
 - [ ] Benchmark — compare C++ speed vs Python on same video (Python files removed)
 - [ ] Profile with real video — run `extract_moves.exe` on a multi-minute game and verify no regressions
 
+### Further Speedup Opportunities (Investigated, Not Implemented)
+
+These were attempted or analyzed but abandoned due to correctness regressions or complexity vs ROI concerns:
+
+- [ ] **Adaptive Polling** — Use wide intervals (1–2s) in static regions, narrow (0.2s) after detecting movement. Attempted with 0.3s and 0.4s polling — both produced wrong moves because some yellow highlight windows are only visible for <0.3s. Would require significant restructuring of the sequential scan loop to implement properly.
+- [ ] **Batch Frame Prefetch** — Prefetcher could decode 2–3 frames ahead instead of 1, hiding more FFmpeg I/O latency. Current single-frame prefetch already overlaps decode with processing; additional batching may not yield proportional gains.
+- [ ] **GPU MinMax Change Detection** — Use NPP `nppiMinMax` on the GPU diff to download only 1 byte instead of the 32F integral image. Tested but caused move scoring regressions due to subtle synchronization differences between GPU and CPU code paths.
+- [ ] **Custom 64F GPU Integral Kernel** — Write a custom CUDA kernel for 64F integral computation to eliminate the 3.3MB 32F integral download and achieve true zero-copy performance. Requires a `.cu` compilation unit and careful memory management.
+
 ### In Progress 🔄
 - (nothing — all core functionality, refactoring, and GPU acceleration complete)
 
