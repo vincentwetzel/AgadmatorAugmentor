@@ -13,12 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Comprehensive `spec.md` documenting all functional and non-functional requirements
 - `changelog.md` for tracking project history
+- **File size soft limit** convention (~400 lines) documented in TODO.md
 
 ### Performance
 
 - **Golden Section Search for Board Localization** — Replaced linear 67-step scale sweep with O(log N) Golden Section Search (39 iterations: 15+12+12 vs 25+21+21). Linear fallback handles edge cases where both initial bracket points are out-of-bounds. **~42% fewer `matchTemplate` calls** per localization.
 - **Zero-Copy GPU Pipeline Framework** — `GPUPipeline` class with `GPUMat` RAII device memory wrapper. Keeps `prev_gray` and `curr_gray` on GPU, performs GPU absdiff + GPU integral for fast change detection. CPU integral used for accurate move scoring (64F precision). **~10% faster on GPU-accelerated systems** by eliminating per-frame H→D copies for frame diff input.
 - **Hu Moments Digit Recognizer (Replace Tesseract)** — Replaced Tesseract OCR with a Hu moments-based shape classifier. Pre-computed 7-segment display templates, vertical projection character segmentation, and nearest-neighbor classification. Runs in microseconds vs Tesseract's milliseconds. **Eliminates tesseract55.dll, tessdata files, and all Windows dynamic loading code.**
+
+### Refactored
+
+- **Split `UIDetectors.cpp` (764 lines)** into three focused modules:
+  - `BoardAnalysis.cpp` (356 lines) — square means, yellow squares, piece counting, red squares, hover boxes, debug helpers
+  - `ArrowDetector.cpp` (141 lines) — yellow arrow detection with HSV masking, ray-casting, overlap suppression
+  - `ClockRecognizer.cpp` (264 lines) — Hu Moments digit recognizer + clock extraction with conditional caching
+- `UIDetectors.h` converted to umbrella header for backwards compatibility.
 
 ---
 

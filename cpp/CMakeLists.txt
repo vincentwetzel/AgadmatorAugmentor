@@ -83,7 +83,9 @@ target_include_directories(chess PUBLIC
 add_executable(extract_moves
     src/main.cpp
     src/BoardLocalizer.cpp
-    src/UIDetectors.cpp
+    src/BoardAnalysis.cpp
+    src/ArrowDetector.cpp
+    src/ClockRecognizer.cpp
     src/ChessVideoExtractor.cpp
     src/FramePrefetcher.cpp
     src/GPUAccelerator.cpp
@@ -139,7 +141,9 @@ if(BUILD_TESTS)
     add_executable(test_extract_moves
         tests/test_ui_detectors.cpp
         src/BoardLocalizer.cpp
-        src/UIDetectors.cpp
+        src/BoardAnalysis.cpp
+        src/ArrowDetector.cpp
+        src/ClockRecognizer.cpp
         src/ChessVideoExtractor.cpp
         src/FramePrefetcher.cpp
         src/GPUAccelerator.cpp

@@ -232,5 +232,9 @@ Based on architectural analysis, here is the roadmap to maximize C++ processing 
   - [x] Update the usage examples for the new C++ executable.
 - [ ] **Code Review and Refactoring:**
   - [x] Ensure C++ best practices (RAII, smart pointers, const correctness).
-  - [x] Profile the application to identify performance bottlenecks.
   - [x] Pre-computed square name table, scratch buffers, allocation-free UCI construction.
+  - [x] Split monolithic `UIDetectors.cpp` (764 lines) into `BoardAnalysis.cpp`, `ArrowDetector.cpp`, `ClockRecognizer.cpp`.
+
+### File Size Soft Limit
+
+Keep source files under **~400 lines** as a soft guideline. This helps with code review, agent context usage, and maintainability. When a file grows beyond this threshold, consider whether it can be split along natural boundaries (separate concerns, distinct algorithms, independent utilities). The orchestrator and complex algorithms may exceed it when splitting would harm readability.

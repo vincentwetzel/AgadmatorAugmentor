@@ -4,6 +4,7 @@
 #include "UIDetectors.h"  // for ClockCache
 #include "GPUAccelerator.h"  // for GPUPipeline
 #include <opencv2/opencv.hpp>
+#include "libchess/move.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -103,6 +104,7 @@ private:
     struct MoveScore {
         int from_sq = -1, to_sq = -1;
         double score = -1.0;
+        libchess::Move move;
     };
     MoveScore score_moves_for_board(const cv::Mat& diff_image);
 };
