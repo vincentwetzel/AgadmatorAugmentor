@@ -2,6 +2,20 @@
 #include <CLI/CLI.hpp>
 #include <iostream>
 
+#include <string>
+#ifdef _WIN32
+#include <stdlib.h>
+#endif
+
+static void set_ffmpeg_threads(int threads) {
+    std::string val = std::to_string(threads);
+#ifdef _WIN32
+    _putenv_s("OPENCV_FFMPEG_THREADS", val.c_str());
+#else
+    setenv("OPENCV_FFMPEG_THREADS", val.c_str(), 1);
+#endif
+}
+
 int main(int argc, char* argv[]) {
     CLI::App app{"ChessVideoAugmentor — Extract chess plies from video"};
 

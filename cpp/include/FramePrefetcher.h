@@ -5,6 +5,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <string>
+#include <queue>
 #include "BoardLocalizer.h"
 
 namespace aa {
@@ -34,8 +35,7 @@ public:
     /// Initialize with board geometry. Must be called after locate_board().
     void init(const BoardGeometry& geo);
 
-    /// Non-blocking: signal the worker to start decoding the frame at `timestamp`.
-    /// Any previous pending request is cancelled.
+    /// Non-blocking: queues a request to decode the frame at `timestamp`.
     void request_next(double timestamp_seconds, double fps);
 
     /// Blocking: wait for and return the most recent decoded frame.
@@ -44,6 +44,9 @@ public:
 
     /// Signal the background thread to stop and join it.
     void stop();
+
+    /// Clears all pending requests and unread results from the queues.
+    void clear_queues();
 
     /// Returns true if the prefetcher has been initialized.
     bool is_initialized() const { return initialized_; }
@@ -60,14 +63,16 @@ private:
     std::mutex mutex_;
     std::condition_variable cv_;
 
-    // Request from main thread (set by request_next)
-    double request_timestamp_ = 0.0;
-    double request_fps_ = 30.0;
-    bool request_pending_ = false;
+    // Requests from main thread
+    struct Request {
+        double timestamp;
+        double fps;
+    };
+    std::queue<Request> request_queue_;
+    const size_t max_queue_size_ = 3;
 
-    // Result from worker thread (read by get_result)
-    FrameData result_;
-    bool result_ready_ = false;
+    // Results from worker thread
+    std::queue<FrameData> result_queue_;
 
     // Control
     bool stop_requested_ = false;

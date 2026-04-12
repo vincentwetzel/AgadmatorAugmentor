@@ -22,19 +22,23 @@ void FramePrefetcher::init(const BoardGeometry& geo) {
 void FramePrefetcher::request_next(double timestamp_seconds, double fps) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        request_timestamp_ = timestamp_seconds;
-        request_fps_ = fps;
-        request_pending_ = true;
-        result_ready_ = false;
+        request_queue_.push({timestamp_seconds, fps});
     }
     cv_.notify_one();
 }
 
 FramePrefetcher::FrameData FramePrefetcher::get_result() {
     std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait(lock, [this] { return result_ready_ || stop_requested_; });
+    cv_.wait(lock, [this] { return !result_queue_.empty() || stop_requested_; });
 
-    return result_;
+    if (stop_requested_ && result_queue_.empty()) {
+        return FrameData{};
+    }
+
+    FrameData data = std::move(result_queue_.front());
+    result_queue_.pop();
+    cv_.notify_one(); // Notify worker that space has freed up
+    return data;
 }
 
 void FramePrefetcher::stop() {
@@ -42,12 +46,21 @@ void FramePrefetcher::stop() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stop_requested_) return;
         stop_requested_ = true;
-        request_pending_ = false;
     }
     cv_.notify_one();
     if (worker_.joinable()) {
         worker_.join();
     }
+}
+
+void FramePrefetcher::clear_queues() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Efficiently clear queues and deallocate memory
+    std::queue<Request>().swap(request_queue_);
+    std::queue<FrameData>().swap(result_queue_);
+    
+    // Wake up the worker if it was blocked by max_queue_size_
+    cv_.notify_all();
 }
 
 void FramePrefetcher::worker_loop() {
@@ -56,6 +69,12 @@ void FramePrefetcher::worker_loop() {
     });
     if (!cap.isOpened()) {
         std::cerr << "FramePrefetcher: Cannot open video: " << video_path_ << "\n";
+        // Signal failure to main thread so it doesn't block forever
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            result_queue_.push(FrameData{});
+        }
+        cv_.notify_one();
         return;
     }
 
@@ -65,15 +84,19 @@ void FramePrefetcher::worker_loop() {
     while (true) {
         // Wait for a request
         std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this] { return request_pending_ || stop_requested_; });
+        cv_.wait(lock, [this] { 
+            return (!request_queue_.empty() && result_queue_.size() < max_queue_size_) || stop_requested_; 
+        });
 
         if (stop_requested_) return;
 
-        double target_ts = request_timestamp_;
-        double fps = request_fps_;
-        request_pending_ = false;
+        auto req = request_queue_.front();
+        request_queue_.pop();
+        double target_ts = req.timestamp;
+        double fps = req.fps;
 
-        int target_frame = static_cast<int>(target_ts * fps);
+        // std::round prevents float precision errors from mistakenly triggering backward cap.set() jumps
+        int target_frame = static_cast<int>(std::round(target_ts * fps));
         if (target_frame < 0) target_frame = 0;
         if (target_frame >= static_cast<int>(total_frames)) target_frame = static_cast<int>(total_frames) - 1;
 
@@ -83,9 +106,11 @@ void FramePrefetcher::worker_loop() {
         cv::Mat frame;
         // cap.set() is extremely slow due to keyframe seeking. For FAST mode polling 
         // (e.g. 5.0s jumps), sequential cap.grab() is dramatically faster.
-        if (target_frame > current_frame && target_frame - current_frame <= fps * 15) {
+        if (target_frame > current_frame && target_frame - current_frame <= fps * 6) {
             for (int i = 0; i < target_frame - current_frame; ++i) {
-                cap.grab();
+                if (!cap.grab()) {
+                    break; // Prevent dead-looping if EOF is reached unexpectedly
+                }
             }
             cap >> frame;
             current_frame = target_frame + 1;
@@ -109,14 +134,13 @@ void FramePrefetcher::worker_loop() {
             // Crop board region
             data.board_bgr = frame(cv::Rect(geo_.bx, geo_.by, geo_.bw, geo_.bh));
             // Convert to grayscale
-            GPUAccelerator::cvtColor_BGR2GRAY(data.board_bgr, data.board_gray);
+            cv::cvtColor(data.board_bgr, data.board_gray, cv::COLOR_BGR2GRAY); // CPU is faster than H->D + D->H PCIe latency
         }
 
         // Return result
         {
             std::lock_guard<std::mutex> lock2(mutex_);
-            result_ = std::move(data);
-            result_ready_ = true;
+            result_queue_.push(std::move(data));
         }
         cv_.notify_one();
     }

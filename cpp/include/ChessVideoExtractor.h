@@ -1,106 +1,68 @@
 #pragma once
 
-#include "BoardLocalizer.h"
-#include "UIDetectors.h"  // for ClockCache
-#include "GPUAccelerator.h"  // for GPUPipeline
-#include <opencv2/opencv.hpp>
-#include "libchess/move.hpp"
 #include <string>
 #include <vector>
+#include <functional>
 #include <memory>
+#include <opencv2/core/mat.hpp>
 
-// Forward declare libchess types — headers included in .cpp
+// Forward declarations to avoid including heavy headers
 namespace libchess { class Position; }
-
-// Forward declare frame prefetcher
-namespace aa { class FramePrefetcher; }
-
-// GPU accelerator is included via GPUAccelerator.h (pulled in by .cpp)
+namespace aa { class FramePrefetcher; class GPUPipeline; struct BoardGeometry; struct ClockCache; }
 
 namespace aa {
 
-/// Debug image output level.
-enum class DebugLevel {
-    None,   // No debug images
-    Moves,  // Save one debug image per detected move
-    Full    // Save before/after/diff images for every move
-};
-
-/// Extracted game data (mirrors the Python JSON output).
 struct GameData {
-    std::vector<std::string> moves;         // UCI notation
-    std::vector<double> timestamps;          // Seconds into video
-    std::vector<std::string> fens;           // FEN after each ply
-    struct ClockEntry {
+    std::vector<std::string> moves;
+    std::vector<double> timestamps;
+    std::vector<std::string> fens;
+    struct ClockInfo {
         std::string active;
         std::string white_time;
         std::string black_time;
     };
-    std::vector<ClockEntry> clocks;
+    std::vector<ClockInfo> clocks;
 };
 
-/// Orchestrator: scans a video, detects moves via UI elements, validates with chess logic.
-///
-/// Uses an adaptive FAST/FINE scanning strategy:
-///   - FAST mode: polls every 1.0s, checks for board changes via square diffs.
-///   - FINE mode: once a change is detected, backs up 0.8s and scans at 0.2s intervals
-///     to precisely locate the moment the move settled.
+enum class DebugLevel {
+    None,
+    Moves,
+    Full
+};
+
 class ChessVideoExtractor {
 public:
-    /// @param board_asset_path   Path to the pristine board image (board.png).
-    /// @param red_board_asset_path Optional path to a board image with red highlights.
-    /// @param debug_level        Level of debug image output.
-    explicit ChessVideoExtractor(const std::string& board_asset_path,
-                                 const std::string& red_board_asset_path = "",
-                                 DebugLevel debug_level = DebugLevel::Moves);
+    ChessVideoExtractor(const std::string& board_asset_path,
+                        const std::string& red_board_asset_path = "",
+                        DebugLevel debug_level = DebugLevel::None);
+    ~ChessVideoExtractor();
 
-    /// Extracts moves from a video file.
-    /// @param video_path  Path to the input video.
-    /// @param output_path Path to write the output JSON.
-    /// @param debug_label Label used for debug directory naming.
+    using ProgressCallback = std::function<void(int percent, const std::string& message)>;
+    void set_progress_callback(ProgressCallback cb);
+
     GameData extract_moves_from_video(const std::string& video_path,
                                       const std::string& output_path,
                                       const std::string& debug_label = "");
 
-    ~ChessVideoExtractor();
-
 private:
-    cv::Mat board_template_;
-    cv::Mat red_board_template_;
-    DebugLevel debug_level_;
-
-    // libchess position state
-    std::unique_ptr<libchess::Position> pos_ptr_;
-
-    // Margins for batch square mean computation (integral image)
-    BoardGeometry geo_;
-    int margin_h_ = 0, margin_w_ = 0;
-
-    // Scratch buffers to avoid per-frame allocations in hot paths
-    struct ScratchBuffers {
-        cv::Mat white_mask;              // hover box detection
-        cv::Mat reduced;                 // for cv::reduce output
-    } scratch_;
-
-    // Clock OCR cache — avoids redundant Tesseract calls when pixels unchanged
-    ClockCache clock_cache_;
-
-    // Frame prefetcher — async video I/O hiding
-    std::unique_ptr<FramePrefetcher> prefetcher_;
-
-    // Zero-copy GPU pipeline — keeps grayscale frames on GPU to eliminate
-    /// per-frame Host↔Device memory copies during absdiff + integral.
-    GPUPipeline gpu_pipeline_;
-    bool gpu_pipeline_active_ = false;
+    struct MoveScore;
+    struct ScratchBuffers;
 
     cv::Mat get_max_square_diff(const cv::Mat& img_a, const cv::Mat& img_b);
-
-    struct MoveScore {
-        int from_sq = -1, to_sq = -1;
-        double score = -1.0;
-        libchess::Move move;
-    };
     MoveScore score_moves_for_board(const std::vector<double>& sq_diffs);
+
+    DebugLevel debug_level_;
+    cv::Mat board_template_;
+    cv::Mat red_board_template_;
+    std::unique_ptr<BoardGeometry> geo_;
+    int margin_h_ = 0, margin_w_ = 0;
+    std::unique_ptr<GPUPipeline> gpu_pipeline_;
+    bool gpu_pipeline_active_ = false;
+    std::unique_ptr<ClockCache> clock_cache_;
+    std::unique_ptr<libchess::Position> pos_ptr_;
+    std::unique_ptr<FramePrefetcher> prefetcher_;
+    std::unique_ptr<ScratchBuffers> scratch_;
+    ProgressCallback progress_callback_;
 };
 
 } // namespace aa

@@ -7,6 +7,10 @@ set(CMAKE_X_VCPKG_APPLOCAL_DEPS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
 # Force static runtime to avoid api-ms-win-crt-* dependency issues
 # This must be set BEFORE project() to take effect
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
@@ -28,6 +32,13 @@ endif()
 find_package(OpenCV REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
+
+find_package(Qt6 COMPONENTS Widgets)
+if(Qt6_FOUND)
+    message(STATUS "Qt6 found, GUI will be built")
+else()
+    message(STATUS "Qt6 not found. Install Qt to build the GUI")
+endif()
 
 # ── Optional CUDA/NPP support (system CUDA SDK, NOT vcpkg) ────────────────────
 # Detects system CUDA 13.2 at:
@@ -123,6 +134,47 @@ target_link_libraries(extract_moves PRIVATE
 set_target_properties(extract_moves PROPERTIES
     LINK_FLAGS "/STACK:8388608"
 )
+
+# ── GUI Executable ───────────────────────────────────────────────────────────
+if(Qt6_FOUND)
+    add_executable(augmentor_gui WIN32
+        src/main_gui.cpp
+        src/MainWindow.cpp
+        src/VideoProcessorWorker.cpp
+        src/PgnWriter.cpp
+        src/BoardLocalizer.cpp
+        src/BoardAnalysis.cpp
+        src/ArrowDetector.cpp
+        src/ClockRecognizer.cpp
+        src/ChessVideoExtractor.cpp
+        src/FramePrefetcher.cpp
+        src/GPUAccelerator.cpp
+    )
+
+    target_include_directories(augmentor_gui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(augmentor_gui PRIVATE
+        Qt6::Widgets
+        ${OpenCV_LIBS}
+        nlohmann_json::nlohmann_json
+        chess
+    )
+
+    if(HAVE_SYSTEM_CUDA)
+        target_compile_definitions(augmentor_gui PRIVATE HAVE_SYSTEM_CUDA)
+        target_include_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
+        target_link_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
+        target_link_options(augmentor_gui PRIVATE ${CUDA_DELAY_LOADS})
+        target_link_libraries(augmentor_gui PRIVATE delayimp.lib
+            cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
+    endif()
+
+    set_target_properties(augmentor_gui PROPERTIES
+        LINK_FLAGS "/STACK:8388608"
+    )
+endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build Google Test unit tests" ON)
