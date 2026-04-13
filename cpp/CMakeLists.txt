@@ -149,6 +149,8 @@ if(Qt6_FOUND)
         src/ChessVideoExtractor.cpp
         src/FramePrefetcher.cpp
         src/GPUAccelerator.cpp
+        include/MainWindow.h
+        include/VideoProcessorWorker.h
     )
 
     target_include_directories(augmentor_gui PRIVATE
@@ -173,6 +175,7 @@ if(Qt6_FOUND)
 
     set_target_properties(augmentor_gui PROPERTIES
         LINK_FLAGS "/STACK:8388608"
+        AUTOMOC ON
     )
 endif()
 

@@ -12,14 +12,14 @@
 
 ## Remaining
 
-- [ ] **GUI Development (Qt)** — Build a graphical interface for the application.
-  - [ ] **Project Setup:** Update `CMakeLists.txt` to find and link `Qt6::Widgets`.
-  - [ ] **Main Window UI:** Implement `MainWindow` with a file browser (`QFileDialog`), process button, and log output text area.
-  - [ ] **Async Processing:** Implement `VideoProcessorWorker` and move it to a `QThread` to prevent UI freezing during video processing. Wire up progress and log signals.
-  - [ ] **PGN Exporter (`PgnWriter`):** Create a robust PGN string builder that strictly formats exactly 1 move (2 plies) per line, injects `[%clk ...]` tags, and properly indents analysis lines/variations.
+- [x] **GUI Development (Qt)** — Build a graphical interface for the application.
+  - [x] **Project Setup:** Update `CMakeLists.txt` to find and link `Qt6::Widgets`.
+  - [x] **Main Window UI:** Implement `MainWindow` with a file browser (`QFileDialog`), process button, and log output text area.
+  - [x] **Async Processing:** Implement `VideoProcessorWorker` and move it to a `QThread` to prevent UI freezing during video processing. Wire up progress and log signals.
+  - [x] **PGN Exporter (`PgnWriter`):** Create a robust PGN string builder that strictly formats exactly 1 move (2 plies) per line, injects `[%clk ...]` tags, and properly indents analysis lines/variations.
 - [ ] Benchmark — compare C++ speed vs Python on same video (Python files removed)
 - [ ] Profile with real video — run `extract_moves.exe` on a multi-minute game and verify no regressions
-- [ ] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
+- [x] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
 
 ## Test Control Panel
 
