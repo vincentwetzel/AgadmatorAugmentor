@@ -40,6 +40,14 @@ To enable:
 When CUDA runtime DLLs are not installed, the binary still runs — `GPUAccelerator::init()` checks for DLL existence before attempting GPU ops, falling back to CPU seamlessly.
 
 ### Run
+
+**GUI (Recommended):**
+```cmd
+cd build\Release
+augmentor_gui.exe
+```
+
+**CLI Mode:**
 ```cmd
 cd build\Release
 extract_moves.exe "path\to\video.mp4" --board-asset "path\to\board.png"

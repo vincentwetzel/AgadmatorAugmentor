@@ -123,6 +123,7 @@ The detector code is split into three focused modules to keep files manageable (
 | Arrow Detector | `ArrowDetector.h/.cpp` | 141 | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
 | Clock Recognizer | `ClockRecognizer.h/.cpp` | 264 | Hu Moments digit recognizer, clock extraction, conditional caching |
 | Orchestrator | `ChessVideoExtractor.h/.cpp` | 804 | Video scanning loop, move verification, revert detection, JSON output |
+| Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Frame Prefetcher | `FramePrefetcher.h/.cpp` | 125 | Async frame pre-decoding in background thread |
 
@@ -143,7 +144,7 @@ The following optimizations were investigated but abandoned due to correctness r
 
 ## 8. Future Integrations
 
-- **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — not yet implemented).
+- **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — ✅ Implemented). Integrated into PGN generation with configurable MultiPV, depth, and time limits.
 - **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 3 — not yet implemented).
 - **Video Compositing:** Composite overlays onto original video (Phase 4 — not yet implemented).
 - **Audio Integration:** Using sound templates (`sample_sounds/`) to classify move types (capture, castle, check) and supplement visual detection.

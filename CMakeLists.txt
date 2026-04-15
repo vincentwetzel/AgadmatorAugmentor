@@ -41,6 +41,18 @@ else()
     message(STATUS "Qt6 not found. Install Qt to build the GUI")
 endif()
 
+if(Qt6_FOUND)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "[Paths]\nPlugins = Qt6/plugins\n")
+    function(add_runtime_deployment target_name)
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/bin" "$<TARGET_FILE_DIR:${target_name}>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/debug/bin" "$<TARGET_FILE_DIR:${target_name}>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/Qt6/plugins" "$<TARGET_FILE_DIR:${target_name}>/Qt6/plugins"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/debug/Qt6/plugins" "$<TARGET_FILE_DIR:${target_name}>/Qt6/plugins"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "$<TARGET_FILE_DIR:${target_name}>/qt.conf"
+            VERBATIM)
+    endfunction()
+endif()
 # ── Optional CUDA/NPP support (system CUDA SDK, NOT vcpkg) ────────────────────
 # Detects system CUDA 13.2 at:
 #   C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2
@@ -112,15 +124,41 @@ if(HAVE_SYSTEM_CUDA)
     target_compile_definitions(extract_moves PRIVATE HAVE_SYSTEM_CUDA)
     target_include_directories(extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/include")
     target_link_directories(extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-    # Use delay-load so the binary runs even without CUDA runtime DLLs installed.
-    # CUDA 13.2 uses 64_13 suffix for runtime DLLs (different from .lib names).
-    set(CUDA_DELAY_LOADS
-        /DELAYLOAD:nppial64_13.dll
-        /DELAYLOAD:nppicc64_13.dll
-        /DELAYLOAD:nppig64_13.dll
-        /DELAYLOAD:nppist64_13.dll
+    
+    # Dynamically find the exact names of the CUDA runtime DLLs to delay-load.
+    # This prevents 0xc0000135 crashes caused by version suffix mismatches 
+    # (e.g., if the .lib imports nppc64_132.dll instead of nppc64_13.dll).
+    file(GLOB CUDA_DLL_PATHS 
+        "${SYSTEM_CUDA_PATH}/bin/cudart64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppc64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppial64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppicc64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppidei64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppif64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppig64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppim64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppist64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppitc64_*.dll"
     )
-    target_link_options(extract_moves PRIVATE ${CUDA_DELAY_LOADS})
+    
+    set(CUDA_DELAY_LOADS_LIST "")
+    if(CUDA_DLL_PATHS)
+        foreach(DLL_PATH IN LISTS CUDA_DLL_PATHS)
+            get_filename_component(DLL_NAME "${DLL_PATH}" NAME)
+            list(APPEND CUDA_DELAY_LOADS_LIST "/DELAYLOAD:${DLL_NAME}")
+        endforeach()
+    else()
+        # Fallback: if GLOB fails (e.g., due to permissions or path formats), 
+        # guarantee the delay-load flags are populated for CUDA 13.
+        set(CUDA_DELAY_LOADS_LIST 
+            "/DELAYLOAD:cudart64_13.dll" "/DELAYLOAD:nppc64_13.dll"
+            "/DELAYLOAD:nppial64_13.dll" "/DELAYLOAD:nppicc64_13.dll"
+            "/DELAYLOAD:nppidei64_13.dll" "/DELAYLOAD:nppif64_13.dll"
+            "/DELAYLOAD:nppig64_13.dll" "/DELAYLOAD:nppim64_13.dll"
+            "/DELAYLOAD:nppist64_13.dll" "/DELAYLOAD:nppitc64_13.dll")
+    endif()
+
+    target_link_options(extract_moves PRIVATE ${CUDA_DELAY_LOADS_LIST})
     target_link_libraries(extract_moves PRIVATE delayimp.lib
         cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
 endif()
@@ -136,6 +174,10 @@ target_link_libraries(extract_moves PRIVATE
 set_target_properties(extract_moves PROPERTIES
     LINK_FLAGS "/STACK:8388608"
 )
+
+if(Qt6_FOUND)
+    add_runtime_deployment(extract_moves)
+endif()
 
 # ── GUI Executable ───────────────────────────────────────────────────────────
 if(Qt6_FOUND)
@@ -178,7 +220,7 @@ if(Qt6_FOUND)
         target_compile_definitions(augmentor_gui PRIVATE HAVE_SYSTEM_CUDA)
         target_include_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
         target_link_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(augmentor_gui PRIVATE ${CUDA_DELAY_LOADS})
+        target_link_options(augmentor_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
         target_link_libraries(augmentor_gui PRIVATE delayimp.lib
             cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
     endif()
@@ -192,18 +234,36 @@ if(Qt6_FOUND)
         set_property(TARGET augmentor_gui PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
         message(STATUS "LTO/IPO disabled for augmentor_gui to diagnose hang.")
     endif()
+
+    add_runtime_deployment(augmentor_gui)
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build Google Test unit tests" ON)
 
 if(BUILD_TESTS)
+    # FetchContent sub-builds cache the generator they were created with.
+    # If the active generator changes, CMake will refuse to reuse that stale
+    # nested build tree, so clear it automatically and let FetchContent rebuild.
+    set(GOOGLETEST_SUBBUILD_DIR "${CMAKE_BINARY_DIR}/_deps/googletest-subbuild")
+    set(GOOGLETEST_SUBBUILD_CACHE "${GOOGLETEST_SUBBUILD_DIR}/CMakeCache.txt")
+    if(EXISTS "${GOOGLETEST_SUBBUILD_CACHE}")
+        file(READ "${GOOGLETEST_SUBBUILD_CACHE}" GOOGLETEST_SUBBUILD_CACHE_TEXT)
+        string(REGEX MATCH "CMAKE_GENERATOR:INTERNAL=([^\r\n]+)" _gtest_generator_match "${GOOGLETEST_SUBBUILD_CACHE_TEXT}")
+        set(GOOGLETEST_SUBBUILD_GENERATOR "${CMAKE_MATCH_1}")
+        if(NOT GOOGLETEST_SUBBUILD_GENERATOR STREQUAL CMAKE_GENERATOR)
+            message(STATUS "Removing stale googletest sub-build generated by '${GOOGLETEST_SUBBUILD_GENERATOR}' (current generator: '${CMAKE_GENERATOR}')")
+            file(REMOVE_RECURSE "${GOOGLETEST_SUBBUILD_DIR}")
+        endif()
+    endif()
+
     include(FetchContent)
     FetchContent_Declare(
         googletest
         URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
 
     enable_testing()
@@ -227,7 +287,7 @@ if(BUILD_TESTS)
         target_compile_definitions(test_extract_moves PRIVATE HAVE_SYSTEM_CUDA)
         target_include_directories(test_extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/include")
         target_link_directories(test_extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(test_extract_moves PRIVATE ${CUDA_DELAY_LOADS})
+        target_link_options(test_extract_moves PRIVATE ${CUDA_DELAY_LOADS_LIST})
         target_link_libraries(test_extract_moves PRIVATE delayimp.lib
             cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
     endif()
@@ -247,4 +307,11 @@ if(BUILD_TESTS)
 
     include(GoogleTest)
     gtest_discover_tests(test_extract_moves)
+
+    if(Qt6_FOUND)
+        add_runtime_deployment(test_extract_moves)
+    endif()
 endif()
+
+
+

@@ -137,6 +137,7 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 | Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
 | Clock Recognizer | `ClockRecognizer.h/.cpp` | Hu Moments digit recognizer, clock extraction, conditional caching |
 | Orchestrator | `ChessVideoExtractor.h/.cpp` | Video scanning loop, move verification, revert detection, JSON output |
+| Stockfish Analysis | `StockfishAnalyzer.h/.cpp` | UCI engine integration, MultiPV evaluation, PGN variations |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Frame Prefetcher | `FramePrefetcher.h/.cpp` | Async frame pre-decoding in background thread |
 
@@ -212,6 +213,7 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 | CLI11 | vcpkg (latest) | Command-line argument parsing |
 | libchess | External (`E:/libchess/`) | Chess move generation, legal move validation, FEN handling |
 | NVIDIA NPP | CUDA 13.2 (optional) | GPU-accelerated image processing (resize, absdiff, matchTemplate, integral) |
+| Stockfish | External executable | Used for position evaluation via UCI protocol |
 | Google Test | 1.14.0 (fetched) | Unit and integration testing |
 
 **Removed:** Tesseract — replaced with Hu Moments digit recognizer (zero external dependencies, microseconds per recognition).
@@ -232,7 +234,7 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Stockfish Analysis | 🔜 Not started | Engine evaluation of positions (Phase 2) |
+| Stockfish Analysis | ✅ Implemented | Engine evaluation of positions (Phase 2) |
 | Overlay Rendering | 🔜 Not started | Visual overlays: eval bar, arrows, PV text (Phase 3) |
 | Video Compositing | 🔜 Not started | Composite overlays onto original video (Phase 4) |
 | Audio Integration | 🔜 Not started | Sound event detection, speech-to-text |

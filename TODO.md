@@ -36,7 +36,7 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
   - [x] **Main Window UI:** Implement `MainWindow` with a file browser (`QFileDialog`), process button, and log output text area.
   - [x] **Async Processing:** Implement `VideoProcessorWorker` and move it to a `QThread` to prevent UI freezing during video processing. Wire up progress and log signals.
   - [x] **PGN Exporter (`PgnWriter`):** Create a robust PGN string builder that strictly formats exactly 1 move (2 plies) per line, injects `[%clk ...]` tags, and properly indents analysis lines/variations.
-- [ ] **Feature Toggles & Settings (GUI)** — Add controls for output generation.
+- [x] **Feature Toggles & Settings (GUI)** — Add controls for output generation.
   - [x] Add Output Directory selection (Save to source folder vs Custom directory).
   - [x] Remember the last browsed location for video files and custom output directories.
   - [x] Add a Theme selector (System, Light, Dark) with centralized QSS styling and fix light mode contrast issues.

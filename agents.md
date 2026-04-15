@@ -70,15 +70,17 @@ Designed to contextualize the human element of the video.
 
 Red square and yellow arrow detection are fully implemented and produce structured output. Audio processing and speech-to-text are not yet integrated.
 
-## 4. The Stockfish Analysis Agent — 🔜 Not Started
+## 4. The Stockfish Analysis Agent — ✅ Implemented
 
-### Responsibilities (Planned)
+**Integrated in:** `StockfishAnalyzer.h/.cpp`
 
-- Consumes `output/<video_basename>.json` from Phase 1.
+### Responsibilities
+
+- Consumes FEN positions from the Verification Agent.
 - Feeds each FEN position to Stockfish via UCI protocol.
-- Collects top 3 principal variations with evaluations.
-- Handles edge cases (checkmate, stalemate).
-- Produces `output/<video_basename>_analyzed.json` with engine analysis for every position.
+- Collects configured number of best lines (MultiPV), evaluations (Centipawns or Mate), and principal variations.
+- Handles edge cases (checkmate, stalemate) gracefully.
+- Outputs engine analysis directly into the generated PGN file as standard chess variations and inline evaluations.
 
 ## 5. The Augmentation Agent (Overlay & Composition) — 🔜 Not Started
 
@@ -104,9 +106,9 @@ Raw Video
 [Verification Agent] → Validated move list, FENs, timestamps, clocks
     ↓                    (ChessVideoExtractor + libchess)
         ├──→ analysis.json (Phase 1 output)
-        │
-        ↓
-[Stockfish Analysis Agent] → Engine evaluations, PV lines  (Phase 2 — not started)
+        │                  
+        ↓                  
+[Stockfish Analysis Agent] → Engine evaluations, PV lines  (Phase 2 — Implemented)
         ↓
         ├──→ analysis_analyzed.json (Phase 2 output)
         │
@@ -127,6 +129,7 @@ Raw Video
 | Arrow Detection | `ArrowDetector.h/.cpp` |
 | Clock OCR | `ClockRecognizer.h/.cpp` |
 | Verification + Orchestrator | `ChessVideoExtractor.h/.cpp` |
+| Stockfish Analysis | `StockfishAnalyzer.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
 | Frame I/O | `FramePrefetcher.h/.cpp` |
 
