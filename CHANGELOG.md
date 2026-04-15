@@ -143,6 +143,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/your-org/ChessTubeAnalyzer/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/your-org/ChessTubeAnalyzer/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/your-org/ChessTubeAnalyzer/releases/tag/v0.1.0
+[Unreleased]: https://github.com/vincentwetzel/chess-tube-analyzer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vincentwetzel/chess-tube-analyzer/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/vincentwetzel/chess-tube-analyzer/releases/tag/v0.1.0
