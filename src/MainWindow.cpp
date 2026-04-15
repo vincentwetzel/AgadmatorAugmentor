@@ -59,8 +59,8 @@ static QWidget* createToggleRow(const QString& label, const QString& tooltip, To
 
 namespace aa {
 
-static const char* SETTINGS_ORG = "ChessTubeAnalyzer";
-static const char* SETTINGS_APP = "ChessTubeAnalyzer";
+const char* MainWindow::SETTINGS_ORG = "ChessTubeAnalyzer";
+const char* MainWindow::SETTINGS_APP = "ChessTubeAnalyzer";
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("ChessTube Analyzer");
@@ -270,8 +270,8 @@ void MainWindow::setupUi() {
     connect(stockfishToggle_, &ToggleSwitch::toggled, this, &MainWindow::toggleStockfish);
     connect(threadSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onThreadsChanged);
     // Connect new spinboxes to saveSettings
-    connect(depthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, this { saveSettings(); });
-    connect(timeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, this { saveSettings(); });
+    connect(depthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(timeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
     connect(themeComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onThemeChanged);
 }
 

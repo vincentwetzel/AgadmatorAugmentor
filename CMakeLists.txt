@@ -142,7 +142,9 @@ if(Qt6_FOUND)
     add_executable(augmentor_gui WIN32
         src/main_gui.cpp
         src/MainWindow.cpp
+        include/MainWindow.h
         src/VideoProcessorWorker.cpp
+        include/VideoProcessorWorker.h
         src/PgnWriter.cpp
         src/StockfishAnalyzer.cpp
         src/BoardLocalizer.cpp
@@ -153,7 +155,9 @@ if(Qt6_FOUND)
         src/FramePrefetcher.cpp
         src/GPUAccelerator.cpp
         src/ToggleSwitch.cpp
+        include/ToggleSwitch.h
         src/ThemeManager.cpp
+        include/ThemeManager.h
     )
 
     target_include_directories(augmentor_gui PRIVATE
