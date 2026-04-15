@@ -1,3 +1,4 @@
+// Extracted from cpp directory
 #include "ChessVideoExtractor.h"
 #include <CLI/CLI.hpp>
 #include <iostream>
@@ -17,7 +18,7 @@ static void set_ffmpeg_threads(int threads) {
 }
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"ChessVideoAugmentor — Extract chess plies from video"};
+    CLI::App app{"ChessTube Analyzer — Extract chess plies from video"};
 
     std::string video_path = "";
     app.add_option("video_path", video_path, "Path to the input video file");
@@ -25,7 +26,7 @@ int main(int argc, char* argv[]) {
     std::string board_asset = "assets/board/board.png";
     app.add_option("--board-asset", board_asset, "Path to board template image");
 
-    std::string output = "output/analysis.json";
+    std::string output = "";
     app.add_option("--output", output, "Path to save the extracted JSON data");
 
     std::string debug_level_str = "MOVES";
@@ -36,10 +37,22 @@ int main(int argc, char* argv[]) {
 
     // F5 convenience: use sample video when no args provided
     if (video_path.empty()) {
-        video_path = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
-        board_asset = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\board\board.png)";
-        output = "output/analysis.json";
+        video_path = R"(e:\coding_workspaces\CPP\ChessTubeAnalyzer\assets\sample_games_short\7 plies\7 plies.mp4)";
+        board_asset = R"(e:\coding_workspaces\CPP\ChessTubeAnalyzer\assets\board\board.png)";
         debug_level_str = "MOVES";
+    }
+
+    if (output.empty()) {
+        std::string base_name = "analysis";
+        size_t slash = video_path.find_last_of("/\\");
+        std::string name_only = (slash != std::string::npos) ? video_path.substr(slash + 1) : video_path;
+        size_t dot = name_only.find_last_of('.');
+        if (dot != std::string::npos) {
+            base_name = name_only.substr(0, dot);
+        } else if (!name_only.empty()) {
+            base_name = name_only;
+        }
+        output = "output/" + base_name + ".json";
     }
 
     aa::DebugLevel debug_level = aa::DebugLevel::Moves;

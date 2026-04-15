@@ -1,4 +1,4 @@
-# ChessVideoAugmentor
+# ChessTube Analyzer
 
 A C++ project to analyze chess videos and extract game data, including moves, positions, and timestamps.
 
@@ -6,11 +6,21 @@ A C++ project to analyze chess videos and extract game data, including moves, po
 
 This tool processes chess video files, identifies board states, and reconstructs the game played. The pipeline is purely visual — it uses the chess.com UI itself (highlights, clocks, arrows) as an absolute state machine to achieve high accuracy.
 
+## Features
+
+- **Video Processing**: Extract chess moves from video files using computer vision
+- **Move Verification**: Legal move validation using libchess engine
+- **UI Detection**: Automatic detection of yellow highlights, arrows, clocks, and hover boxes
+- **Clock Recognition**: Hu Moments-based OCR for clock time extraction
+- **PGN Export**: Generate PGN files with extracted moves and clock information
+- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV
+- **Custom Output**: Save analysis alongside the source video or in a custom directory
+- **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
+
 ## Quick Start
 
 ### Build
 ```cmd
-cd cpp
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static
 cmake --build build --config Release
 ```
@@ -31,8 +41,8 @@ When CUDA runtime DLLs are not installed, the binary still runs — `GPUAccelera
 
 ### Run
 ```cmd
-cd cpp\build\Release
-extract_moves.exe "path\to\video.mp4" --board-asset "path\to\board.png" --output output\analysis.json
+cd build\Release
+extract_moves.exe "path\to\video.mp4" --board-asset "path\to\board.png"
 ```
 
 ### Test
@@ -60,30 +70,29 @@ All dependencies are managed via vcpkg on `E:\vcpkg`:
 ## Project Structure
 
 ```
-ChessVideoAugmentor/
-├── cpp/
-│   ├── CMakeLists.txt
-│   ├── include/
-│   │   ├── BoardLocalizer.h         # Board geometry detection
-│   │   ├── BoardAnalysis.h          # Square means, yellow squares, piece count, red squares, hover
-│   │   ├── ArrowDetector.h          # Yellow arrow detection
-│   │   ├── ClockRecognizer.h        # Hu Moments OCR + clock extraction
-│   │   ├── UIDetectors.h            # Umbrella header (includes all detectors)
-│   │   ├── ChessVideoExtractor.h    # Orchestrator class
-│   │   ├── FramePrefetcher.h        # Async frame pre-decoding
-│   │   └── GPUAccelerator.h         # GPUMat + GPUPipeline + GPUAccelerator
-│   ├── src/
-│   │   ├── main.cpp                 # CLI entry point
-│   │   ├── BoardLocalizer.cpp       # GSS board localization (213 lines)
-│   │   ├── BoardAnalysis.cpp        # Square means, yellow, red, hover, debug (356 lines)
-│   │   ├── ArrowDetector.cpp        # Yellow arrow detection (141 lines)
-│   │   ├── ClockRecognizer.cpp      # Hu Moments OCR + clocks (264 lines)
-│   │   ├── ChessVideoExtractor.cpp  # Orchestrator + libchess + GPU pipeline
-│   │   ├── FramePrefetcher.cpp      # Async frame pre-decoding
-│   │   └── GPUAccelerator.cpp       # GPU/CUDA acceleration + GPUPipeline
-│   ├── tests/
-│   │   └── test_ui_detectors.cpp    # All unit + integration tests + summary table
-│   └── build/                       # Build output
+ChessTubeAnalyzer/
+├── CMakeLists.txt
+├── include/
+│   ├── BoardLocalizer.h         # Board geometry detection
+│   ├── BoardAnalysis.h          # Square means, yellow squares, piece count, red squares, hover
+│   ├── ArrowDetector.h          # Yellow arrow detection
+│   ├── ClockRecognizer.h        # Hu Moments OCR + clock extraction
+│   ├── UIDetectors.h            # Umbrella header (includes all detectors)
+│   ├── ChessVideoExtractor.h    # Orchestrator class
+│   ├── FramePrefetcher.h        # Async frame pre-decoding
+│   └── GPUAccelerator.h         # GPUMat + GPUPipeline + GPUAccelerator
+├── src/
+│   ├── main.cpp                 # CLI entry point
+│   ├── BoardLocalizer.cpp       # GSS board localization (213 lines)
+│   ├── BoardAnalysis.cpp        # Square means, yellow, red, hover, debug (356 lines)
+│   ├── ArrowDetector.cpp        # Yellow arrow detection (141 lines)
+│   ├── ClockRecognizer.cpp      # Hu Moments OCR + clocks (264 lines)
+│   ├── ChessVideoExtractor.cpp  # Orchestrator + libchess + GPU pipeline
+│   ├── FramePrefetcher.cpp      # Async frame pre-decoding
+│   └── GPUAccelerator.cpp       # GPU/CUDA acceleration + GPUPipeline
+├── tests/
+│   └── test_ui_detectors.cpp    # All unit + integration tests + summary table
+├── build/                       # Build output
 ├── assets/
 │   ├── board/board.png              # Required: pristine board image
 │   ├── board/red_board.png          # Optional: red highlights for threshold
@@ -104,7 +113,7 @@ ChessVideoAugmentor/
 
 ## Test Control Panel
 
-All tests live in `cpp/tests/test_ui_detectors.cpp` with toggles at the top:
+All tests live in `tests/test_ui_detectors.cpp` with toggles at the top:
 
 ```cpp
 #define TEST_LOCATE_BOARD         0   // Board localization on itself
@@ -137,7 +146,7 @@ The extractor treats the chess.com UI as a deterministic state machine:
 7. **4-Layer Validation** — Yellow highlights, hover-box rejection, clock turn check, revert detection
 8. **Conditional Clock OCR** — Cached clock ROIs; Hu Moments digit recognizer runs in microseconds when pixels change
 9. **Move Settling** — Adaptive 0.2s peek-ahead, skipped when confidence >90%
-10. **Output** — `output/analysis.json` with plies (UCI), timestamps, FENs, and clocks
+7. **Output** — `analysis.json` (including Stockfish analysis if enabled) and `game.pgn` (including Stockfish variations) with plies, timestamps, FENs, and clocks (saved to source video folder or custom directory)
 
 Progress is shown as an inline `[XX.X%]` ticker during scanning.
 
@@ -152,3 +161,9 @@ Progress is shown as an inline `[XX.X%]` ticker during scanning.
 | Integration tests | 7/7 plies, 17/17 with revert |
 
 See [architecture.md](architecture.md) and [spec.md](spec.md) for full details.
+
+## Troubleshooting
+
+### "Error: Could not load board asset at: assets/board/board.png"
+The application searches for the `assets/` folder relative to the Current Working Directory. If not found, it intelligently falls back to searching two directories up (`../../assets/`) to support running directly from `build/Release/`. 
+If you encounter this error, ensure the `assets/` folder exists at the root of the project and has not been moved.

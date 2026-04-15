@@ -1,5 +1,6 @@
+# Extracted from cpp directory
 cmake_minimum_required(VERSION 3.20)
-project(ChessVideoAugmentor LANGUAGES CXX)
+project(ChessTubeAnalyzer LANGUAGES CXX)
 
 set(X_VCPKG_APPLOCAL_DEPS_INSTALL ON)
 set(CMAKE_X_VCPKG_APPLOCAL_DEPS ON)
@@ -86,7 +87,7 @@ add_library(chess STATIC
 )
 
 target_include_directories(chess PUBLIC
-    E:/libchess/dist/include
+    E:/libchess/dist/include # Restore original path for libchess headers
     ${LIBCHESS_SRC_DIR}
 )
 
@@ -100,6 +101,7 @@ add_executable(extract_moves
     src/ChessVideoExtractor.cpp
     src/FramePrefetcher.cpp
     src/GPUAccelerator.cpp
+    src/StockfishAnalyzer.cpp
 )
 
 target_include_directories(extract_moves PRIVATE
@@ -142,6 +144,7 @@ if(Qt6_FOUND)
         src/MainWindow.cpp
         src/VideoProcessorWorker.cpp
         src/PgnWriter.cpp
+        src/StockfishAnalyzer.cpp
         src/BoardLocalizer.cpp
         src/BoardAnalysis.cpp
         src/ArrowDetector.cpp
@@ -149,18 +152,21 @@ if(Qt6_FOUND)
         src/ChessVideoExtractor.cpp
         src/FramePrefetcher.cpp
         src/GPUAccelerator.cpp
-        include/MainWindow.h
-        include/VideoProcessorWorker.h
+        src/ToggleSwitch.cpp
+        src/ThemeManager.cpp
     )
 
     target_include_directories(augmentor_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        E:/libchess/dist/include
+        ${LIBCHESS_SRC_DIR}
     )
 
     target_link_libraries(augmentor_gui PRIVATE
         Qt6::Widgets
         ${OpenCV_LIBS}
         nlohmann_json::nlohmann_json
+        CLI11::CLI11
         chess
     )
 
@@ -177,6 +183,11 @@ if(Qt6_FOUND)
         LINK_FLAGS "/STACK:8388608"
         AUTOMOC ON
     )
+    # Temporarily disable LTO for augmentor_gui to diagnose potential hangs
+    if(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+        set_property(TARGET augmentor_gui PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+        message(STATUS "LTO/IPO disabled for augmentor_gui to diagnose hang.")
+    endif()
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────

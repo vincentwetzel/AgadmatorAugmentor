@@ -1,96 +1,62 @@
-# Project Plan — ChessVideoAugmentor
+# Project Plan — ChessTube Analyzer
 
-## Current Status
+## Overview
 
-**FULL PIPELINE — WORKING END-TO-END**
-
-All 4 phases are implemented and tested on sample videos.
+This document outlines the development plan and current status of the ChessTube Analyzer project. The project has been fully migrated from a Python prototype to a high-performance C++ application.
 
 ---
 
-### ✅ Phase 1: Move Extraction
+## Current Status: C++ Implementation
 
-**Files:** `extract_moves.py`, `video_extractor.py`
-
-The core extraction pipeline is fully operational:
-
-- **Visual State Machine Architecture:** Scans frames at 5 FPS using chess.com UI features as an absolute state machine
-- **Board Localization:** Multi-pass template matching with coarse → fine → exact scale sweeping (0.3x–1.5x)
-- **Pristine Snapshot Anchoring:** Compares current frames exclusively against the last settled board state, bypassing hand occlusion
-- **4-Layer UI Validation:**
-  1. **Yellow squares** — mathematical yellowness `(R + G) / 2.0 - B` on 12% corners; both origin and destination must pass threshold (40.0)
-  2. **Hover box rejection** — 1D projection on white mask edges; rejects mid-drag frames
-  3. **Clock turn verification** — active player clock must match expected turn after move
-  4. **Analysis revert detection** — board grayscale diff matched against `board_image_history` to snap back to past ply
-- **Engine Verification:** `python-chess` generates strictly legal moves; highest visual diff score wins
-- **Clock OCR:** Tesseract extracts active player and remaining time from both clock pills
-- **Red square tracking:** Dynamic thresholding using `red_board.png` reference
-- **Yellow arrow detection:** HSV masking + ray-casting between active squares with thick suppression zones
-- **Output:** `output/analysis.json` with moves (UCI), timestamps, FENs, and clocks
-
-#### Debug Output
-
-For every detected move, the system saves:
-- Before/after board crops
-- Diff image
-- Full frame with highlighted move
-
-Saved to: `debug_screenshots/video_extraction/<video_name>/`
+The core extraction pipeline is implemented in C++20 and is fully operational. The Python prototype has been superseded and all development is now focused on the C++ codebase.
 
 ---
 
-### ✅ Phase 2: Stockfish Analysis
+### ✅ Phase 1: Extraction & Verification
 
-**File:** `stockfish_analysis.py`
+**Executables:** `extract_moves.exe` (CLI), `augmentor_gui.exe` (GUI + Headless)
+**Source Files:** `ChessVideoExtractor.cpp`, `BoardLocalizer.cpp`, `BoardAnalysis.cpp`, `ArrowDetector.cpp`, `ClockRecognizer.cpp`
 
-- Stockfish engine found automatically at `C:\stockfish-windows-x86-64-avx2\stockfish\`
-- Analyzes all detected positions with top 3 moves and evaluations
-- Output: `output/analysis_analyzed.json`
-
-#### Usage
-
-```bash
-python stockfish_analysis.py output/analysis.json --depth 20 --time 2000
-```
-
----
-
-### ✅ Phase 3: Overlay Renderer
-
-**File:** `overlay_renderer.py`
-
-- Chess board rendering with coordinates
-- Evaluation bar on left side
-- Arrows for top 3 moves (green for best, orange for others)
-- Principal variation text below board
-- Test overlay generated successfully
+The core extraction pipeline is fully operational in C++, featuring:
+- **Visual State Machine Architecture:** High-accuracy move detection using chess.com UI elements.
+- **GPU Acceleration:** Optional NVIDIA NPP integration for performance-critical operations.
+- **Advanced UI Detection:**
+  - **Board Localization:** Golden Section Search for fast and robust board finding.
+  - **4-Layer UI Validation:** Yellow squares, hover box rejection, clock turn verification, and analysis revert detection.
+  - **High-Performance OCR:** Hu Moments-based digit recognizer replaces Tesseract for clock reading.
+- **Engine Verification:** `libchess` integration for generating and validating legal moves.
+- **Output:** `analysis.json` and `game.pgn` files with moves, timestamps, FENs, and clock data.
 
 ---
 
-### ✅ Phase 4: Video Composition
+### ✅ Phase 2: Stockfish Integration
 
-**File:** `video_compositor.py`
+**Status:** Implemented and integrated.
+**Source File:** `StockfishAnalyzer.cpp`
 
-- Reads moves with Stockfish analysis from JSON
-- Generates overlay for each position using overlay_renderer
-- Composites overlay onto original video frames
-- Encodes output with H.264 (mp4v codec)
-- Output: `output/output_with_analysis.mp4`
-
----
-
-## Known Issues
-
-| Issue | Impact | Notes |
-|-------|--------|-------|
-| Detection rate ~80% | Some real moves missed | Hand occlusion, subtle board changes |
-| Move parsing ~10% unclear | Positions show as "? (...)" | Departure/arrival square ambiguity |
-| Video encoding slow | 16 min video → ~10 min processing | Python overhead; C++ port planned |
-| Tesseract OCR errors | Wrong clock times | Small text, compression artifacts |
+- The C++ application can directly interface with the Stockfish engine via the UCI protocol.
+- Analysis is configurable (MultiPV, depth, time) through the GUI or CLI flags.
+- Engine analysis is included in the PGN output as variations.
 
 ---
 
-## Detection Pipeline
+### 🔜 Phase 3: Overlay Renderer (Future)
+
+**Status:** Planned, not started.
+
+- This phase will involve generating visual overlays for video composition, including evaluation bars, move arrows, and principal variations.
+
+---
+
+### 🔜 Phase 4: Video Composition (Future)
+
+**Status:** Planned, not started.
+
+- This final phase will composite the generated overlays onto the original video, producing an augmented video file with analysis.
+
+---
+
+## C++ Detection Pipeline
 
 ```
 Video Frames → Board Localization (template matching)

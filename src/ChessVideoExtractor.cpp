@@ -1,3 +1,4 @@
+// Extracted from cpp directory
 #include "ChessVideoExtractor.h"
 #include "UIDetectors.h"
 #include "FramePrefetcher.h"
@@ -22,6 +23,11 @@
 #include <string_view>
 #include <array>
 #include <optional>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace aa {
 
@@ -81,19 +87,65 @@ static std::array<char, 64> expand_fen(const std::string& fen) {
     return board;
 }
 
+// ── Utility: UTF-8 to std::filesystem::path ──────────────────────────────────
+static std::filesystem::path utf8_to_path(const std::string& utf8_str) {
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) return std::filesystem::path(utf8_str);
+    std::wstring wpath(wlen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, &wpath[0], wlen);
+    while (!wpath.empty() && wpath.back() == L'\0') wpath.pop_back();
+    return std::filesystem::path(wpath);
+#else
+    return std::filesystem::path(utf8_str);
+#endif
+}
+
+// ── Utility: get safe 8.3 short path on Windows to bypass OpenCV Unicode bugs ──
+static std::string get_safe_path(const std::string& utf8_path) {
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) return utf8_path;
+    
+    std::wstring wpath(wlen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, &wpath[0], wlen);
+    
+    DWORD short_len = GetShortPathNameW(wpath.c_str(), nullptr, 0);
+    if (short_len == 0) return utf8_path;
+    
+    std::wstring short_wpath(short_len, 0);
+    GetShortPathNameW(wpath.c_str(), &short_wpath[0], short_len);
+    
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, short_wpath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (ulen <= 0) return utf8_path;
+    
+    std::string short_path(ulen, 0);
+    WideCharToMultiByte(CP_UTF8, 0, short_wpath.c_str(), -1, &short_path[0], ulen, nullptr, nullptr);
+    
+    while (!short_path.empty() && short_path.back() == '\0') {
+        short_path.pop_back();
+    }
+    return short_path;
+#else
+    return utf8_path;
+#endif
+}
+
 // ── Constructor ──────────────────────────────────────────────────────────────
 
 ChessVideoExtractor::ChessVideoExtractor(const std::string& board_asset_path,
                                           const std::string& red_board_asset_path,
                                           DebugLevel debug_level)
     : debug_level_(debug_level) {
-    board_template_ = cv::imread(board_asset_path);
+    std::string safe_board_path = get_safe_path(board_asset_path);
+    board_template_ = cv::imread(safe_board_path);
     if (board_template_.empty()) {
         throw std::runtime_error("Could not load board asset at: " + board_asset_path);
     }
 
     if (!red_board_asset_path.empty()) {
-        red_board_template_ = cv::imread(red_board_asset_path);
+        std::string safe_red_path = get_safe_path(red_board_asset_path);
+        red_board_template_ = cv::imread(safe_red_path);
     }
 }
 
@@ -213,7 +265,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // Initialize libchess position
     pos_ptr_ = std::make_unique<libchess::Position>("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
-    cv::VideoCapture cap(video_path, cv::CAP_ANY, {
+    std::string safe_video_path = get_safe_path(video_path);
+    cv::VideoCapture cap(safe_video_path, cv::CAP_ANY, {
         cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
     });
     if (!cap.isOpened()) {
@@ -243,8 +296,15 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     std::string debug_dir_name = debug_label;
     if (debug_dir_name.empty()) {
-        std::filesystem::path p(video_path);
-        debug_dir_name = p.stem().string();
+        size_t slash = video_path.find_last_of("/\\");
+        std::string filename = (slash == std::string::npos) ? video_path : video_path.substr(slash + 1);
+        size_t dot = filename.find_last_of(".");
+        debug_dir_name = (dot == std::string::npos) ? filename : filename.substr(0, dot);
+    }
+    for (char& c : debug_dir_name) {
+        if (static_cast<unsigned char>(c) > 127 || c == ':' || c == '*' || c == '?' || c == '\"' || c == '<' || c == '>' || c == '|' || c == '\n' || c == '\r') {
+            c = '_';
+        }
     }
     std::string debug_dir = "debug_screenshots/cpp_extraction/" + debug_dir_name;
 
@@ -315,7 +375,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // ── Initialize frame prefetcher for async I/O hiding ─────────────────
     // The worker thread decodes frames (seek + read + crop + grayscale) in the
     // background while the main thread processes the current frame's results.
-    prefetcher_ = std::make_unique<FramePrefetcher>(video_path);
+    prefetcher_ = std::make_unique<FramePrefetcher>(safe_video_path);
     prefetcher_->init(*geo_);
 
     // Kick off the first frames decode (non-blocking — starts background thread)
@@ -791,27 +851,33 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     // Write JSON output
     double total_scan = elapsed();
-    log_info(ts(total_scan) + " Writing output to " + output_path);
-    nlohmann::json j;
-    j["moves"] = data.moves;
-    j["timestamps"] = data.timestamps;
-    j["fens"] = data.fens;
+    if (!output_path.empty()) {
+        log_info(ts(total_scan) + " Writing output to " + output_path);
+        nlohmann::json j;
+        j["moves"] = data.moves;
+        j["timestamps"] = data.timestamps;
+        j["fens"] = data.fens;
 
-    auto clocks_arr = nlohmann::json::array();
-    for (const auto& c : data.clocks) {
-        clocks_arr.push_back({
-            {"active", c.active},
-            {"white", c.white_time},
-            {"black", c.black_time}
-        });
+        auto clocks_arr = nlohmann::json::array();
+        for (const auto& c : data.clocks) {
+            clocks_arr.push_back({
+                {"active", c.active},
+                {"white", c.white_time},
+                {"black", c.black_time}
+            });
+        }
+        j["clocks"] = clocks_arr;
+
+        std::filesystem::path out_path = utf8_to_path(output_path);
+        if (out_path.has_parent_path()) {
+            std::filesystem::create_directories(out_path.parent_path());
+        }
+
+        std::ofstream ofs(out_path);
+        if (ofs.is_open()) {
+            ofs << j.dump(4) << "\n";
+        }
     }
-    j["clocks"] = clocks_arr;
-
-    std::filesystem::path out_path(output_path);
-    std::filesystem::create_directories(out_path.parent_path());
-
-    std::ofstream ofs(output_path);
-    ofs << j.dump(4) << "\n";
 
     return data;
 }

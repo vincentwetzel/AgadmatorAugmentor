@@ -1,8 +1,8 @@
-# Specification — Agadmator Augmentor (C++)
+# Specification — ChessTube Analyzer (C++)
 
 ## Overview
 
-The Agadmator Augmentor is a **purely visual chess video analysis pipeline** implemented in C++20. It watches recorded chess videos (typically from chess.com streams), extracts every move played by observing UI elements (yellow highlights, hover boxes, clocks), validates them against legal chess moves, and produces structured JSON output with timestamps, FEN positions, and clock states.
+The ChessTube Analyzer is a **purely visual chess video analysis pipeline** implemented in C++20. It watches recorded chess videos (typically from chess.com streams), extracts every move played by observing UI elements (yellow highlights, hover boxes, clocks), validates them against legal chess moves, and produces structured JSON output with timestamps, FEN positions, and clock states.
 
 The system is designed for **high accuracy** rather than speed — it treats the chess.com UI as a ground-truth state machine, using multiple independent visual signals to confirm each move before accepting it.
 
@@ -102,8 +102,8 @@ The system is designed for **high accuracy** rather than speed — it treats the
 
 | ID | Requirement |
 |----|-------------|
-| OF-1 | Output must be a single JSON file (`output/analysis.json`) using `nlohmann::json`. |
-| OF-2 | The JSON must contain: `moves` (UCI notation array), `timestamps` (seconds into video), `fens` (FEN after each ply), `clocks` (array of `{active, white_time, black_time}`). |
+| OF-1 | Output must be a JSON file named after the video (`output/<video_basename>.json`) using `nlohmann::json`. |
+| OF-2 | The JSON and optionally exported PGN must match the basename of the input video. The JSON must contain: `moves` (UCI notation array), `timestamps` (seconds into video), `fens` (FEN after each ply), `clocks` (array of `{active, white_time, black_time}`). |
 
 ---
 

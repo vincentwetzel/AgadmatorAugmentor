@@ -1,3 +1,4 @@
+// Extracted from cpp directory
 #include "ClockRecognizer.h"
 #include "BoardLocalizer.h"
 #include <opencv2/opencv.hpp>

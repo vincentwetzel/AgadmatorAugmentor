@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include "ProcessingSettings.h"
 
 namespace aa {
 
@@ -12,7 +13,7 @@ public:
     explicit VideoProcessorWorker(QObject* parent = nullptr);
 
 public slots:
-    void process(const QString& videoPath, const QString& boardAssetPath, const QString& outputPath);
+    void process(const ProcessingSettings& settings);
 
 signals:
     void progressUpdated(int percentage);

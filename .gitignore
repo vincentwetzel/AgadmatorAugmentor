@@ -38,6 +38,7 @@ cpp/test_pgn_parser.*
 *.swo
 *~
 .qwen/
+.VSCodeCounter/
 
 # OS
 .DS_Store

@@ -1,6 +1,6 @@
 # Architecture & System Design
 
-The Agadmator Augmentor uses a purely visual processing pipeline to analyze chess videos. Rather than relying on simple frame diffing, the architecture isolates specific UI behaviors from chess.com as an absolute state machine to achieve extremely high accuracy.
+The ChessTube Analyzer uses a purely visual processing pipeline to analyze chess videos. Rather than relying on simple frame diffing, the architecture isolates specific UI behaviors from chess.com as an absolute state machine to achieve extremely high accuracy.
 
 ## 1. Board Localization
 
@@ -33,7 +33,7 @@ The chess.com UI highlights both the origin and destination squares of every com
 
 ### Red Squares (Streamer Emphasis)
 
-Agadmator occasionally right-clicks to highlight squares in red for analysis commentary.
+Streamers occasionally right-click to highlight squares in red for analysis commentary.
 
 - **Mathematical Redness:** `R - (G + B) / 2.0`.
 - **Dynamic Thresholding:** Compares redness of the baseline board (`board.png`) against a reference `red_board.png` to find the perfect midpoint threshold, ignoring naturally red wood tones.
@@ -97,7 +97,7 @@ When the board visually diverges from the engine state (e.g., the streamer undoe
 
 ## 5. Output Format
 
-The extraction produces a single JSON file:
+The extraction produces a JSON file and an optional PGN file matching the video's basename (saved alongside the source video or in a user-defined custom directory):
 
 ```json
 {

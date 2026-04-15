@@ -1,3 +1,4 @@
+// Extracted from cpp directory
 #include "BoardLocalizer.h"
 #include "GPUAccelerator.h"
 #include <algorithm>

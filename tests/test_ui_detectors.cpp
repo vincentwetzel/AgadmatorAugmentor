@@ -1,3 +1,4 @@
+// Extracted from cpp directory
 #include <gtest/gtest.h>
 #include <opencv2/opencv.hpp>
 #include <filesystem>
@@ -50,6 +51,26 @@ static std::vector<IntegrationTestResult> g_test_results;
 namespace aa {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Helper to find the assets directory from various common CWDs (root, build, build/Release)
+static std::string find_assets_dir() {
+    std::vector<std::filesystem::path> paths_to_check = {
+        "assets",
+        "../assets",
+        "../../assets",
+        "../../../assets" // Legacy, just in case
+    };
+    for (const auto& p : paths_to_check) {
+        if (std::filesystem::exists(p) && std::filesystem::is_directory(p)) {
+            return p.string();
+        }
+    }
+    // Special case for Visual Studio CWD which can be $(SolutionDir)
+    if (std::filesystem::exists("ChessTubeAnalyzer/assets")) {
+        return "ChessTubeAnalyzer/assets";
+    }
+    return ""; // Not found
+}
 
 static std::vector<std::string> list_files(const std::string& dir,
                                             const std::vector<std::string>& exts) {
@@ -158,8 +179,14 @@ static void print_test_summary() {
 class DetectorsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        board_path_ = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\board\board.png)";
-        red_board_path_ = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\board\red_board.png)";
+        assets_dir_ = find_assets_dir();
+        if (assets_dir_.empty()) {
+            GTEST_SKIP() << "Could not find 'assets' directory. Tests skipped.";
+        }
+
+        board_path_ = (std::filesystem::path(assets_dir_) / "board" / "board.png").string();
+        red_board_path_ = (std::filesystem::path(assets_dir_) / "board" / "red_board.png").string();
+
         board_ = cv::imread(board_path_);
         if (board_.empty()) {
             GTEST_SKIP() << "Board template not found: " << board_path_;
@@ -167,6 +194,7 @@ protected:
         geo_ = locate_board(board_, board_);
     }
 
+    std::string assets_dir_;
     std::string board_path_;
     std::string red_board_path_;
     cv::Mat board_;
@@ -200,7 +228,7 @@ TEST_F(DetectorsTest, DrawBoardGrid) {
 #if TEST_YELLOW_SQUARES
 
 TEST_F(DetectorsTest, YellowSquares) {
-    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_yellow_squares)";
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_yellow_squares").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -242,7 +270,7 @@ TEST_F(DetectorsTest, YellowSquares) {
 #if TEST_PIECE_COUNTS
 
 TEST_F(DetectorsTest, PieceCounts) {
-    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_piece_counts)";
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_piece_counts").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -268,7 +296,7 @@ TEST_F(DetectorsTest, PieceCounts) {
 #if TEST_RED_SQUARES
 
 TEST_F(DetectorsTest, RedSquares) {
-    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_red_squares)";
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_red_squares").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -311,7 +339,7 @@ TEST_F(DetectorsTest, RedSquares) {
 #if TEST_YELLOW_ARROWS
 
 TEST_F(DetectorsTest, YellowArrows) {
-    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_yellow_arrows)";
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_yellow_arrows").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -364,7 +392,7 @@ TEST_F(DetectorsTest, YellowArrows) {
 #if TEST_MISALIGNED_PIECE
 
 TEST_F(DetectorsTest, MisalignedPiece) {
-    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_misaligned_piece)";
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_misaligned_piece").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -394,7 +422,7 @@ TEST_F(DetectorsTest, MisalignedPiece) {
 #if TEST_GAME_CLOCKS
 
 TEST_F(DetectorsTest, GameClocks) {
-    const std::string images_dir = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_clock_changes)";
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_clock_changes").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -473,7 +501,7 @@ TEST_F(DetectorsTest, ConstructorThrowsOnMissingAsset) {
 #if TEST_7_PLIES_EXTRACTION
 
 TEST_F(DetectorsTest, SevenPliesExtraction) {
-    const std::string video_path = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_games_short\7 plies\7 plies.mp4)";
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -524,7 +552,7 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 #if TEST_MEDIUM_GAME_REVERT
 
 TEST_F(DetectorsTest, MediumGameWithRevert) {
-    const std::string video_path = R"(e:\coding_workspaces\CPP\ChessVideoAugmentor\assets\sample_games_medium\medium_game_with_analysis_line_and_revert.mp4)";
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "medium_game_with_analysis_line_and_revert.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;

@@ -1,119 +1,81 @@
 # Usage Guide
 
-This document explains how to run the chess video analysis pipeline.
+This document explains how to build and run the ChessTube Analyzer C++ application.
 
 ## Prerequisites
 
-- Python 3.8+
-- OpenCV for Python
-- NumPy
-- Tesseract OCR (must be installed on your system)
-- `python-chess`
-- `moviepy` (v2.x)
-- `pytesseract`
-- `tqdm`
+- **C++ Compiler:** A C++20 compatible compiler (e.g., MSVC 2022, GCC 11+, Clang 13+).
+- **CMake:** Version 3.20 or higher.
+- **vcpkg:** For managing dependencies. The project is configured to use vcpkg at `E:\vcpkg`.
+- **(Optional) NVIDIA CUDA Toolkit:** For GPU acceleration. The build system auto-detects it at the default install location.
 
-## Installation
+## Build
 
-1. **Install Tesseract OCR:**
-   - **Windows:** Download the installer from [UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki).
-   - **Mac:** `brew install tesseract`
-   - **Linux:** `sudo apt install tesseract-ocr`
+Follow the build instructions from the main `README.md` file. From the project root directory:
 
-2. **Install Python dependencies:**
-
-```bash
-pip install opencv-python numpy pytesseract python-chess moviepy tqdm
+```cmd
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static
+cmake --build build --config Release
 ```
 
-3. **Place board assets:** Ensure `assets/board/board.png` exists. This pristine board image is required for template matching and board localization. Optionally, place `assets/board/red_board.png` for improved red-square detection thresholds.
+This will produce two main executables in the `build/Release/` directory:
+- `extract_moves.exe`: A lightweight, command-line only tool for video processing.
+- `augmentor_gui.exe`: The full GUI application, which also supports headless command-line operation.
 
 ## Running the Analysis
 
-### Phase 1: Move Extraction
+You can run the analysis using either the GUI or the command-line tools.
 
-The primary entry point is `extract_moves.py`:
+### GUI Application (`augmentor_gui.exe`)
 
-```bash
-# Basic usage
-python extract_moves.py "path/to/video.mp4"
+Simply run `augmentor_gui.exe` from the `build/Release` directory. The GUI provides an intuitive interface to:
+- Browse for a video file.
+- Select an output directory.
+- Toggle PGN and Stockfish analysis.
+- Configure Stockfish settings (MultiPV, depth, time).
+- Start the analysis and monitor progress.
 
-# Specify custom board asset, output path
-python extract_moves.py "path/to/video.mp4" \
-  --board-asset "assets/board/custom_board.png" \
-  --output "output/my_game.json"
+### Headless / Command-Line Mode
+
+Both executables can be used from the command line for automated processing. The GUI application (`augmentor_gui.exe`) is recommended for headless mode as it persists settings (like Stockfish options) between runs.
+
+#### Basic Usage
+
+Process a video using saved or default settings.
+
+```cmd
+cd build\Release
+augmentor_gui.exe "path\to\your\video.mp4"
 ```
 
-#### Output
+#### Full Control with CLI Flags
 
-The script produces a JSON file (default: `output/analysis.json`) containing:
+Override saved settings with command-line flags. This works for both `augmentor_gui.exe` and `extract_moves.exe`.
 
-```json
-{
-  "moves": ["e2e4", "e7e5", ...],
-  "timestamps": [12.4, 15.8, ...],
-  "fens": ["rnbqkbnr/pppppppp/... 0 1", ...],
-  "clocks": [
-    {"active": null, "white": "10:00", "black": "10:00"},
-    {"active": "white", "white": "9:58", "black": "10:00"},
-    ...
-  ]
-}
+```cmd
+# Example: Process a video with Stockfish (3 lines) and 8 CPU threads for decoding
+augmentor_gui.exe "C:\videos\game.mp4" --stockfish --multi-pv 3 --threads 8 --pgn
+
+ # Show help for all available options
+augmentor_gui.exe --help
+
+ # Show version
+augmentor_gui.exe --version
 ```
 
-#### Debug Screenshots
+### Output Files
 
-For every detected move, debug images are saved to:
+The analysis produces the following files in the specified output directory (or alongside the source video by default):
+- `<video_name>.json`: A JSON file containing all extracted data, including moves, timestamps, FENs, and clock times.
+- `<video_name>.pgn`: A standard PGN file with moves and clock times. If Stockfish analysis is enabled, it will include engine variations.
 
-```
-debug_screenshots/video_extraction/<video_name>/
-  00_initial_board_0.00s.png
-  01_before_12.40s.png
-  01_after_12.40s.png
-  01_diff_12.40s.png
-  01_e2e4_12.40s.png
-  02_before_15.80s.png
-  ...
-```
+## Testing
 
-### Standalone Visual Tests
+To run the unit and integration tests, execute `test_extract_moves.exe` from the `build/Release` directory.
 
-The test suite in `test_video_extractor.py` includes unit tests for individual UI detectors. Each test is currently marked `@unittest.skip` — remove the decorator to run:
-
-```bash
-python -m unittest test_video_extractor
+```cmd
+cd build\Release
+test_extract_moves.exe
 ```
 
-Tests cover:
-- **Yellow square** move extraction
-- **Piece counting** via edge detection
-- **Red square** detection
-- **Yellow arrow** detection
-- **Hover box** (misaligned piece) detection
-- **Game clock** OCR extraction
-- **Full video** move extraction (7-ply and medium game with revert)
-
-## Configuration
-
-Key parameters are defined in `video_extractor.py` and can be tuned for different video layouts:
-
-| Parameter | Location | Description |
-|-----------|----------|-------------|
-| `time_step` | `extract_moves_from_video()` | Frame polling interval in seconds (default: 0.2 → 5 FPS) |
-| `CHANGE_THRESHOLD` | inline | Minimum square diff to consider a board change (default: 15.0) |
-| `YELLOW_THRESHOLD` | inline | Minimum yellowness score for move validation (default: 40.0) |
-| `HOVER_BOX_THRESHOLD` | inline | Minimum visible edges for hover box rejection (default: 2 of 4 edges at 10%) |
-| `corner_margin` | inline | Fraction of square used for corner sampling (default: 12%) |
-| `margin_h`, `margin_w` | inline | Inner crop margin for square diff calculation (default: 15%) |
-
-## Pipeline Stages (Planned)
-
-Future stages that consume the Phase 1 JSON output:
-
-| Phase | Script | Input | Output |
-|-------|--------|-------|--------|
-| 2 | `stockfish_analysis.py` | `output/analysis.json` | `output/analysis_analyzed.json` |
-| 3 | `overlay_renderer.py` | Analyzed JSON + frames | Overlay images |
-| 4 | `video_compositor.py` | Original video + overlays | `output/output_with_analysis.mp4` |
-
-See `PROJECT_PLAN.md` for the current status of each phase.
+You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`.
