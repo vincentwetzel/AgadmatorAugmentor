@@ -259,15 +259,11 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     board_image_history.push_back(board_gray_crop);
     history_hashes.push_back(compute_all_square_means(board_image_history.back(), *geo_, margin_h_, margin_w_));
 
-    // ── Initialize zero-copy GPU pipeline ────────────────────────────────────
-    // Uploads the first board grayscale to GPU. The GPU pipeline performs
-    // absdiff on GPU (eliminating 2x H→D copies per frame), then downloads
-    // the diff for CPU-based square means computation to maintain precision.
+    // ── Initialize GPU pipeline ────────────────────────────────────
     gpu_pipeline_->init();
     gpu_pipeline_active_ = gpu_pipeline_->is_available();
     if (gpu_pipeline_active_) {
-        log_info(utils::ts(elapsed()) + " Zero-copy GPU pipeline enabled — absdiff on GPU, CPU integral for precision");
-        gpu_pipeline_->update_current(board_gray_crop);
+        log_info(utils::ts(elapsed()) + " GPU Acceleration active (falling back to strict anchor mode)");
     } else {
         log_info(utils::ts(elapsed()) + " Using CPU pipeline for frame diff computation");
     }
@@ -354,37 +350,17 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         cv::Mat& board_gray = fd.board_gray;
         const cv::Mat& prev_gray = board_image_history.back();
 
-        // ── Upload current board grayscale to GPU pipeline ────────────────────
-        if (gpu_pipeline_active_) {
-            gpu_pipeline_->update_current(board_gray);
-        }
-
         // --- FRAME EVALUATION ---
-        // GPU pipeline: GPU absdiff + GPU integral for fast change detection.
-        // CPU integral recomputed only when significant diff found (64F precision).
         std::vector<double> sq_means;
         double max_sd = 0;
         cv::Mat diff;
 
-        bool should_score = false;
-        if (gpu_pipeline_active_) {
-            auto gpu_means = gpu_pipeline_->compute_square_diff_means(*geo_, margin_h_, margin_w_);
-            if (!gpu_means.empty()) {
-                for (double sd : gpu_means) {
-                    if (sd > max_sd) max_sd = sd;
-                }
-                if (max_sd >= 15.0) should_score = true;
-            }
-        }
-        if (should_score || !gpu_pipeline_active_) {
-            // Compute the accurate diff against the anchored pristine snapshot (prev_gray),
-            // which is essential for correct move scoring and rejecting partial animations.
-            GPUAccelerator::absdiff(board_gray, prev_gray, diff);
-            sq_means = compute_all_square_means(diff, *geo_, margin_h_, margin_w_);
-            max_sd = 0;
-            for (double sd : sq_means) {
-                if (sd > max_sd) max_sd = sd;
-            }
+        // Compute the accurate diff against the anchored pristine snapshot (prev_gray),
+        // which is essential for correct move scoring and rejecting partial animations.
+        GPUAccelerator::absdiff(board_gray, prev_gray, diff);
+        sq_means = compute_all_square_means(diff, *geo_, margin_h_, margin_w_);
+        for (double sd : sq_means) {
+            if (sd > max_sd) max_sd = sd;
         }
 
         if (max_sd < 15.0) {
@@ -506,9 +482,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             move_uci = move_uci_buf;
                             
                             next_t = round_t(t + fine_step);
-                            if (gpu_pipeline_active_) {
-                                gpu_pipeline_->update_current(board_gray); // Keep GPU pipeline in sync with settle frame
-                            }
                         } else {
                             cached_fd = std::move(settle_fd);
                         }

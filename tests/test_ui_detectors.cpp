@@ -38,11 +38,11 @@ static std::vector<IntegrationTestResult> g_test_results;
 #define TEST_RED_SQUARES          0
 #define TEST_YELLOW_ARROWS        0
 #define TEST_MISALIGNED_PIECE     0
-#define TEST_GAME_CLOCKS          0
+#define TEST_GAME_CLOCKS          1
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   0
-#define TEST_MEDIUM_GAME_REVERT   1
+#define TEST_MEDIUM_GAME_REVERT   0
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   0
@@ -465,6 +465,21 @@ TEST_F(DetectorsTest, GameClocks) {
         bool white_ok = (state.white_time == expected_white);
         bool black_ok = (state.black_time == expected_black);
         bool pass = player_ok && white_ok && black_ok;
+
+        // Draw debug boxes for where we searched for the clocks
+        cv::Mat debug_img = img.clone();
+        int roi_x1 = std::max(0, static_cast<int>(img_geo.bx + img_geo.bw * 0.70));
+        int roi_x2 = std::min(debug_img.cols, static_cast<int>(img_geo.bx + img_geo.bw));
+
+        int top_roi_y1 = std::max(0, static_cast<int>(img_geo.by - img_geo.sq_h * 0.40));
+        int top_roi_y2 = std::max(0, static_cast<int>(img_geo.by - img_geo.sq_h * 0.08));
+        int bot_roi_y1 = std::min(debug_img.rows, static_cast<int>(img_geo.by + img_geo.bh + img_geo.sq_h * 0.08));
+        int bot_roi_y2 = std::min(debug_img.rows, static_cast<int>(img_geo.by + img_geo.bh + img_geo.sq_h * 0.40));
+
+        cv::rectangle(debug_img, cv::Point(roi_x1, top_roi_y1), cv::Point(roi_x2, top_roi_y2), cv::Scalar(0, 0, 255), 2); // Red for top (black clock)
+        cv::rectangle(debug_img, cv::Point(roi_x1, bot_roi_y1), cv::Point(roi_x2, bot_roi_y2), cv::Scalar(0, 255, 0), 2); // Green for bot (white clock)
+        std::string debug_path = (std::filesystem::path(debug_dir) / (stem(img_path) + "_boxes.png")).string();
+        cv::imwrite(debug_path, debug_img);
 
         std::cout << "  " << (pass ? "PASS" : "FAIL") << ": " << stem(img_path)
                   << " -> active=" << (state.active_player.empty() ? "(none)" : state.active_player)

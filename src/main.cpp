@@ -1,9 +1,12 @@
 // Extracted from cpp directory
 #include "ChessVideoExtractor.h"
+#include "PgnWriter.h"
 #include <CLI/CLI.hpp>
 #include <iostream>
+#include <fstream>
 
 #include <string>
+#include <thread>
 #ifdef _WIN32
 #include <stdlib.h>
 #endif
@@ -27,13 +30,22 @@ int main(int argc, char* argv[]) {
     app.add_option("--board-asset", board_asset, "Path to board template image");
 
     std::string output = "";
-    app.add_option("--output", output, "Path to save the extracted JSON data");
+    app.add_option("--output", output, "Path to save the extracted PGN data");
 
     std::string debug_level_str = "MOVES";
     app.add_option("--debug-level", debug_level_str, "Detail level for debug image generation")
         ->check(CLI::IsMember({"NONE", "MOVES", "FULL"}));
 
+    int threads = 0;
+    app.add_option("--threads", threads, "FFmpeg decode threads (1-16)")->check(CLI::Range(1, 16));
+
     CLI11_PARSE(app, argc, argv);
+
+    if (threads > 0) {
+        set_ffmpeg_threads(threads);
+    } else {
+        set_ffmpeg_threads(std::thread::hardware_concurrency());
+    }
 
     // F5 convenience: use sample video when no args provided
     if (video_path.empty()) {
@@ -52,7 +64,7 @@ int main(int argc, char* argv[]) {
         } else if (!name_only.empty()) {
             base_name = name_only;
         }
-        output = "output/" + base_name + ".json";
+        output = "output/" + base_name + ".pgn";
     }
 
     aa::DebugLevel debug_level = aa::DebugLevel::Moves;
@@ -63,10 +75,48 @@ int main(int argc, char* argv[]) {
 
     try {
         aa::ChessVideoExtractor extractor(board_asset, "", debug_level);
-        aa::GameData data = extractor.extract_moves_from_video(video_path, output);
+        aa::GameData data = extractor.extract_moves_from_video(video_path, "");
+
+        aa::PgnWriter pgn;
+        pgn.add_header("Event", "ChessTube Analysis");
+        pgn.add_header("Site", "Unknown");
+        pgn.add_header("Date", "Unknown");
+        pgn.add_header("Round", "1");
+        pgn.add_header("White", "Unknown");
+        pgn.add_header("Black", "Unknown");
+
+        for (size_t i = 0; i < data.moves.size(); ++i) {
+            std::string clockStr = "0:00:00";
+            size_t clockIdx = i + 1;
+            
+            if (clockIdx < data.clocks.size()) {
+                clockStr = (i % 2 == 0) ? data.clocks[clockIdx].white_time : data.clocks[clockIdx].black_time;
+            } else if (i < data.clocks.size()) {
+                clockStr = (i % 2 == 0) ? data.clocks[i].white_time : data.clocks[i].black_time;
+            }
+
+            // Format basic h:mm:ss if it's missing colons
+            if (clockStr.empty()) clockStr = "0:00:00";
+            else if (std::count(clockStr.begin(), clockStr.end(), ':') == 0) {
+                clockStr = "0:00:" + clockStr;
+            } else if (std::count(clockStr.begin(), clockStr.end(), ':') == 1) {
+                clockStr = "0:" + clockStr;
+            }
+            
+            pgn.add_ply(data.moves[i], clockStr);
+        }
+
+        std::string pgnContent = pgn.build();
+        std::ofstream pgnFile(output);
+        if (pgnFile.is_open()) {
+            pgnFile << pgnContent;
+            pgnFile.close();
+        } else {
+            std::cerr << "Warning: Could not open output file for writing: " << output << "\n";
+        }
 
         std::cout << "\nExtraction complete! " << data.moves.size() << " plies extracted.\n";
-        std::cout << "Game data saved to " << output << "\n";
+        std::cout << "PGN data saved to " << output << "\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;

@@ -102,8 +102,8 @@ The system is designed for **high accuracy** rather than speed — it treats the
 
 | ID | Requirement |
 |----|-------------|
-| OF-1 | Output must be a JSON file named after the video (`output/<video_basename>.json`) using `nlohmann::json`. |
-| OF-2 | The JSON and optionally exported PGN must match the basename of the input video. The JSON must contain: `moves` (UCI notation array), `timestamps` (seconds into video), `fens` (FEN after each ply), `clocks` (array of `{active, white_time, black_time}`). |
+| OF-1 | Output must primarily be a PGN file named after the video (`<video_basename>.pgn`). |
+| OF-2 | The PGN must contain the extracted moves, clock times via `[%clk ...]` tags, and optionally Stockfish engine analysis variations and evaluations. The intermediate JSON representation is no longer required to be written to disk. |
 
 ---
 
@@ -189,8 +189,8 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 └────────────────────────────┼───────────────────────────────────┘
                              ▼
               ┌──────────────────────────────┐
-              │   output/analysis.json       │
-              │  (nlohmann::json serialization)│
+              │   output/analysis.pgn        │
+              │  (via PgnWriter)             │
               └──────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐
@@ -252,7 +252,7 @@ extract_moves <video_path> [OPTIONS]
 
 Options:
   --board-asset PATH    Path to board template image (default: assets/board/board.png)
-  --output PATH         Path to output JSON (default: output/analysis.json)
+  --output PATH         Path to output file (default: output/<video_name>.pgn)
   --debug-level LEVEL   Debug verbosity: NONE, MOVES, FULL (default: MOVES)
   --help                Show help message
 ```

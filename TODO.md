@@ -29,7 +29,14 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 | Settings Persistence | ✅ QSettings |
 | UI Tooltips | ✅ All elements have hover hints |
 
-## Remaining
+## Remaining (Roadmap to v1.0.0)
+
+- [ ] **Promotion Detection** — Detect and handle pawn promotion dialogs in the UI.
+- [ ] **Piece Type Classification** — Utilize contour matching or a small CNN to identify piece types.
+- [ ] **Audio Integration** — Implement audio classification using templates in `sample_sounds/` to supplement visual move detection.
+- [ ] **Commentary Agent** — Transcribe audio feed and correlate with visual arrows/highlights.
+
+## Recently Completed
 
 - [x] **GUI Development (Qt)** — Build a graphical interface for the application.
   - [x] **Project Setup:** Update `CMakeLists.txt` to find and link `Qt6::Widgets`.
@@ -43,11 +50,11 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
   - [x] Add a toggle switch to enable/disable PGN file generation.
   - [x] Add a toggle switch to enable/disable Stockfish analysis.
   - [x] Add a dropdown for Stockfish "Best Lines" (MultiPV) with options: 1, 2, 3, or 4.
+  - [x] Add a toggle switch to enable/disable Analysis Video generation.
   - [x] Add a control for Stockfish maximum analysis depth. Include an indicator for which setting is recommended based on the user's hardware.
-  - [x] Add a control to limit Stockfish time per move. This setting caps the amount of time Stockfish can think at maximum for each board position.
 - [x] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
 - [x] **CLI Mode / Headless Execution (GUI Executable)** — Allow users to process videos directly from the command line.
-  - [x] Accept a video file path as a CLI argument (e.g., `analyzer_gui.exe video_to_process.mp4`).
+  - [x] Accept a video file path as a CLI argument (e.g., `"ChessTube Analyzer.exe" video_to_process.mp4`).
   - [x] Save and load user settings (PGN export, Stockfish analysis, MultiPV, threads) persistently via `QSettings`.
   - [x] When launched with a CLI argument, automatically load the saved settings, process the video without requiring user interaction, and exit upon completion.
   - [x] Supports additional flags: `--board-asset`, `--output`, `--pgn`, `--stockfish`, `--multi-pv N`, `--threads N`, `--version`.
@@ -56,16 +63,16 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 
 ```bash
 # Basic: process a video with saved/default settings
-analyzer_gui.exe path/to/video.mp4
+"ChessTube Analyzer.exe" path/to/video.mp4
 
 # Full control with CLI flags
-analyzer_gui.exe video.mp4 --stockfish --multi-pv 3 --threads 8 --pgn
+"ChessTube Analyzer.exe" video.mp4 --stockfish --multi-pv 3 --threads 8 --pgn
 
 # Show version
-analyzer_gui.exe --version
+"ChessTube Analyzer.exe" --version
 
 # Show help
-analyzer_gui.exe --help
+"ChessTube Analyzer.exe" --help
 ```
 
 Settings (PGN toggle, Stockfish toggle, MultiPV, threads) are persisted across sessions via `QSettings` and are automatically loaded in headless mode.

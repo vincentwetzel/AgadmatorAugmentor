@@ -12,9 +12,10 @@ This tool processes chess video files, identifies board states, and reconstructs
 - **Move Verification**: Legal move validation using libchess engine
 - **UI Detection**: Automatic detection of yellow highlights, arrows, clocks, and hover boxes
 - **Clock Recognition**: Hu Moments-based OCR for clock time extraction
-- **PGN Export**: Generate PGN files with extracted moves and clock information
-- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV
+- **PGN Export**: Generate PGN files with extracted moves, clock information, and analysis variations.
+- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search depth, and analysis line length. The application can auto-find your Stockfish executable or you can specify a path.
 - **Custom Output**: Save analysis alongside the source video or in a custom directory
+- **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, best move arrows, and engine evaluation lines.
 - **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
 
 ## Quick Start
@@ -44,7 +45,7 @@ When CUDA runtime DLLs are not installed, the binary still runs — `GPUAccelera
 **GUI (Recommended):**
 ```cmd
 cd build\Release
-augmentor_gui.exe
+"ChessTube Analyzer.exe"
 ```
 
 **CLI Mode:**
@@ -60,6 +61,12 @@ test_extract_moves.exe
 ```
 
 See `TODO.md` for the full list of tests and how to toggle them.
+
+## Runtime Dependencies
+
+| Dependency | Purpose |
+|-----------|---------|
+| FFmpeg | Required for the "Generate Debug Video" feature to mux audio into the final output. Must be available in the system's PATH. |
 
 ## Dependencies
 
@@ -154,7 +161,8 @@ The extractor treats the chess.com UI as a deterministic state machine:
 7. **4-Layer Validation** — Yellow highlights, hover-box rejection, clock turn check, revert detection
 8. **Conditional Clock OCR** — Cached clock ROIs; Hu Moments digit recognizer runs in microseconds when pixels change
 9. **Move Settling** — Adaptive 0.2s peek-ahead, skipped when confidence >90%
-7. **Output** — `analysis.json` (including Stockfish analysis if enabled) and `game.pgn` (including Stockfish variations) with plies, timestamps, FENs, and clocks (saved to source video folder or custom directory)
+10. **Output** — A PGN file (`<video_name>.pgn`) containing moves, timestamps, and clock data. If Stockfish analysis is enabled, the PGN will also include engine variations and evaluations.
+11. **Video Compositing** — Generates static overlay PNGs combined using an FFmpeg `concat` demuxer script, dropping overlay render time from minutes to under a second.
 
 Progress is shown as an inline `[XX.X%]` ticker during scanning.
 
@@ -165,6 +173,7 @@ Progress is shown as an inline `[XX.X%]` ticker during scanning.
 | 7-ply video (18s) | ~5.8s processing (3.0x real-time) |
 | Medium game (2m37s, 17 plies) | ~67s processing (2.5x real-time) |
 | Board localization | ~2.2s (39 GSS evaluations) |
+| Analysis Video Generation | <1s rendering, followed by FFmpeg NVENC stream muxing |
 | Unit tests | 9/9 passing |
 | Integration tests | 7/7 plies, 17/17 with revert |
 

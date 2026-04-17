@@ -14,7 +14,7 @@ The core extraction pipeline is implemented in C++20 and is fully operational. T
 
 ### ✅ Phase 1: Extraction & Verification
 
-**Executables:** `extract_moves.exe` (CLI), `augmentor_gui.exe` (GUI + Headless)
+**Executables:** `extract_moves.exe` (CLI), `ChessTube Analyzer.exe` (GUI + Headless)
 **Source Files:** `ChessVideoExtractor.cpp`, `BoardLocalizer.cpp`, `BoardAnalysis.cpp`, `ArrowDetector.cpp`, `ClockRecognizer.cpp`
 
 The core extraction pipeline is fully operational in C++, featuring:
@@ -35,24 +35,28 @@ The core extraction pipeline is fully operational in C++, featuring:
 **Source File:** `StockfishAnalyzer.cpp`
 
 - The C++ application can directly interface with the Stockfish engine via the UCI protocol.
-- Analysis is configurable (MultiPV, depth, time) through the GUI or CLI flags.
+- Analysis is configurable (MultiPV, depth) through the GUI or CLI flags.
 - Engine analysis is included in the PGN output as variations.
 
 ---
 
-### 🔜 Phase 3: Overlay Renderer (Future)
+### ✅ Phase 3: Overlay Renderer
 
-**Status:** Planned, not started.
+**Status:** Implemented (merged with Phase 4).
 
-- This phase will involve generating visual overlays for video composition, including evaluation bars, move arrows, and principal variations.
+- Visual overlays (evaluation bars, move arrows, and principal variations) are generated dynamically via OpenCV in `AnalysisVideoGenerator.cpp`.
 
 ---
 
-### 🔜 Phase 4: Video Composition (Future)
+### Phase 4: Video Composition
 
-**Status:** Planned, not started.
+**Status:** Implemented.
+**Source File:** `AnalysisVideoGenerator.cpp`
 
-- This final phase will composite the generated overlays onto the original video, producing an augmented video file with analysis.
+- This final phase composites the generated overlays onto the original video, producing an analysis video file.
+- Uses a highly optimized O(moves) static image generator paired with FFmpeg's `concat` demuxer to skip per-frame rendering, making generation near-instantaneous.
+- ✅ **Analysis Board:** A synchronized board showing the current FEN position in the corner of the video.
+- ✅ **Full Overlays:** Evaluation bars, move arrows, and principal variation text.
 
 ---
 
@@ -91,8 +95,7 @@ Video Frames → Board Localization (template matching)
 - [ ] Audio integration (sound templates in `sample_sounds/`)
 
 ### Long Term
-- [ ] Commentary Agent: correlate red squares/arrows with speech-to-text
-- [ ] Augmentation Agent: overlay rendering, engine evaluation comparison
+- [ ] Analysis Video Agent: overlay rendering, engine evaluation comparison
 - [ ] Parallel agent architecture for async processing
 
 ---

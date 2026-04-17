@@ -131,6 +131,14 @@ QString ThemeManager::generateStyleSheet() const {
             background-color: %3;
             color: #888888;
         }
+        QPushButton#settingsBtn {
+            padding: 0px;
+            min-width: 32px;
+            max-width: 32px;
+            min-height: 32px;
+            max-height: 32px;
+            text-align: center;
+        }
 
         /* Text input fields */
         QLineEdit, QTextEdit, QPlainTextEdit {
@@ -339,6 +347,31 @@ QString ThemeManager::generateStyleSheet() const {
             border: 1px solid %9;
             border-radius: 4px;
             padding: 4px;
+        }
+
+        /* Tab Widget */
+        QTabWidget::pane {
+            border: 1px solid %9;
+            background-color: %1;
+            border-radius: 4px;
+        }
+        QTabBar::tab {
+            background-color: %3;
+            color: %4;
+            border: 1px solid %9;
+            border-bottom: none;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            padding: 6px 16px;
+            margin-right: 2px;
+        }
+        QTabBar::tab:selected {
+            background-color: %1;
+            color: %2;
+            border-top: 3px solid %11;
+        }
+        QTabBar::tab:hover:!selected {
+            background-color: %5;
         }
 
         /* ===== END UNIVERSAL STYLES ===== */

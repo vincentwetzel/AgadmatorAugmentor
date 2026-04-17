@@ -4,6 +4,8 @@
 #include <vector>
 #include <functional>
 #include <memory>
+#include <map>
+#include <atomic>
 #include <opencv2/core/mat.hpp>
 
 // Forward declarations to avoid including heavy headers
@@ -12,16 +14,28 @@ namespace aa { class FramePrefetcher; class GPUPipeline; struct BoardGeometry; s
 
 namespace aa {
 
+struct ClockInfo {
+    std::string active;
+    std::string white_time;
+    std::string black_time;
+};
+
+// A struct to hold a single analysis branch (a sequence of moves not on the main line)
+struct VariationData {
+    std::vector<std::string> moves;
+    std::vector<double> timestamps;
+    std::vector<std::string> fens;
+    // Use the same ClockInfo struct as GameData for consistency
+    std::vector<ClockInfo> clocks;
+};
+
 struct GameData {
     std::vector<std::string> moves;
     std::vector<double> timestamps;
     std::vector<std::string> fens;
-    struct ClockInfo {
-        std::string active;
-        std::string white_time;
-        std::string black_time;
-    };
     std::vector<ClockInfo> clocks;
+    // A map from a ply's 0-based index to a list of variations that branch from it
+    std::map<size_t, std::vector<VariationData>> variations;
 };
 
 enum class DebugLevel {
@@ -41,8 +55,10 @@ public:
     void set_progress_callback(ProgressCallback cb);
 
     GameData extract_moves_from_video(const std::string& video_path,
-                                      const std::string& output_path,
-                                      const std::string& debug_label = "");
+                                      const std::string& debug_label = "",
+                                      std::atomic<bool>* cancel_flag = nullptr);
+
+    const BoardGeometry* get_board_geometry() const;
 
 private:
     struct MoveScore;

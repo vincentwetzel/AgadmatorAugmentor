@@ -97,22 +97,15 @@ When the board visually diverges from the engine state (e.g., the streamer undoe
 
 ## 5. Output Format
 
-The extraction produces a JSON file and an optional PGN file matching the video's basename (saved alongside the source video or in a user-defined custom directory):
+The primary output is a PGN file that contains the extracted moves, clock times, and optional Stockfish analysis. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the PGN writer.
 
-```json
-{
-  "moves": ["e2e4", "e7e5", "g1f3", ...],
-  "timestamps": [12.4, 15.8, 22.1, ...],
-  "fens": ["starting_fen", "after_move_1_fen", ...],
-  "clocks": [
-    {"active": null, "white": "10:00", "black": "10:00"},
-    {"active": "white", "white": "9:58", "black": "10:00"},
-    ...
-  ]
-}
-```
+The PGN is saved alongside the source video or in a user-defined custom directory.
 
-## 6. Source Module Organization
+## 6. Overlay Augmentation
+
+The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video.
+
+## 7. Source Module Organization
 
 The detector code is split into three focused modules to keep files manageable (soft limit: ~400 lines):
 
@@ -122,14 +115,16 @@ The detector code is split into three focused modules to keep files manageable (
 | Board Analysis | `BoardAnalysis.h/.cpp` | 356 | Square means, yellow squares, piece counting, red squares, hover boxes |
 | Arrow Detector | `ArrowDetector.h/.cpp` | 141 | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
 | Clock Recognizer | `ClockRecognizer.h/.cpp` | 264 | Hu Moments digit recognizer, clock extraction, conditional caching |
-| Orchestrator | `ChessVideoExtractor.h/.cpp` | 804 | Video scanning loop, move verification, revert detection, JSON output |
+| Orchestrator | `ChessVideoExtractor.h/.cpp` | ~630 | Video scanning loop, move scoring, revert detection, JSON output |
+| Move Validation | `MoveValidations.h/.cpp` | 97 | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Frame Prefetcher | `FramePrefetcher.h/.cpp` | 125 | Async frame pre-decoding in background thread |
+| Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
 
-## 7. Attempted Speedup Optimizations
+## 8. Attempted Speedup Optimizations
 
 The following optimizations were investigated but abandoned due to correctness regressions or complexity vs ROI:
 
@@ -142,17 +137,17 @@ The following optimizations were investigated but abandoned due to correctness r
 
 **Current bottleneck:** Frame decode from the prefetcher at ~15ms/frame. The theoretical minimum for 788 frames at 15ms decode is ~11.8s; the system achieves ~15s with ~3s overhead for scoring, validation, and revert detection.
 
-## 8. Future Integrations
+## 9. Integrations & Future Scope
 
 - **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — ✅ Implemented). Integrated into PGN generation with configurable MultiPV, depth, and time limits.
-- **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 3 — not yet implemented).
-- **Video Compositing:** Composite overlays onto original video (Phase 4 — not yet implemented).
+- **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 4 — ✅ Implemented).
+- **Video Compositing:** Composite overlays onto original video (Phase 4 — ✅ Implemented).
 - **Audio Integration:** Using sound templates (`sample_sounds/`) to classify move types (capture, castle, check) and supplement visual detection.
 - **Transcripts & Context:** Aligning detected red squares and yellow arrows with speech-to-text outputs to contextualize streamer commentary.
 - **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection.
 - **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md`.
 
-## 8. Architectural Trade-offs & Rejected Optimizations
+## 10. Architectural Trade-offs & Rejected Optimizations
 
 During the C++ migration and optimization phase, several optimizations were investigated but ultimately abandoned. They are documented here to prevent future redundant efforts:
 

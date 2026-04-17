@@ -8,16 +8,101 @@ set(CMAKE_X_VCPKG_APPLOCAL_DEPS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
+option(ENABLE_PCH "Use precompiled headers to speed up rebuilds" ON)
+option(ENABLE_UNITY_BUILD "Use CMake unity builds for faster full builds" OFF)
+option(BUILD_GUI "Build the Qt GUI target" ON)
+option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" ON)
+
+if(ENABLE_UNITY_BUILD)
+    set(CMAKE_UNITY_BUILD ON)
+endif()
 
 # Force static runtime to avoid api-ms-win-crt-* dependency issues
 # This must be set BEFORE project() to take effect
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /MT")
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /MTd")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT /FS")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd /FS /Z7")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /MT /FS")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /MTd /FS /Z7")
+
+function(enable_msvc_parallel_pdb_safety target_name)
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE /FS)
+    endif()
+endfunction()
+
+function(enable_msvc_compile_speedups target_name)
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE /MP)
+    endif()
+endfunction()
+
+function(enable_project_pch target_name pch_profile)
+    if(NOT ENABLE_PCH)
+        return()
+    endif()
+
+    if(pch_profile STREQUAL "core")
+        target_precompile_headers(${target_name} PRIVATE
+            <algorithm>
+            <array>
+            <atomic>
+            <chrono>
+            <cmath>
+            <filesystem>
+            <functional>
+            <map>
+            <memory>
+            <optional>
+            <string>
+            <string_view>
+            <thread>
+            <tuple>
+            <utility>
+            <vector>
+            <opencv2/opencv.hpp>
+        )
+    elseif(pch_profile STREQUAL "gui")
+        target_precompile_headers(${target_name} PRIVATE
+            <algorithm>
+            <atomic>
+            <functional>
+            <map>
+            <memory>
+            <optional>
+            <string>
+            <vector>
+            <QApplication>
+            <QComboBox>
+            <QDir>
+            <QFileInfo>
+            <QGroupBox>
+            <QLabel>
+            <QLineEdit>
+            <QMainWindow>
+            <QObject>
+            <QProgressBar>
+            <QPushButton>
+            <QSettings>
+            <QString>
+            <QTextEdit>
+            <QThread>
+            <QWidget>
+            <opencv2/opencv.hpp>
+        )
+    elseif(pch_profile STREQUAL "test")
+        target_precompile_headers(${target_name} PRIVATE
+            <algorithm>
+            <chrono>
+            <filesystem>
+            <iomanip>
+            <iostream>
+            <string>
+            <vector>
+            <gtest/gtest.h>
+            <opencv2/opencv.hpp>
+        )
+    endif()
+endfunction()
 
 # Enable Link-Time Optimization (LTO) for Release builds
 include(CheckIPOSupported)
@@ -35,13 +120,15 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
 find_package(Qt6 COMPONENTS Widgets)
-if(Qt6_FOUND)
+if(Qt6_FOUND AND BUILD_GUI)
     message(STATUS "Qt6 found, GUI will be built")
+elseif(Qt6_FOUND)
+    message(STATUS "Qt6 found, GUI build disabled by BUILD_GUI=OFF")
 else()
     message(STATUS "Qt6 not found. Install Qt to build the GUI")
 endif()
 
-if(Qt6_FOUND)
+if(Qt6_FOUND AND BUILD_GUI AND ENABLE_QT_RUNTIME_DEPLOYMENT)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "[Paths]\nPlugins = Qt6/plugins\n")
     function(add_runtime_deployment target_name)
         add_custom_command(TARGET ${target_name} POST_BUILD
@@ -103,17 +190,66 @@ target_include_directories(chess PUBLIC
     ${LIBCHESS_SRC_DIR}
 )
 
-# ── Main executable ──────────────────────────────────────────────────────────
-add_executable(extract_moves
-    src/main.cpp
+# ── Extraction Core (video decoding, CV, move verification) ─────────────────
+add_library(chess_extraction_core
     src/BoardLocalizer.cpp
     src/BoardAnalysis.cpp
     src/ArrowDetector.cpp
     src/ClockRecognizer.cpp
     src/ChessVideoExtractor.cpp
-    src/FramePrefetcher.cpp
+    src/ExtractorUtils.cpp
+    src/MoveValidations.cpp
     src/GPUAccelerator.cpp
+    src/FramePrefetcher.cpp
+)
+
+target_include_directories(chess_extraction_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(chess_extraction_core PUBLIC
+    ${OpenCV_LIBS}
+    nlohmann_json::nlohmann_json
+    chess
+)
+
+enable_msvc_parallel_pdb_safety(chess_extraction_core)
+enable_msvc_compile_speedups(chess_extraction_core)
+enable_project_pch(chess_extraction_core core)
+
+if(HAVE_SYSTEM_CUDA)
+    target_compile_definitions(chess_extraction_core PRIVATE HAVE_SYSTEM_CUDA)
+    target_include_directories(chess_extraction_core PRIVATE "${SYSTEM_CUDA_PATH}/include")
+endif()
+
+# ── Analysis/Postprocess Core (PGN, Stockfish, overlay video) ───────────────
+add_library(chess_analysis_core
     src/StockfishAnalyzer.cpp
+    src/AnalysisVideoGenerator.cpp
+    src/PgnWriter.cpp
+    include/FFmpegFilterGraph.cpp
+)
+
+target_include_directories(chess_analysis_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(chess_analysis_core PUBLIC
+    chess_extraction_core
+)
+
+enable_msvc_parallel_pdb_safety(chess_analysis_core)
+enable_msvc_compile_speedups(chess_analysis_core)
+enable_project_pch(chess_analysis_core core)
+
+if(HAVE_SYSTEM_CUDA)
+    target_compile_definitions(chess_analysis_core PRIVATE HAVE_SYSTEM_CUDA)
+    target_include_directories(chess_analysis_core PRIVATE "${SYSTEM_CUDA_PATH}/include")
+endif()
+
+# ── Main executable (CLI) ────────────────────────────────────────────────────
+add_executable(extract_moves
+    src/main.cpp
 )
 
 target_include_directories(extract_moves PRIVATE
@@ -121,8 +257,6 @@ target_include_directories(extract_moves PRIVATE
 )
 
 if(HAVE_SYSTEM_CUDA)
-    target_compile_definitions(extract_moves PRIVATE HAVE_SYSTEM_CUDA)
-    target_include_directories(extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/include")
     target_link_directories(extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
     
     # Dynamically find the exact names of the CUDA runtime DLLs to delay-load.
@@ -158,84 +292,78 @@ if(HAVE_SYSTEM_CUDA)
             "/DELAYLOAD:nppist64_13.dll" "/DELAYLOAD:nppitc64_13.dll")
     endif()
 
+    # Suppress LNK4199 warning when a DLL is delay-loaded but no symbols are imported from it
+    list(APPEND CUDA_DELAY_LOADS_LIST "/IGNORE:4199")
+
     target_link_options(extract_moves PRIVATE ${CUDA_DELAY_LOADS_LIST})
     target_link_libraries(extract_moves PRIVATE delayimp.lib
         cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
 endif()
 
 target_link_libraries(extract_moves PRIVATE
-    ${OpenCV_LIBS}
-    nlohmann_json::nlohmann_json
+    chess_extraction_core
+    chess_analysis_core
     CLI11::CLI11
-    chess
 )
+
+enable_msvc_parallel_pdb_safety(extract_moves)
+enable_msvc_compile_speedups(extract_moves)
+enable_project_pch(extract_moves core)
 
 # Set stack size to 8MB (default is 1MB)
 set_target_properties(extract_moves PROPERTIES
     LINK_FLAGS "/STACK:8388608"
 )
 
-if(Qt6_FOUND)
-    add_runtime_deployment(extract_moves)
-endif()
-
 # ── GUI Executable ───────────────────────────────────────────────────────────
-if(Qt6_FOUND)
-    add_executable(augmentor_gui WIN32
+if(Qt6_FOUND AND BUILD_GUI)
+    add_executable(analyzer_gui WIN32
         src/main_gui.cpp
         src/MainWindow.cpp
         include/MainWindow.h
         src/VideoProcessorWorker.cpp
         include/VideoProcessorWorker.h
-        src/PgnWriter.cpp
-        src/StockfishAnalyzer.cpp
-        src/BoardLocalizer.cpp
-        src/BoardAnalysis.cpp
-        src/ArrowDetector.cpp
-        src/ClockRecognizer.cpp
-        src/ChessVideoExtractor.cpp
-        src/FramePrefetcher.cpp
-        src/GPUAccelerator.cpp
         src/ToggleSwitch.cpp
         include/ToggleSwitch.h
         src/ThemeManager.cpp
         include/ThemeManager.h
     )
 
-    target_include_directories(augmentor_gui PRIVATE
+    target_include_directories(analyzer_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        E:/libchess/dist/include
-        ${LIBCHESS_SRC_DIR}
     )
 
-    target_link_libraries(augmentor_gui PRIVATE
+    target_link_libraries(analyzer_gui PRIVATE
+        chess_extraction_core
+        chess_analysis_core
         Qt6::Widgets
-        ${OpenCV_LIBS}
-        nlohmann_json::nlohmann_json
         CLI11::CLI11
-        chess
     )
+
+    enable_msvc_parallel_pdb_safety(analyzer_gui)
+    enable_msvc_compile_speedups(analyzer_gui)
+    enable_project_pch(analyzer_gui gui)
 
     if(HAVE_SYSTEM_CUDA)
-        target_compile_definitions(augmentor_gui PRIVATE HAVE_SYSTEM_CUDA)
-        target_include_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
-        target_link_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(augmentor_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
-        target_link_libraries(augmentor_gui PRIVATE delayimp.lib
+        target_compile_definitions(analyzer_gui PRIVATE HAVE_SYSTEM_CUDA)
+        target_include_directories(analyzer_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
+        target_link_directories(analyzer_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
+        target_link_options(analyzer_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
+        target_link_libraries(analyzer_gui PRIVATE delayimp.lib
             cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
     endif()
 
-    set_target_properties(augmentor_gui PROPERTIES
+    set_target_properties(analyzer_gui PROPERTIES
+        OUTPUT_NAME "ChessTube Analyzer"
         LINK_FLAGS "/STACK:8388608"
         AUTOMOC ON
+        AUTORCC ON
+        AUTOUIC ON
     )
-    # Temporarily disable LTO for augmentor_gui to diagnose potential hangs
-    if(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE)
-        set_property(TARGET augmentor_gui PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
-        message(STATUS "LTO/IPO disabled for augmentor_gui to diagnose hang.")
-    endif()
 
-    add_runtime_deployment(augmentor_gui)
+    if(ENABLE_QT_RUNTIME_DEPLOYMENT)
+        add_runtime_deployment(analyzer_gui)
+    endif()
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────
@@ -270,13 +398,6 @@ if(BUILD_TESTS)
 
     add_executable(test_extract_moves
         tests/test_ui_detectors.cpp
-        src/BoardLocalizer.cpp
-        src/BoardAnalysis.cpp
-        src/ArrowDetector.cpp
-        src/ClockRecognizer.cpp
-        src/ChessVideoExtractor.cpp
-        src/FramePrefetcher.cpp
-        src/GPUAccelerator.cpp
     )
 
     target_include_directories(test_extract_moves PRIVATE
@@ -293,13 +414,14 @@ if(BUILD_TESTS)
     endif()
 
     target_link_libraries(test_extract_moves PRIVATE
-        ${OpenCV_LIBS}
-        nlohmann_json::nlohmann_json
-        CLI11::CLI11
-        chess
+        chess_extraction_core
         GTest::gtest_main
         GTest::gmock_main
     )
+
+    enable_msvc_parallel_pdb_safety(test_extract_moves)
+    enable_msvc_compile_speedups(test_extract_moves)
+    enable_project_pch(test_extract_moves test)
 
     set_target_properties(test_extract_moves PROPERTIES
         LINK_FLAGS "/STACK:8388608"
@@ -307,11 +429,4 @@ if(BUILD_TESTS)
 
     include(GoogleTest)
     gtest_discover_tests(test_extract_moves)
-
-    if(Qt6_FOUND)
-        add_runtime_deployment(test_extract_moves)
-    endif()
 endif()
-
-
-

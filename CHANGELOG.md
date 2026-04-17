@@ -11,9 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GUI Application:** Fully featured Qt6-based interface with settings persistence, theme manager (Light/Dark/System), and headless CLI execution mode.
+- **Analysis Video Generation:** Added `AnalysisVideoGenerator` class to generate a copy of the source video with a synchronized analysis board overlay in the top-right corner. This feature can be toggled in the GUI.
 - Comprehensive `spec.md` documenting all functional and non-functional requirements
 - `changelog.md` for tracking project history
 - **File size soft limit** convention (~400 lines) documented in TODO.md
+- **Universal Tooltips:** Added comprehensive hover tooltips to all GUI elements to improve user experience.
 
 ### Performance
 
@@ -28,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ArrowDetector.cpp` (141 lines) — yellow arrow detection with HSV masking, ray-casting, overlap suppression
   - `ClockRecognizer.cpp` (264 lines) — Hu Moments digit recognizer + clock extraction with conditional caching
 - `UIDetectors.h` converted to umbrella header for backwards compatibility.
+- **Split `ChessVideoExtractor.cpp`** — Moved utility functions (`ts`, `expand_fen`, path helpers) to `ExtractorUtils.cpp` and validation logic (`check_yellowness`, `check_hover_box`) to `MoveValidations.cpp` to improve modularity and reduce file size.
 
 ---
 
@@ -113,26 +117,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## Future Milestones
-
-### [0.3.0] — Stockfish Analysis (Planned)
-
-- Stockfish engine integration via UCI protocol
-- Top 3 principal variations with evaluations per position
-- Checkmate and stalemate detection
-- Output: `output/analysis_analyzed.json`
-
-### [0.4.0] — Overlay Rendering (Planned)
-
-- Visual overlay generation per frame
-- Evaluation bar (left side)
-- Arrows for top 3 moves (green = best, orange = alternatives)
-- Principal variation text below board
-
-### [0.5.0] — Video Compositing (Planned)
-
-- Overlay composition onto original video frames
-- H.264 MP4 encoding with audio preservation
-- Output: `output/output_with_analysis.mp4`
 
 ### [1.0.0] — Production Release (Planned)
 

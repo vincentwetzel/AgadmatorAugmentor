@@ -31,6 +31,7 @@ It does not know the rules of chess on its own; it reports *what* changed, *when
 ## 2. The Verification Agent (Chess Engine Logic) — ✅ Implemented
 
 **Integrated in:** `ChessVideoExtractor.extract_moves_from_video()` (`ChessVideoExtractor.cpp`)
+**Supporting Files:** `MoveValidations.h/.cpp`
 
 Acts as the game logic authority and state machine filter.
 
@@ -48,11 +49,7 @@ Acts as the game logic authority and state machine filter.
 
 ### Output
 
-Produces `<video_basename>.json` (and optionally `<video_basename>.pgn`) in the selected output directory containing:
-- Move list (UCI notation)
-- Per-move video timestamps
-- FEN after each ply
-- Clock state (active player, white time, black time)
+Produces a rich PGN file containing the full game, including moves, clock times, and optional Stockfish analysis variations. The intermediate JSON file is no longer written to disk.
 
 ## 3. The Commentary Agent — 🔜 Future
 
@@ -82,18 +79,17 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Handles edge cases (checkmate, stalemate) gracefully.
 - Outputs engine analysis directly into the generated PGN file as standard chess variations and inline evaluations.
 
-## 5. The Augmentation Agent (Overlay & Composition) — 🔜 Not Started
+## 5. The Analysis Video Agent (Overlay & Composition) — ✅ Implemented
 
-### Responsibilities (Planned)
+### Responsibilities
 
 - Takes verified moves, timestamps, and Stockfish metadata.
-- Generates visual overlays per frame:
-  - Chess board with coordinates
-  - Evaluation bar (left side)
-  - Arrows for top 3 moves (green = best, orange = alternatives)
-  - Principal variation text below board
-- Composites overlays onto original video frames.
-- Encodes output as H.264 MP4 with audio preserved.
+- Generates visual overlays statically per move (O(moves) instead of O(frames) for a 1000x speedup):
+  - ✅ **Analysis Board:** A synchronized board showing the current FEN position in the corner of the video.
+  - ✅ **Evaluation Bar:** A bar on the side of the video showing the Stockfish evaluation.
+  - ✅ **Move Arrows:** Arrows on the main board indicating the best engine moves.
+  - ✅ **Principal Variation:** Text overlay showing the top engine line.
+- Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the final MP4.
 - Produces `output/output_with_analysis.mp4`.
 
 ## Data Flow
@@ -110,12 +106,8 @@ Raw Video
         ↓                  
 [Stockfish Analysis Agent] → Engine evaluations, PV lines  (Phase 2 — Implemented)
         ↓
-        ├──→ analysis_analyzed.json (Phase 2 output)
-        │
         ↓
-[Augmentation Agent: Overlay Renderer] → Per-frame visual overlays  (Phase 3 — not started)
-    ↓
-[Augmentation Agent: Video Compositor] → Final composited video  (Phase 4 — not started)
+[Analysis Video Agent: Overlays] → Debug video with board, arrows, eval bar, and text (Phase 4 — Implemented)
     ↓
     └──→ output_with_analysis.mp4 (Phase 4 output)
 ```
@@ -129,6 +121,8 @@ Raw Video
 | Arrow Detection | `ArrowDetector.h/.cpp` |
 | Clock OCR | `ClockRecognizer.h/.cpp` |
 | Verification + Orchestrator | `ChessVideoExtractor.h/.cpp` |
+| Move Validation Logic | `MoveValidations.h/.cpp` |
+| Core Utilities | `ExtractorUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
 | Frame I/O | `FramePrefetcher.h/.cpp` |
@@ -139,7 +133,7 @@ The current implementation is a linear pipeline. The long-term vision is a set o
 
 - **Extraction** and **Verification** could run as a coupled pair (tight feedback loop).
 - **Commentary** could process audio in parallel while visual extraction runs.
-- **Augmentation** could start rendering overlays as soon as the first batch of verified moves is available, without waiting for the full video to be processed.
+- **Analysis Video generation** could start rendering overlays as soon as the first batch of verified moves is available, without waiting for the full video to be processed.
 
 ---
 
@@ -151,6 +145,11 @@ The current implementation is a linear pipeline. The long-term vision is a set o
 - **NEVER** assume "yes, push" or auto-push after a commit.
 - You may `git add`, `git commit`, and `git status` freely. Pushing requires an explicit user command like "git push" or "push to remote".
 - This rule applies to all conversations in this project. No exceptions.
+
+### UI Tooltips — HARD REQUIREMENTS
+- **ALL** UI elements (buttons, labels, input fields, toggles, dropdowns, group boxes, etc.) **MUST** display mouseover hints using `setToolTip()`.
+- Tooltips should briefly explain what the element does or what information it expects.
+- This applies to any new UI element added to the project.
 
 ---
 

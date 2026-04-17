@@ -2,9 +2,9 @@
 
 #include <QMainWindow>
 #include <QThread>
+#include <atomic>
 #include <QString>
 #include "ProcessingSettings.h"
-#include "VideoProcessorWorker.h"
 
 class QLineEdit;
 class QTextEdit;
@@ -13,9 +13,13 @@ class QPushButton;
 class QSpinBox;
 class QComboBox;
 class QRadioButton;
+class QGroupBox;
+class QIcon;
 class ToggleSwitch;
 
 namespace aa {
+
+class VideoProcessorWorker;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -24,11 +28,14 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
-    int processHeadless(const QString& videoPath);
+    int processHeadless(const QString& videoPath, int pgnOverride = -1, int stockfishOverride = -1, int multiPv = 0, int threads = 0, int depth = 0, int analysisDepth = 0, const QString& redBoard = "", const QString& debugLevelStr = "", const QString& outputOverride = "", const QString& boardAssetOverride = "");
 
 private slots:
     void browseVideo();
-    void startProcessing();
+    void browseRedBoard();
+    void browseStockfish();
+    void autoFindStockfish();
+    void onStartCancelClicked();
     void appendLog(const QString& message);
     void updateProgress(int percentage);
     void processingFinished();
@@ -44,6 +51,8 @@ private:
     void setupWorker();
     void loadSettings();
     void saveSettings();
+    void ensureStockfishSettingsVisible();
+    void updateSettingsButtonIcon();
     
     // Settings Management
     ProcessingSettings gatherSettings() const;
@@ -53,15 +62,20 @@ private:
     // UI Widget Pointers
     QLineEdit* videoPathEdit_;
     QPushButton* browseBtn_;
-    QPushButton* startBtn_;
+    QPushButton* settingsBtn_ = nullptr;
+    QPushButton* startCancelBtn_;
     QTextEdit* logOutput_;
     QProgressBar* progressBar_;
     QSpinBox* threadSpinBox_;
     
     ToggleSwitch* pgnExportToggle_;
     ToggleSwitch* stockfishToggle_;
+    ToggleSwitch* analysisVideoToggle_;
     QComboBox* multiPvComboBox_;
     QComboBox* themeComboBox_;
+    QComboBox* debugLevelComboBox_;
+    QLineEdit* redBoardPathEdit_;
+    QGroupBox* stockfishSettingsGroup_ = nullptr;
 
     // Worker Thread Management
     QThread workerThread_;
@@ -69,6 +83,7 @@ private:
     
     // State
     bool isProcessing_ = false;
+    std::atomic<bool> cancelRequested_{false};
 
     // Static Configuration
     static const char* SETTINGS_ORG;

@@ -7,6 +7,10 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <filesystem>
+#include <vector>
+#include <map>
+#include <atomic>
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -19,8 +23,32 @@
 
 namespace aa {
 
-// Path to Stockfish binary - configurable
-static const std::string STOCKFISH_PATH = "stockfish/stockfish.exe";
+namespace { // Anonymous namespace for helper
+
+static std::string get_stockfish_executable_path() {
+#ifdef _WIN32
+    std::string execName = "stockfish.exe";
+#else
+    std::string execName = "stockfish";
+#endif
+    std::vector<std::filesystem::path> paths_to_check = {
+        "stockfish/" + execName,      // For running from project root
+        "../stockfish/" + execName,   // For running from build/
+        "../../stockfish/" + execName,// For running from build/Release or build/Debug
+        execName
+    };
+
+    for (const auto& p : paths_to_check) {
+        if (std::filesystem::exists(p)) {
+            return p.string();
+        }
+    }
+    
+    // Fallback to the original path if none are found.
+    return "stockfish/" + execName;
+}
+
+} // anonymous namespace
 
 struct StockfishAnalyzer::StockfishImpl {
 #ifdef _WIN32
@@ -36,7 +64,7 @@ struct StockfishAnalyzer::StockfishImpl {
 
     bool initialized = false;
 
-    void initialize() {
+    void initialize(const std::string& stockfish_path_arg) {
 #ifdef _WIN32
         SECURITY_ATTRIBUTES saAttr;
         saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -66,11 +94,18 @@ struct StockfishAnalyzer::StockfishImpl {
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
 
-        std::string cmd = "\"" + STOCKFISH_PATH + "\"";
+        std::string stockfish_path;
+        if (!stockfish_path_arg.empty() && std::filesystem::exists(stockfish_path_arg)) {
+            stockfish_path = stockfish_path_arg;
+        } else {
+            stockfish_path = get_stockfish_executable_path();
+        }
+
+        std::string cmd = "\"" + stockfish_path + "\"";
         if (!CreateProcessA(NULL, (LPSTR)cmd.c_str(), NULL, NULL, TRUE, 
                            CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
             throw std::runtime_error("Failed to start Stockfish process. Error: " + 
-                                   std::to_string(GetLastError()));
+                                   std::to_string(GetLastError()) + ". Path: " + stockfish_path);
         }
 
         hProcess = pi.hProcess;
@@ -80,11 +115,17 @@ struct StockfishAnalyzer::StockfishImpl {
         CloseHandle(hChildStdinRead);
         CloseHandle(hChildStdoutWrite);
 
+        initialized = true; // Set to true before attempting to communicate
+
         // Initialize UCI
         send_command("uci");
-        wait_for_response("uciok");
+        wait_for_response("uciok", nullptr);
 
-        initialized = true;
+        unsigned int hw_threads = std::thread::hardware_concurrency();
+        if (hw_threads > 1) {
+            send_command("setoption name Threads value " + std::to_string(hw_threads));
+        }
+        send_command("setoption name Hash value 256");
 #else
         // POSIX implementation using popen
         to_child = nullptr;
@@ -102,42 +143,60 @@ struct StockfishAnalyzer::StockfishImpl {
 #endif
     }
 
-    std::string read_response(int timeout_ms = 5000) {
+    std::string read_response(int timeout_ms) {
 #ifdef _WIN32
         if (!initialized || !hChildStdoutRead) return "";
-        
+
         char buffer[4096];
         DWORD bytesRead;
         std::string result;
-        
+        DWORD bytesAvailable = 0;
+
         auto start = std::chrono::steady_clock::now();
-        while (true) {
-            if (PeekNamedPipe(hChildStdoutRead, NULL, 0, NULL, NULL, NULL)) {
-                if (ReadFile(hChildStdoutRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+        while (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count() < timeout_ms) {
+            // Check if there's data in the pipe
+            if (PeekNamedPipe(hChildStdoutRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
+                if (ReadFile(hChildStdoutRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
                     buffer[bytesRead] = '\0';
                     result += buffer;
-                    if (bytesRead < sizeof(buffer) - 1) break;
                 }
+            } else {
+                    if (!result.empty()) {
+                        return result; // Return early if we read some data, so the caller can check it immediately
+                    }
+                // No data, sleep briefly to avoid busy-waiting
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            
-            auto elapsed = std::chrono::steady_clock::now() - start;
-            if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        
+
         return result;
 #endif
     }
 
-    void wait_for_response(const std::string& marker) {
+    std::string wait_for_response(const std::string& marker, std::atomic<bool>* cancel_flag) {
         std::string response;
+        auto start = std::chrono::steady_clock::now();
+        const int timeout_seconds = 300; // 5-minute safety timeout for very deep analysis
+
         while (true) {
-            std::string chunk = read_response();
-            response += chunk;
-            if (response.find(marker) != std::string::npos) {
-                break;
+            if (cancel_flag && *cancel_flag) {
+                send_command("stop");
+                read_response(200); // Clear some buffer
+                return ""; // Return empty to signal cancellation
+            }
+
+            std::string chunk = read_response(100); // Read in smaller chunks for faster cancellation polling
+            if (!chunk.empty()) {
+                size_t old_size = response.size();
+                response += chunk;
+                size_t search_start = old_size >= marker.size() ? old_size - marker.size() : 0;
+                if (response.find(marker, search_start) != std::string::npos) {
+                    return response;
+                }
+            }
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() > timeout_seconds) {
+                throw std::runtime_error("Stockfish timeout waiting for marker: " + marker);
             }
         }
     }
@@ -154,9 +213,9 @@ struct StockfishAnalyzer::StockfishImpl {
     }
 };
 
-StockfishAnalyzer::StockfishAnalyzer(int multi_pv) : multi_pv_(multi_pv) {
+StockfishAnalyzer::StockfishAnalyzer(int multi_pv, const std::string& stockfish_path) : multi_pv_(multi_pv) {
     impl_ = new StockfishImpl();
-    impl_->initialize();
+    impl_->initialize(stockfish_path);
     set_multi_pv(multi_pv);
 }
 
@@ -164,44 +223,50 @@ StockfishAnalyzer::~StockfishAnalyzer() {
     delete impl_;
 }
 
+void StockfishAnalyzer::set_progress_callback(ProgressCallback cb) {
+    progress_callback_ = std::move(cb);
+}
+
 void StockfishAnalyzer::set_multi_pv(int multi_pv) {
     multi_pv_ = std::clamp(multi_pv, 1, 4);
     impl_->send_command("setoption name MultiPV value " + std::to_string(multi_pv_));
 }
 
-StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen) {
+StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int depth, std::atomic<bool>* cancel_flag) {
     StockfishResult result;
     result.fen = fen;
-    result.lines.reserve(multi_pv_);
 
     // Set position
     impl_->send_command("position fen " + fen);
     
+    if (cancel_flag && *cancel_flag) return result;
+
     // Start analysis
-    impl_->send_command("go depth 15");  // Depth 15 for reasonable speed
+    impl_->send_command("go depth " + std::to_string(depth));
     
     // Read analysis output
-    std::string response = impl_->read_response(10000);  // 10 second timeout
+    std::string response = impl_->wait_for_response("bestmove", cancel_flag);
     
-    // Parse bestmove line
-    // Expected format: bestmove e2e4 ponder e7e5
+    if (response.empty()) { // Indicates cancellation
+        return result;
+    }
+    // Use a map to store the latest (highest depth) info for each multipv value.
+    std::map<int, StockfishLine> latest_lines;
+
     std::istringstream iss(response);
     std::string line;
     while (std::getline(iss, line)) {
-        if (line.find("info depth") != std::string::npos && 
-            line.find("multipv") != std::string::npos) {
-            // Parse info line
-            // Example: info depth 15 seldepth 20 multipv 1 score cp 42 nodes 12345 pv e2e4 e7e5
+        if (line.rfind("info", 0) == 0) { // More robust check for "info" at start
             StockfishLine line_data;
+            int multipv = 0;
             
             std::istringstream line_stream(line);
             std::string token;
             while (line_stream >> token) {
                 if (token == "multipv") {
-                    line_stream >> token;  // skip to value
-                    // We'll add it based on order
+                    line_stream >> multipv;
                 } else if (token == "score") {
-                    line_stream >> token;
+                    line_stream >> token; // "cp" or "mate"
                     if (token == "cp") {
                         line_stream >> line_data.centipawns;
                         line_data.is_mate = false;
@@ -210,33 +275,50 @@ StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen) {
                         line_data.is_mate = true;
                     }
                 } else if (token == "pv") {
-                    // Rest of line is PV
+                    // The rest of the line is the PV (Principal Variation)
                     std::string pv_rest;
-                    std::getline(line_stream, pv_rest);
-                    line_data.pv_line = pv_rest;
-                    
-                    // Extract first move from PV
-                    std::istringstream pv_stream(pv_rest);
-                    pv_stream >> line_data.move_uci;
-                    break;
+                    size_t pos = line.find(" pv ");
+                    if (pos != std::string::npos) {
+                        pv_rest = line.substr(pos + 4);
+                        pv_rest.erase(0, pv_rest.find_first_not_of(" \t\n\r")); // Trim leading whitespace
+                        line_data.pv_line = pv_rest;
+
+                        // Extract first move from PV
+                        std::istringstream pv_stream(pv_rest);
+                        pv_stream >> line_data.move_uci;
+                    }
+                    break; // Done with this line
                 }
             }
             
-            result.lines.push_back(line_data);
-        } else if (line.find("bestmove") != std::string::npos) {
-            break;  // Analysis complete
+            if (multipv > 0 && !line_data.pv_line.empty()) {
+                // This overwrites older (lower depth) info for the same multipv, which is what we want.
+                latest_lines[multipv] = line_data;
+            }
         }
+    }
+
+    // Transfer the latest lines from the map to the result vector
+    result.lines.reserve(latest_lines.size());
+    for (const auto& [multipv, line_data] : latest_lines) {
+        result.lines.push_back(line_data);
     }
 
     return result;
 }
 
-std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vector<std::string>& fens) {
+std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vector<std::string>& fens, int depth, std::atomic<bool>* cancel_flag) {
     std::vector<StockfishResult> results;
     results.reserve(fens.size());
 
     for (size_t i = 0; i < fens.size(); ++i) {
-        results.push_back(analyze_position(fens[i]));
+        if (cancel_flag && *cancel_flag) {
+            break;
+        }
+        if (progress_callback_) {
+            progress_callback_(static_cast<int>(i + 1), static_cast<int>(fens.size()));
+        }
+        results.push_back(analyze_position(fens[i], depth, cancel_flag));
     }
 
     return results;

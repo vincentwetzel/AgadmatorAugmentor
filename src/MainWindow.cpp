@@ -17,6 +17,9 @@
 #include <QSpinBox>
 #include <QComboBox>
 #include <QGroupBox>
+#include <QTabWidget>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QCoreApplication>
 #include <QSizePolicy>
 #include <QSettings>
@@ -24,6 +27,16 @@
 #include <QMetaMethod>
 #include <QDir>
 #include <QFileInfo>
+#include <QStandardPaths>
+#include <QDirIterator>
+#include <QToolButton>
+#include <QColor>
+#include <QIcon>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
+#include <QSize>
+#include <QtMath>
 
 #ifdef _WIN32
 #include <stdlib.h>
@@ -57,6 +70,61 @@ static QWidget* createToggleRow(const QString& label, const QString& tooltip, To
     return rowWidget;
 }
 
+static QIcon createSettingsCogIcon(const QColor& color) {
+    constexpr int canvasSize = 96;
+    constexpr qreal center = canvasSize / 2.0;
+    constexpr qreal bodyRadius = 24.0;
+    constexpr qreal ringCutoutRadius = 14.0;
+    constexpr qreal hubRadius = 4.75;
+    constexpr qreal toothCenterRadius = 28.5;
+    constexpr qreal toothWidth = 8.5;
+    constexpr qreal toothHeight = 15.0;
+    constexpr qreal toothCornerRadius = 4.0;
+
+    QPixmap pixmap(canvasSize, canvasSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+
+    QPainterPath gearPath;
+    gearPath.addEllipse(QPointF(center, center), bodyRadius, bodyRadius);
+
+    for (int i = 0; i < 8; ++i) {
+        painter.save();
+        painter.translate(center, center);
+        painter.rotate(i * 45.0);
+        QPainterPath toothPath;
+        toothPath.addRoundedRect(
+            QRectF(-toothWidth / 2.0, -toothCenterRadius - toothHeight / 2.0, toothWidth, toothHeight),
+            toothCornerRadius,
+            toothCornerRadius
+        );
+        gearPath.addPath(painter.transform().map(toothPath));
+        painter.restore();
+    }
+
+    QColor fillColor = color;
+    fillColor.setAlpha(242);
+    painter.setBrush(fillColor);
+    painter.drawPath(gearPath.simplified());
+
+    QColor rimColor = color.lighter(112);
+    rimColor.setAlpha(80);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(rimColor, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.drawEllipse(QPointF(center, center), bodyRadius - 1.5, bodyRadius - 1.5);
+
+    painter.setCompositionMode(QPainter::CompositionMode_Clear);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(Qt::transparent);
+    painter.drawEllipse(QPointF(center, center), ringCutoutRadius, ringCutoutRadius);
+    painter.drawEllipse(QPointF(center, center), hubRadius, hubRadius);
+
+    return QIcon(pixmap);
+}
+
 namespace aa {
 
 const char* MainWindow::SETTINGS_ORG = "ChessTubeAnalyzer";
@@ -68,8 +136,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     setupUi();
     setupWorker();
-    loadSettings();
-    applySettingsToUi(gatherSettings());
+    loadSettings(); // Load all settings from INI file
+    ensureStockfishSettingsVisible();
     applyTheme();
 }
 
@@ -82,9 +150,9 @@ void MainWindow::setupUi() {
     auto* centralWidget = new QWidget(this);
     setCentralWidget(centralWidget);
 
-    auto* layout = new QVBoxLayout(centralWidget);
+    auto* rootLayout = new QVBoxLayout(centralWidget);
 
-    // File selection row
+    // Top layout (Video + Settings Cog)
     auto* fileLayout = new QHBoxLayout();
     auto* videoLabel = new QLabel("Video File:");
     videoLabel->setToolTip("Select the chess video file you want to process");
@@ -95,17 +163,35 @@ void MainWindow::setupUi() {
     browseBtn_ = new QPushButton("Browse...");
     browseBtn_->setToolTip("Open file dialog to select a video file");
     fileLayout->addWidget(browseBtn_);
-    layout->addLayout(fileLayout);
 
-    // Settings group box
-    auto* settingsGroup = new QGroupBox("Output Settings");
-    settingsGroup->setToolTip("Configure output options for video processing");
-    auto* settingsLayout = new QVBoxLayout();
+    settingsBtn_ = new QPushButton();
+    settingsBtn_->setObjectName("settingsBtn");
+    settingsBtn_->setText("");
+    settingsBtn_->setToolTip("Open Settings");
+    settingsBtn_->setCursor(Qt::PointingHandCursor);
+    settingsBtn_->setFixedSize(32, 32);
+    settingsBtn_->setIconSize(QSize(20, 20));
+    fileLayout->addWidget(settingsBtn_);
 
-    // Output Directory
-    auto* outputDirLayout = new QVBoxLayout();
-    auto* outputDirLabel = new QLabel("Output Directory:");
-    outputDirLayout->addWidget(outputDirLabel);
+    rootLayout->addLayout(fileLayout);
+
+    // --- Settings Dialog ---
+    auto* settingsDialog = new QDialog(this);
+    settingsDialog->setWindowTitle("Settings");
+    settingsDialog->resize(650, 500);
+    auto* dialogLayout = new QVBoxLayout(settingsDialog);
+
+    auto* tabWidget = new QTabWidget();
+    dialogLayout->addWidget(tabWidget);
+
+    // === Tab 1: General ===
+    auto* generalTab = new QWidget();
+    auto* generalLayout = new QVBoxLayout(generalTab);
+
+    // Output Directory Group
+    auto* outputDirGroup = new QGroupBox("Output Directory");
+    outputDirGroup->setToolTip("Choose where the generated output files will be saved");
+    auto* outputDirLayout = new QVBoxLayout(outputDirGroup);
 
     auto* sameAsSourceRadio = new QRadioButton("Save to same folder as source video");
     sameAsSourceRadio->setObjectName("sameAsSourceRadio");
@@ -132,76 +218,154 @@ void MainWindow::setupUi() {
     customDirHLayout->addWidget(customDirBtn);
 
     outputDirLayout->addLayout(customDirHLayout);
-    settingsLayout->addLayout(outputDirLayout);
+    generalLayout->addWidget(outputDirGroup);
 
     connect(sameAsSourceRadio, &QRadioButton::toggled, [customDirEdit, customDirBtn](bool checked) {
         customDirEdit->setEnabled(!checked);
         customDirBtn->setEnabled(!checked);
     });
-
     connect(sameAsSourceRadio, &QRadioButton::toggled, this, [this]() { saveSettings(); });
     connect(customDirEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
 
-    // PGN Export toggle
-    settingsLayout->addWidget(createToggleRow(
-        "Generate PGN file",
-        "When enabled, exports the extracted moves to a PGN file with clock information and engine evaluations",
+    // Generation Options
+    auto* togglesGroup = new QGroupBox("Generation Options");
+    togglesGroup->setToolTip("Configure output options for video processing");
+    auto* togglesLayout = new QVBoxLayout(togglesGroup);
+    togglesLayout->addWidget(createToggleRow(
+        "Generate Game Moves File (PGN)",
+        "Exports the extracted moves to a PGN file with clock information and analysis lines looked at by the video creator",
         pgnExportToggle_,
         true
     ));
-
-    // Stockfish Analysis toggle
-    settingsLayout->addWidget(createToggleRow(
-        "Enable Stockfish engine analysis",
-        "When enabled, analyzes each position with Stockfish to provide evaluations and best move suggestions",
+    togglesLayout->addWidget(createToggleRow(
+        "Enable Stockfish Engine Analysis",
+        "Enables Stockfish analysis to be included in the PGN and/or the Analysis Video",
         stockfishToggle_,
         false
     ));
+    togglesLayout->addWidget(createToggleRow(
+        "Generate Analysis Video",
+        "Generates an Analysis Video showing the analysis board, Stockfish analysis lines, Engine Score, and an Analysis Bar",
+        analysisVideoToggle_,
+        false
+    ));
+    generalLayout->addWidget(togglesGroup);
+
+    // Theme selector
+    auto* themeGroup = new QGroupBox("Appearance");
+    auto* themeLayout = new QHBoxLayout(themeGroup);
+    auto* themeLabel = new QLabel("Theme:");
+    themeLabel->setToolTip("Select the application theme (Light, Dark, or follow System settings)");
+    themeLayout->addWidget(themeLabel);
+    themeComboBox_ = new QComboBox();
+    themeComboBox_->addItem("System");
+    themeComboBox_->addItem("Light");
+    themeComboBox_->addItem("Dark");
+    themeComboBox_->setToolTip("Choose between Light, Dark, or System theme");
+    themeComboBox_->setProperty("class", "dropdown");
+    themeLayout->addWidget(themeComboBox_);
+    themeLayout->addStretch();
+    generalLayout->addWidget(themeGroup);
+
+    generalLayout->addStretch();
+    tabWidget->addTab(generalTab, "General");
+
+    // === Tab 2: Stockfish ===
+    auto* stockfishTab = new QWidget();
+    auto* stockfishLayout = new QVBoxLayout(stockfishTab);
+
+    stockfishSettingsGroup_ = new QGroupBox("Shared Stockfish Analysis Settings");
+    stockfishSettingsGroup_->setToolTip("These settings control the shared Stockfish analysis pass used by PGN export and Analysis Video generation.");
+    auto* stockfishOptionsLayout = new QVBoxLayout(stockfishSettingsGroup_);
+    stockfishOptionsLayout->setContentsMargins(10, 10, 10, 10);
+
+    auto* stockfishInfoLabel = new QLabel(
+        "These settings control the Stockfish analysis run that is reused across the app."
+    );
+    stockfishInfoLabel->setToolTip("Global settings applied whenever Stockfish evaluation is used.");
+    stockfishInfoLabel->setWordWrap(true);
+    stockfishOptionsLayout->addWidget(stockfishInfoLabel);
+
+    // Stockfish Executable Path
+    auto* stockfishPathLayout = new QHBoxLayout();
+    auto* stockfishPathLabel = new QLabel("Stockfish Executable:");
+    stockfishPathLabel->setToolTip("Path to your Stockfish executable file (e.g., stockfish.exe)");
+    stockfishPathLayout->addWidget(stockfishPathLabel);
+
+    auto* stockfishPathEdit = new QLineEdit();
+    stockfishPathEdit->setObjectName("stockfishPathEdit");
+    stockfishPathEdit->setToolTip("Leave blank to search for 'stockfish/stockfish.exe' relative to the application");
+    stockfishPathLayout->addWidget(stockfishPathEdit);
+
+    auto* stockfishPathBtn = new QPushButton("Browse...");
+    stockfishPathBtn->setObjectName("stockfishPathBtn");
+    stockfishPathBtn->setToolTip("Browse for the Stockfish executable");
+    stockfishPathLayout->addWidget(stockfishPathBtn);
+
+    auto* stockfishSearchBtn = new QPushButton("Auto-Find");
+    stockfishSearchBtn->setObjectName("stockfishSearchBtn");
+    stockfishSearchBtn->setToolTip("Search common locations to automatically find the Stockfish executable");
+    stockfishPathLayout->addWidget(stockfishSearchBtn);
+    stockfishOptionsLayout->addLayout(stockfishPathLayout);
 
     // MultiPV dropdown
     auto* multiPvLayout = new QHBoxLayout();
-    auto* multiPvLabel = new QLabel("Best Lines (MultiPV):");
-    multiPvLabel->setToolTip("Number of alternative moves/lines Stockfish will suggest for each position");
+    auto* multiPvLabel = new QLabel("Lines Per Position:");
+    multiPvLabel->setToolTip("How many candidate lines Stockfish should calculate for each position.");
     multiPvLayout->addWidget(multiPvLabel);
     multiPvComboBox_ = new QComboBox();
     multiPvComboBox_->addItems({"1", "2", "3", "4"});
     multiPvComboBox_->setCurrentIndex(2);
-    multiPvComboBox_->setToolTip("Select how many best moves Stockfish should analyze (1-4)");
+    multiPvComboBox_->setToolTip("Choose how many engine lines to generate for each position (1-4).");
     multiPvComboBox_->setProperty("class", "dropdown");
     multiPvLayout->addWidget(multiPvComboBox_);
     multiPvLayout->addStretch();
-    settingsLayout->addLayout(multiPvLayout);
+    stockfishOptionsLayout->addLayout(multiPvLayout);
 
     // Stockfish Depth
     auto* depthLayout = new QHBoxLayout();
-    auto* depthLabel = new QLabel("Analysis Depth:");
-    depthLabel->setToolTip("Maximum depth Stockfish will search.");
+    auto* depthLabel = new QLabel("Engine Search Depth:");
+    depthLabel->setToolTip("Maximum search depth for the shared Stockfish analysis run.");
     depthLayout->addWidget(depthLabel);
     auto* depthSpinBox = new QSpinBox();
     depthSpinBox->setObjectName("depthSpinBox");
     depthSpinBox->setRange(1, 40);
     depthSpinBox->setValue(15);
-    depthSpinBox->setToolTip("Higher depth = better analysis but takes longer. Recommended: 15 (Fast) to 20 (Deep).");
+    depthSpinBox->setToolTip("Higher depth usually improves engine analysis quality, but takes longer. Recommended: 15 (Fast) to 20 (Deep).");
     depthLayout->addWidget(depthSpinBox);
     auto* depthHint = new QLabel("(Rec: 15 for older CPUs, 20+ for fast CPUs)");
+    depthHint->setToolTip("Suggested search depths based on your hardware capabilities");
     depthLayout->addWidget(depthHint);
     depthLayout->addStretch();
-    settingsLayout->addLayout(depthLayout);
+    stockfishOptionsLayout->addLayout(depthLayout);
 
-    // Stockfish Time Limit
-    auto* timeLayout = new QHBoxLayout();
-    auto* timeLabel = new QLabel("Time per Move (ms):");
-    timeLabel->setToolTip("Maximum time Stockfish can spend analyzing a single position.");
-    timeLayout->addWidget(timeLabel);
-    auto* timeSpinBox = new QSpinBox();
-    timeSpinBox->setObjectName("timeSpinBox");
-    timeSpinBox->setRange(100, 60000);
-    timeSpinBox->setSingleStep(500);
-    timeSpinBox->setValue(1000);
-    timeSpinBox->setToolTip("Limits the thinking time per move. Prevents the engine from hanging on complex positions.");
-    timeLayout->addWidget(timeSpinBox);
-    timeLayout->addStretch();
-    settingsLayout->addLayout(timeLayout);
+    // Stockfish Analysis Line Depth
+    auto* analysisDepthLayout = new QHBoxLayout();
+    auto* analysisDepthLabel = new QLabel("PGN Variation Length:");
+    analysisDepthLabel->setToolTip("How many moves from each Stockfish line should be written into the PGN.");
+    analysisDepthLayout->addWidget(analysisDepthLabel);
+    auto* analysisDepthSpinBox = new QSpinBox();
+    analysisDepthSpinBox->setObjectName("analysisDepthSpinBox");
+    analysisDepthSpinBox->setRange(1, 10);
+    analysisDepthSpinBox->setValue(5);
+    analysisDepthSpinBox->setToolTip("Choose how many moves from each engine variation to include in the PGN output (1-10).");
+    analysisDepthLayout->addWidget(analysisDepthSpinBox);
+    auto* analysisDepthHint = new QLabel("(Default: 5 moves)");
+    analysisDepthHint->setToolTip("Default number of variation moves is 5");
+    analysisDepthLayout->addWidget(analysisDepthHint);
+    analysisDepthLayout->addStretch();
+    stockfishOptionsLayout->addLayout(analysisDepthLayout);
+
+    stockfishLayout->addWidget(stockfishSettingsGroup_);
+    stockfishLayout->addStretch();
+    tabWidget->addTab(stockfishTab, "Stockfish");
+
+    // === Tab 3: Advanced ===
+    auto* advancedTab = new QWidget();
+    auto* advancedLayout = new QVBoxLayout(advancedTab);
+
+    auto* advancedGroup = new QGroupBox("Performance & Debugging");
+    auto* advancedGroupLayout = new QVBoxLayout(advancedGroup);
 
     // Thread count
     auto* threadLayout = new QHBoxLayout();
@@ -214,29 +378,49 @@ void MainWindow::setupUi() {
     threadSpinBox_->setToolTip("Set the number of threads OpenCV/FFmpeg uses for video decoding");
     threadLayout->addWidget(threadSpinBox_);
     threadLayout->addStretch();
-    settingsLayout->addLayout(threadLayout);
+    advancedGroupLayout->addLayout(threadLayout);
 
-    // Theme selector
-    auto* themeLayout = new QHBoxLayout();
-    auto* themeLabel = new QLabel("Theme:");
-    themeLabel->setToolTip("Select the application theme (Light, Dark, or follow System settings)");
-    themeLayout->addWidget(themeLabel);
-    themeComboBox_ = new QComboBox();
-    themeComboBox_->addItem("System");
-    themeComboBox_->addItem("Light");
-    themeComboBox_->addItem("Dark");
-    themeComboBox_->setToolTip("Choose between Light, Dark, or System theme");
-    themeComboBox_->setProperty("class", "dropdown");
-    themeLayout->addWidget(themeComboBox_);
-    themeLayout->addStretch();
-    settingsLayout->addLayout(themeLayout);
+    // Debug Level
+    auto* debugLevelLayout = new QHBoxLayout();
+    auto* debugLevelLabel = new QLabel("Debug Image Generation:");
+    debugLevelLabel->setToolTip("Controls how many debug screenshots are saved to disk during extraction.");
+    debugLevelLayout->addWidget(debugLevelLabel);
+    debugLevelComboBox_ = new QComboBox();
+    debugLevelComboBox_->addItems({"None", "Moves Only", "Full"});
+    debugLevelComboBox_->setToolTip("None = Fastest, Moves = Save image on each ply, Full = Save all evaluated frames");
+    debugLevelComboBox_->setProperty("class", "dropdown");
+    debugLevelLayout->addWidget(debugLevelComboBox_);
+    debugLevelLayout->addStretch();
+    advancedGroupLayout->addLayout(debugLevelLayout);
 
-    settingsGroup->setLayout(settingsLayout);
-    layout->addWidget(settingsGroup);
+    // Red Board Template
+    auto* redBoardLayout = new QHBoxLayout();
+    auto* redBoardLabel = new QLabel("Red Board Template:");
+    redBoardLabel->setToolTip("Optional: Provide a red_board.png template for detecting streamer red square highlights");
+    redBoardLayout->addWidget(redBoardLabel);
+    redBoardPathEdit_ = new QLineEdit();
+    redBoardPathEdit_->setToolTip("Path to the red_board.png asset");
+    redBoardLayout->addWidget(redBoardPathEdit_);
+    auto* redBoardBtn = new QPushButton("Browse...");
+    redBoardBtn->setToolTip("Browse for red board template image");
+    redBoardLayout->addWidget(redBoardBtn);
+    advancedGroupLayout->addLayout(redBoardLayout);
 
-    // Connect custom directory browse button
+    advancedLayout->addWidget(advancedGroup);
+    advancedLayout->addStretch();
+    tabWidget->addTab(advancedTab, "Advanced");
+
+    auto* dialogBtnBox = new QDialogButtonBox(QDialogButtonBox::Close);
+    connect(dialogBtnBox, &QDialogButtonBox::rejected, settingsDialog, &QDialog::accept);
+    dialogLayout->addWidget(dialogBtnBox);
+
+    connect(settingsBtn_, &QPushButton::clicked, settingsDialog, &QDialog::exec);
+    
+    // --- End Settings Dialog ---
+
+    // Main UI Connections
     connect(customDirBtn, &QPushButton::clicked, this, [this, customDirEdit]() {
-        QSettings qs(SETTINGS_ORG, SETTINGS_APP);
+        QSettings qs(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
         QString lastDir = qs.value("lastCustomDir", QDir::homePath()).toString();
         QString dir = QFileDialog::getExistingDirectory(this, "Select Output Directory", lastDir);
         if (!dir.isEmpty()) {
@@ -245,11 +429,16 @@ void MainWindow::setupUi() {
         }
     });
 
+    connect(redBoardBtn, &QPushButton::clicked, this, &MainWindow::browseRedBoard);
+    connect(redBoardPathEdit_, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
+    connect(debugLevelComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+
     // Log output
     logOutput_ = new QTextEdit();
     logOutput_->setReadOnly(true);
     logOutput_->setToolTip("Processing log output showing progress and messages");
-    layout->addWidget(logOutput_);
+    logOutput_->setMinimumHeight(140);
+    rootLayout->addWidget(logOutput_);
 
     // Progress and Start row
     auto* bottomLayout = new QHBoxLayout();
@@ -259,19 +448,32 @@ void MainWindow::setupUi() {
     progressBar_->setToolTip("Shows the current progress of video processing");
     bottomLayout->addWidget(progressBar_);
 
-    startBtn_ = new QPushButton("Start Processing");
-    startBtn_->setToolTip("Begin processing the selected video file to extract moves and generate analysis");
-    bottomLayout->addWidget(startBtn_);
-    layout->addLayout(bottomLayout);
+    startCancelBtn_ = new QPushButton("Start Processing");
+    startCancelBtn_->setToolTip("Begin processing the selected video file to extract moves and generate analysis");
+    bottomLayout->addWidget(startCancelBtn_);
+    rootLayout->addLayout(bottomLayout);
 
     connect(browseBtn_, &QPushButton::clicked, this, &MainWindow::browseVideo);
-    connect(startBtn_, &QPushButton::clicked, this, &MainWindow::startProcessing);
-    connect(pgnExportToggle_, &ToggleSwitch::toggled, this, &MainWindow::togglePgnExport);
-    connect(stockfishToggle_, &ToggleSwitch::toggled, this, &MainWindow::toggleStockfish);
+    connect(startCancelBtn_, &QPushButton::clicked, this, &MainWindow::onStartCancelClicked);
+    
+    connect(pgnExportToggle_, &ToggleSwitch::toggled, this, [this](bool checked) {
+        togglePgnExport(checked);
+    });
+    connect(stockfishToggle_, &ToggleSwitch::toggled, this, [this](bool checked) {
+        toggleStockfish(checked);
+    });
+    connect(analysisVideoToggle_, &ToggleSwitch::toggled, this, [this](bool checked) { 
+        appendLog(checked ? "Analysis Video generation enabled" : "Analysis Video generation disabled");
+        saveSettings(); 
+    });
     connect(threadSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onThreadsChanged);
+    connect(multiPvComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     // Connect new spinboxes to saveSettings
+    connect(stockfishPathBtn, &QPushButton::clicked, this, &MainWindow::browseStockfish);
+    connect(stockfishSearchBtn, &QPushButton::clicked, this, &MainWindow::autoFindStockfish);
     connect(depthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
-    connect(timeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(analysisDepthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(stockfishPathEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
     connect(themeComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onThemeChanged);
 }
 
@@ -290,23 +492,91 @@ void MainWindow::setupWorker() {
 }
 
 void MainWindow::loadSettings() {
-    // Settings are loaded in applySettingsToUi after UI is built
+    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+
+    // Block signals on all child widgets to prevent partial state saves during loading.
+    // This stops auto-save slots from firing and overwriting settings.ini before everything is fully loaded.
+    const auto widgets = this->findChildren<QWidget*>();
+    for (auto* w : widgets) {
+        w->blockSignals(true);
+    }
+
+    // Load values from QSettings with defaults and apply to UI
+    pgnExportToggle_->setChecked(settings.value("generatePgn", true).toBool());
+    stockfishToggle_->setChecked(settings.value("enableStockfish", false).toBool());
+    analysisVideoToggle_->setChecked(settings.value("generateAnalysisVideo", false).toBool());
+
+    int multiPv = settings.value("multiPv", 3).toInt();
+    int multiPvIdx = multiPvComboBox_->findText(QString::number(multiPv));
+    if (multiPvIdx >= 0) {
+        multiPvComboBox_->setCurrentIndex(multiPvIdx);
+    } else {
+        multiPvComboBox_->setCurrentIndex(2); // Default to 3 (index 2)
+    }
+
+    threadSpinBox_->setValue(settings.value("ffmpegThreads", 4).toInt());
+
+    auto* depthSpinBox = findChild<QSpinBox*>("depthSpinBox");
+    if (depthSpinBox) {
+        depthSpinBox->setValue(settings.value("stockfishDepth", 15).toInt());
+    }
+
+    auto* analysisDepthSpinBox = findChild<QSpinBox*>("analysisDepthSpinBox");
+    if (analysisDepthSpinBox) {
+        analysisDepthSpinBox->setValue(settings.value("stockfishAnalysisDepth", 5).toInt());
+    }
+
+    auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
+    if (stockfishPathEdit) {
+        stockfishPathEdit->setText(settings.value("stockfishPath", "").toString());
+    }
+    
+    debugLevelComboBox_->setCurrentIndex(settings.value("debugLevel", 0).toInt());
+    redBoardPathEdit_->setText(settings.value("redBoardPath", "").toString());
+
+    themeComboBox_->setCurrentIndex(settings.value("themeMode", 0).toInt());
+
+    bool sameAsSource = settings.value("outSameAsSource", true).toBool();
+    auto* sameAsSourceRadio = findChild<QRadioButton*>("sameAsSourceRadio");
+    auto* customDirRadio = findChild<QRadioButton*>("customDirRadio");
+    if (sameAsSourceRadio && customDirRadio) {
+        sameAsSource ? sameAsSourceRadio->setChecked(true) : customDirRadio->setChecked(true);
+    }
+
+    auto* customDirEdit = findChild<QLineEdit*>("customDirEdit");
+    if (customDirEdit) {
+        customDirEdit->setText(settings.value("outCustomDir", "").toString());
+    }
+
+    // Restore signals
+    for (auto* w : widgets) {
+        w->blockSignals(false);
+    }
 }
 
 void MainWindow::saveSettings() {
-    QSettings settings(SETTINGS_ORG, SETTINGS_APP);
+    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
 
-    auto s = gatherSettings();
-    settings.setValue("generatePgn", s.generatePgn);
-    settings.setValue("enableStockfish", s.enableStockfish);
-    settings.setValue("multiPv", s.multiPv);
-    settings.setValue("ffmpegThreads", s.ffmpegThreads);
+    // Save raw UI state directly, circumventing business logic in gatherSettings()
+    // (e.g., gatherSettings forces PGN generation on if Stockfish is on)
+    settings.setValue("generatePgn", pgnExportToggle_->isChecked());
+    settings.setValue("enableStockfish", stockfishToggle_->isChecked());
+    settings.setValue("generateAnalysisVideo", analysisVideoToggle_->isChecked());
+    settings.setValue("multiPv", multiPvComboBox_->currentText().toInt());
+    settings.setValue("ffmpegThreads", threadSpinBox_->value());
     settings.setValue("themeMode", themeComboBox_->currentIndex());
 
     auto* depthSpinBox = findChild<QSpinBox*>("depthSpinBox");
-    auto* timeSpinBox = findChild<QSpinBox*>("timeSpinBox");
     if (depthSpinBox) settings.setValue("stockfishDepth", depthSpinBox->value());
-    if (timeSpinBox) settings.setValue("stockfishTime", timeSpinBox->value());
+
+    auto* analysisDepthSpinBox = findChild<QSpinBox*>("analysisDepthSpinBox");
+    if (analysisDepthSpinBox) settings.setValue("stockfishAnalysisDepth", analysisDepthSpinBox->value());
+
+    auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
+    if (stockfishPathEdit) settings.setValue("stockfishPath", stockfishPathEdit->text());
+
+    settings.setValue("debugLevel", debugLevelComboBox_->currentIndex());
+    settings.setValue("redBoardPath", redBoardPathEdit_->text());
 
     auto* sameAsSourceRadio = findChild<QRadioButton*>("sameAsSourceRadio");
     auto* customDirEdit = findChild<QLineEdit*>("customDirEdit");
@@ -331,6 +601,13 @@ ProcessingSettings MainWindow::gatherSettings() const {
         }
     }
     
+    // Robust path resolution for assets directory
+    QString assetsDir = "assets";
+    if (!QDir(assetsDir).exists()) {
+        assetsDir = QDir(QCoreApplication::applicationDirPath()).filePath("../../assets");
+    }
+    s.assetsPath = assetsDir;
+    
     QString baseDir = "output";
     auto* sameAsSourceRadio = findChild<QRadioButton*>("sameAsSourceRadio");
     auto* customDirEdit = findChild<QLineEdit*>("customDirEdit");
@@ -347,24 +624,34 @@ ProcessingSettings MainWindow::gatherSettings() const {
     if (!s.videoPath.isEmpty()) {
         baseName = QFileInfo(s.videoPath).completeBaseName();
     }
-    s.outputPath = QDir(baseDir).filePath(baseName + ".json");
+    s.outputPath = QDir(baseDir).filePath(baseName + ".pgn");
     QDir().mkpath(baseDir); // Ensure output directory exists
     
-    s.generatePgn = pgnExportToggle_->isChecked();
-    s.enableStockfish = stockfishToggle_->isChecked();
+    s.generatePgn = pgnExportToggle_->isChecked() || stockfishToggle_->isChecked();
+    s.enableStockfish = stockfishToggle_->isChecked() || analysisVideoToggle_->isChecked();
+    s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
     s.multiPv = multiPvComboBox_->currentText().toInt();
     s.ffmpegThreads = threadSpinBox_->value();
 
     auto* depthSpinBox = findChild<QSpinBox*>("depthSpinBox");
-    auto* timeSpinBox = findChild<QSpinBox*>("timeSpinBox");
     s.stockfishDepth = depthSpinBox ? depthSpinBox->value() : 15;
-    s.stockfishTime = timeSpinBox ? timeSpinBox->value() : 1000;
+
+    auto* analysisDepthSpinBox = findChild<QSpinBox*>("analysisDepthSpinBox");
+    s.stockfishAnalysisDepth = analysisDepthSpinBox ? analysisDepthSpinBox->value() : 5;
+
+    auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
+    s.stockfishPath = stockfishPathEdit ? stockfishPathEdit->text() : "";
+    s.debugLevel = debugLevelComboBox_->currentIndex();
+    s.redBoardAssetPath = redBoardPathEdit_->text();
     return s;
 }
 
 void MainWindow::applySettingsToUi(const ProcessingSettings& settings) {
+    // This function is now primarily for headless mode to apply a settings struct.
+    // GUI startup loading is handled by loadSettings().
     pgnExportToggle_->setChecked(settings.generatePgn);
     stockfishToggle_->setChecked(settings.enableStockfish);
+    analysisVideoToggle_->setChecked(settings.generateAnalysisVideo);
 
     int idx = multiPvComboBox_->findText(QString::number(settings.multiPv));
     if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
@@ -372,44 +659,46 @@ void MainWindow::applySettingsToUi(const ProcessingSettings& settings) {
     threadSpinBox_->setValue(settings.ffmpegThreads);
 
     auto* depthSpinBox = findChild<QSpinBox*>("depthSpinBox");
-    auto* timeSpinBox = findChild<QSpinBox*>("timeSpinBox");
     if (depthSpinBox) depthSpinBox->setValue(settings.stockfishDepth);
-    if (timeSpinBox) timeSpinBox->setValue(settings.stockfishTime);
 
-    // Load theme setting (0=System, 1=Light, 2=Dark)
-    QSettings qsettings(SETTINGS_ORG, SETTINGS_APP);
-    int themeMode = qsettings.value("themeMode", 0).toInt();
-    themeComboBox_->setCurrentIndex(themeMode);
+    auto* analysisDepthSpinBox = findChild<QSpinBox*>("analysisDepthSpinBox");
+    if (analysisDepthSpinBox) analysisDepthSpinBox->setValue(settings.stockfishAnalysisDepth);
 
-    auto* sameAsSourceRadio = findChild<QRadioButton*>("sameAsSourceRadio");
-    auto* customDirRadio = findChild<QRadioButton*>("customDirRadio");
-    auto* customDirEdit = findChild<QLineEdit*>("customDirEdit");
-    
-    bool sameAsSource = qsettings.value("outSameAsSource", true).toBool();
-    QString customDir = qsettings.value("outCustomDir", "").toString();
-    
-    if (sameAsSourceRadio && customDirRadio) {
-        if (sameAsSource) sameAsSourceRadio->setChecked(true);
-        else customDirRadio->setChecked(true);
-    }
-    if (customDirEdit) {
-        customDirEdit->setText(customDir);
-    }
+    auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
+    if (stockfishPathEdit) stockfishPathEdit->setText(settings.stockfishPath);
+    debugLevelComboBox_->setCurrentIndex(settings.debugLevel);
+    redBoardPathEdit_->setText(settings.redBoardAssetPath);
 }
 
-int MainWindow::processHeadless(const QString& videoPath) {
+int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int analysisDepth, const QString& redBoard, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride) {
     videoPathEdit_->setText(videoPath);
-    // Load persisted settings
-    QSettings qsettings(SETTINGS_ORG, SETTINGS_APP);
-    {
-        auto s = gatherSettings();
-        s.generatePgn = qsettings.value("generatePgn", true).toBool();
-        s.enableStockfish = qsettings.value("enableStockfish", false).toBool();
-        s.multiPv = qsettings.value("multiPv", 3).toInt();
-        s.ffmpegThreads = qsettings.value("ffmpegThreads", 4).toInt();
-    s.stockfishDepth = qsettings.value("stockfishDepth", 15).toInt();
-    s.stockfishTime = qsettings.value("stockfishTime", 1000).toInt();
-        applySettingsToUi(s);
+    // Load persisted settings from INI file and apply to UI.
+    // This ensures headless mode uses the same settings as the GUI.
+    loadSettings();
+
+    // Apply overrides to UI/settings state before gathering
+    if (pgnOverride != -1) pgnExportToggle_->setChecked(pgnOverride != 0);
+    if (stockfishOverride != -1) stockfishToggle_->setChecked(stockfishOverride != 0);
+    if (multiPv > 0) {
+        int idx = multiPvComboBox_->findText(QString::number(multiPv));
+        if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
+    }
+    if (threads > 0) threadSpinBox_->setValue(threads);
+    
+    auto* depthSpinBox = findChild<QSpinBox*>("depthSpinBox");
+    if (depth > 0 && depthSpinBox) depthSpinBox->setValue(depth);
+    
+    auto* analysisDepthSpinBox = findChild<QSpinBox*>("analysisDepthSpinBox");
+    if (analysisDepth > 0 && analysisDepthSpinBox) analysisDepthSpinBox->setValue(analysisDepth);
+
+    if (!redBoard.isEmpty() && redBoardPathEdit_) {
+        redBoardPathEdit_->setText(redBoard);
+    }
+
+    if (!debugLevelStr.isEmpty() && debugLevelComboBox_) {
+        if (debugLevelStr == "NONE") debugLevelComboBox_->setCurrentIndex(0);
+        else if (debugLevelStr == "MOVES") debugLevelComboBox_->setCurrentIndex(1);
+        else if (debugLevelStr == "FULL") debugLevelComboBox_->setCurrentIndex(2);
     }
 
     // Set FFmpeg threads
@@ -421,6 +710,18 @@ int MainWindow::processHeadless(const QString& videoPath) {
     // Build processing settings
     ProcessingSettings settings = gatherSettings();
     settings.videoPath = videoPath;
+
+    if (!outputOverride.isEmpty()) {
+        QFileInfo outInfo(outputOverride);
+        if (outInfo.isDir() || outputOverride.endsWith("/") || outputOverride.endsWith("\\")) {
+            settings.outputPath = QDir(outputOverride).filePath(QFileInfo(videoPath).completeBaseName() + ".pgn");
+        } else {
+            settings.outputPath = outputOverride;
+        }
+    }
+    if (!boardAssetOverride.isEmpty()) {
+        settings.boardAssetPath = boardAssetOverride;
+    }
 
     // Use QEventLoop to wait for worker to finish
     QEventLoop loop;
@@ -451,8 +752,126 @@ int MainWindow::processHeadless(const QString& videoPath) {
     return resultCode;
 }
 
+void MainWindow::autoFindStockfish() {
+    appendLog("Searching for Stockfish executable in common locations...");
+    startCancelBtn_->setEnabled(false); // Prevent starting while searching
+    QCoreApplication::processEvents(); // Force UI update
+
+    QString foundPath;
+    QString appDir = QCoreApplication::applicationDirPath();
+    
+    // 1. Check direct relative paths first
+#ifdef _WIN32
+    QString execName = "stockfish.exe";
+#else
+    QString execName = "stockfish";
+#endif
+    QStringList candidatePaths = {
+        appDir + "/stockfish/" + execName,
+        appDir + "/../stockfish/" + execName,
+        appDir + "/../../stockfish/" + execName,
+        appDir + "/" + execName
+    };
+    
+    for (const QString& p : candidatePaths) {
+        if (QFileInfo::exists(p)) {
+            foundPath = QFileInfo(p).absoluteFilePath();
+            break;
+        }
+    }
+
+    // 2. Fast heuristic search in common root directories
+    if (foundPath.isEmpty()) {
+        QStringList baseDirs = {
+            QDir::rootPath(), // e.g., C:\ on Windows
+            QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
+            QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),
+            QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+        };
+
+        // Safely add Program Files if available
+        QString progFiles = qEnvironmentVariable("PROGRAMFILES");
+        QString progFilesX86 = qEnvironmentVariable("PROGRAMFILES(X86)");
+        if (!progFiles.isEmpty()) baseDirs << progFiles;
+        if (!progFilesX86.isEmpty()) baseDirs << progFilesX86;
+
+        for (const QString& base : baseDirs) {
+            QDir dir(base);
+            if (!dir.exists()) continue;
+
+            // Look for folders at the root level containing "stockfish" (case-insensitive)
+            QStringList dirFilters;
+            dirFilters << "*stockfish*";
+            QFileInfoList subdirs = dir.entryInfoList(dirFilters, QDir::Dirs | QDir::NoDotAndDotDot);
+
+            for (const QFileInfo& subdirInfo : subdirs) {
+                // Recursively check inside the matched folder for the executable
+                // This is extremely fast since we are only searching inside already-matched "stockfish" folders
+#ifdef _WIN32
+                QStringList nameFilters = {"*stockfish*.exe"};
+#else
+                QStringList nameFilters = {"*stockfish*"};
+#endif
+                QDirIterator it(subdirInfo.absoluteFilePath(), nameFilters, QDir::Files | QDir::Executable, QDirIterator::Subdirectories);
+                if (it.hasNext()) {
+                    foundPath = it.next();
+                    break;
+                }
+            }
+            if (!foundPath.isEmpty()) break;
+        }
+    }
+
+    if (!foundPath.isEmpty()) {
+        auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
+        if (stockfishPathEdit) {
+            stockfishPathEdit->setText(QDir::toNativeSeparators(foundPath));
+        }
+        appendLog("Found Stockfish at: " + QDir::toNativeSeparators(foundPath));
+        saveSettings(); // Save immediately
+    } else {
+        appendLog("Could not automatically find Stockfish. Please use the Browse button.");
+    }
+    
+    startCancelBtn_->setEnabled(true);
+}
+
+void MainWindow::browseStockfish() {
+    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QString lastDir = settings.value("lastStockfishDir", QDir::homePath()).toString();
+
+#ifdef _WIN32
+    QString filter = "Executables (*.exe);;All Files (*)";
+#else
+    QString filter = "All Files (*)";
+#endif
+    QString fileName = QFileDialog::getOpenFileName(this, "Select Stockfish Executable", lastDir, filter);
+    if (!fileName.isEmpty()) {
+        auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
+        if (stockfishPathEdit) {
+            stockfishPathEdit->setText(fileName);
+        }
+        settings.setValue("lastStockfishDir", QFileInfo(fileName).absolutePath());
+        saveSettings(); // Save immediately after selection
+    }
+}
+
+void MainWindow::browseRedBoard() {
+    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QString lastDir = settings.value("lastRedBoardDir", QDir::homePath()).toString();
+
+    QString fileName = QFileDialog::getOpenFileName(this, "Select Red Board Template", lastDir, "Image Files (*.png *.jpg *.jpeg)");
+    if (!fileName.isEmpty()) {
+        if (redBoardPathEdit_) {
+            redBoardPathEdit_->setText(fileName);
+        }
+        settings.setValue("lastRedBoardDir", QFileInfo(fileName).absolutePath());
+        saveSettings();
+    }
+}
+
 void MainWindow::browseVideo() {
-    QSettings settings(SETTINGS_ORG, SETTINGS_APP);
+    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
     QString lastDir = settings.value("lastVideoDir", QDir::homePath()).toString();
 
     QString fileName = QFileDialog::getOpenFileName(this, "Select Chess Video", lastDir, "Video Files (*.mp4 *.mkv *.avi)");
@@ -462,51 +881,66 @@ void MainWindow::browseVideo() {
     }
 }
 
-void MainWindow::startProcessing() {
-    if (videoPathEdit_->text().isEmpty()) {
-        appendLog("Error: Please select a video file.");
-        return;
-    }
-
+void MainWindow::onStartCancelClicked() {
     if (isProcessing_) {
-        appendLog("Warning: Processing already in progress.");
-        return;
+        // --- CANCEL ---
+        appendLog("Cancellation requested by user...");
+        cancelRequested_ = true;
+        startCancelBtn_->setEnabled(false); // Disable button until worker confirms cancellation
+        startCancelBtn_->setText("Cancelling...");
+    } else {
+        // --- START ---
+        if (videoPathEdit_->text().isEmpty()) {
+            appendLog("Error: Please select a video file.");
+            return;
+        }
+
+        auto settings = gatherSettings();
+        if (!settings.generatePgn && !settings.enableStockfish && !settings.generateAnalysisVideo) {
+            appendLog("Error: No output options selected. Please select at least one of the generation modes.");
+            return;
+        }
+
+        isProcessing_ = true;
+        cancelRequested_ = false; // Reset flag before starting
+        startCancelBtn_->setText("Cancel");
+        browseBtn_->setEnabled(false);
+        progressBar_->setValue(0);
+        appendLog("Starting processing...");
+
+        // Set FFmpeg threads before processing
+        set_ffmpeg_threads(settings.ffmpegThreads);
+        appendLog("FFmpeg decode threads: " + QString::number(settings.ffmpegThreads));
+
+        // Save settings persistently
+        saveSettings();
+
+        QMetaObject::invokeMethod(worker_, "process", Q_ARG(ProcessingSettings, settings), Q_ARG(std::atomic<bool>*, &cancelRequested_));
     }
-
-    isProcessing_ = true;
-    startBtn_->setEnabled(false);
-    browseBtn_->setEnabled(false);
-    progressBar_->setValue(0);
-    appendLog("Starting processing...");
-
-    auto settings = gatherSettings();
-
-    // Set FFmpeg threads before processing
-    set_ffmpeg_threads(settings.ffmpegThreads);
-    appendLog("FFmpeg decode threads: " + QString::number(settings.ffmpegThreads));
-
-    // Save settings persistently
-    saveSettings();
-
-    QMetaObject::invokeMethod(worker_, "process", Q_ARG(ProcessingSettings, settings));
 }
 
 void MainWindow::appendLog(const QString& message) { logOutput_->append(message); }
 void MainWindow::updateProgress(int percentage) { progressBar_->setValue(percentage); }
 
 void MainWindow::processingFinished() {
+    if (cancelRequested_) {
+        appendLog("Processing cancelled.");
+    } else {
+        appendLog("Processing finished successfully.");
+        progressBar_->setValue(100);
+    }
     isProcessing_ = false;
-    appendLog("Processing finished successfully.");
-    startBtn_->setEnabled(true);
+    startCancelBtn_->setText("Start Processing");
+    startCancelBtn_->setEnabled(true);
     browseBtn_->setEnabled(true);
-    progressBar_->setValue(100);
     QCoreApplication::processEvents();
 }
 
 void MainWindow::processingError(const QString& errorMessage) {
     isProcessing_ = false;
     appendLog("Error: " + errorMessage);
-    startBtn_->setEnabled(true);
+    startCancelBtn_->setText("Start Processing");
+    startCancelBtn_->setEnabled(true);
     browseBtn_->setEnabled(true);
 }
 
@@ -539,9 +973,23 @@ void MainWindow::applyTheme() {
     
     QString styleSheet = ThemeManager::instance().generateStyleSheet();
     qApp->setStyleSheet(styleSheet);
+    updateSettingsButtonIcon();
     
     // Force update on all widgets to apply theme
     qApp->processEvents();
+}
+
+void MainWindow::updateSettingsButtonIcon() {
+    if (!settingsBtn_) {
+        return;
+    }
+
+    const auto colors = ThemeManager::instance().colors();
+    settingsBtn_->setIcon(createSettingsCogIcon(QColor(colors.buttonText)));
+}
+
+void MainWindow::ensureStockfishSettingsVisible() {
+    // Deprecated: Layout visibility is now fully managed by the Settings QTabWidget.
 }
 
 } // namespace aa

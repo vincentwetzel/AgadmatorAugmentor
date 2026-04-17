@@ -4,114 +4,228 @@
 #include <sstream>
 #include <iostream> // Required for std::cerr
 #include <iomanip> // For std::fixed, std::setprecision
+#include <array>
+#include <cctype>
+#include <cmath>
 
 namespace aa {
 
+namespace {
+    std::array<char, 64> expand_fen_to_board(const std::string& fen) {
+        std::array<char, 64> board;
+        board.fill(' ');
+        int sq = 56;
+        for (char c : fen) {
+            if (c == ' ') break;
+            if (c == '/') sq -= 16;
+            else if (c >= '1' && c <= '8') sq += (c - '0');
+            else board[sq++] = c;
+        }
+        return board;
+    }
+
+    std::string format_eval_string(const StockfishLine& line, const std::string& fen) {
+        bool is_black_to_move = (fen.find(" b ") != std::string::npos);
+
+        if (line.is_mate) {
+            int mate_in = line.mate_in;
+            if (is_black_to_move) mate_in = -mate_in;
+            if (mate_in > 0) return "+M" + std::to_string(mate_in);
+            else return "-M" + std::to_string(-mate_in);
+        }
+
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2);
+        double eval_cp = line.centipawns / 100.0;
+        if (is_black_to_move) eval_cp = -eval_cp;
+        
+        if (eval_cp >= 0.0) ss << "+";
+        ss << eval_cp;
+        return ss.str();
+    }
+
+    std::string build_san(const libchess::Position& pos, const libchess::Move& move, const std::string& uci_str) {
+        auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
+        auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
+        
+        std::array<char, 64> board = expand_fen_to_board(pos.get_fen());
+        char piece = board[from_sq];
+        char target_piece = board[to_sq];
+        
+        bool is_pawn = (piece == 'P' || piece == 'p');
+        bool is_capture = (target_piece != ' ') || (is_pawn && (from_sq % 8) != (to_sq % 8) && target_piece == ' ');
+        
+        // Castling
+        if (move.type() == libchess::MoveType::ksc) return "O-O";
+        if (move.type() == libchess::MoveType::qsc) return "O-O-O";
+
+        if ((piece == 'K' || piece == 'k') && std::abs((from_sq % 8) - (to_sq % 8)) == 2) {
+            if (to_sq % 8 == 6) return "O-O";
+            if (to_sq % 8 == 2) return "O-O-O";
+        }
+
+        std::string san;
+        if (!is_pawn) {
+            san += static_cast<char>(std::toupper(piece));
+            
+            // Disambiguation
+            bool file_conflict = false;
+            bool rank_conflict = false;
+            bool need_disambiguation = false;
+            
+            for (const auto& alt_move : pos.legal_moves()) {
+                auto alt_from = static_cast<int>(static_cast<unsigned int>(alt_move.from()));
+                auto alt_to = static_cast<int>(static_cast<unsigned int>(alt_move.to()));
+                
+                if (alt_from != from_sq && alt_to == to_sq && board[alt_from] == piece) {
+                    need_disambiguation = true;
+                    if (alt_from % 8 == from_sq % 8) file_conflict = true;
+                    if (alt_from / 8 == from_sq / 8) rank_conflict = true;
+                }
+            }
+            
+            if (need_disambiguation) {
+                if (!file_conflict) {
+                    san += static_cast<char>('a' + (from_sq % 8));
+                } else if (!rank_conflict) {
+                    san += static_cast<char>('1' + (from_sq / 8));
+                } else {
+                    san += static_cast<char>('a' + (from_sq % 8));
+                    san += static_cast<char>('1' + (from_sq / 8));
+                }
+            }
+        } else {
+            if (is_capture) {
+                san += static_cast<char>('a' + (from_sq % 8));
+            }
+        }
+        
+        if (is_capture) san += "x";
+        
+        san += static_cast<char>('a' + (to_sq % 8));
+        san += static_cast<char>('1' + (to_sq / 8));
+        
+        // Promotion
+        if (uci_str.length() >= 5) {
+            san += "=";
+            san += static_cast<char>(std::toupper(uci_str[4]));
+        }
+        
+        // Append check/checkmate symbol, which is standard for PGN.
+        // A temporary position is used to check the state *after* the move.
+        libchess::Position temp_pos = pos;
+        temp_pos.makemove(move);
+        if (temp_pos.is_checkmate()) {
+            san += "#";
+        } else if (temp_pos.in_check()) {
+            san += "+";
+        }
+
+        return san;
+    }
+}
+
 PgnWriter::PgnWriter() {
+    pos_.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     active_lines_.push_back(&main_line_);
 }
 
 void PgnWriter::add_header(const std::string& key, const std::string& value) {
     headers_.push_back({key, value});
 }
-
-void PgnWriter::add_ply(const std::string& move_str, const std::string& clock, const std::string& eval_comment) {
+void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& clock, const std::string& eval_comment) {
     if (active_lines_.empty()) return;
-    PgnPly ply{move_str, clock, eval_comment, {}};
-    active_lines_.back()->push_back(ply);
-}
 
-void PgnWriter::add_variation_ply(libchess::Position& current_var_pos, const std::string& uci_move_str) {
-    libchess::Move var_move;
+    libchess::Position& current_pos = active_lines_.size() > 1 ? pos_stack_.back() : pos_;
+    libchess::Move move;
+    std::string san_move;
+
     try {
-        var_move = current_var_pos.parse_move(uci_move_str);
-        active_lines_.back()->push_back({uci_move_str, "", "", {}});
-        current_var_pos.makemove(var_move); // Update position for next move in PV
+        move = current_pos.parse_move(uci_move_str);
+        san_move = build_san(current_pos, move, uci_move_str);
+        current_pos.makemove(move);
     } catch (const std::exception& e) {
-        // Handle parsing error, e.g., log it or add UCI directly
-        active_lines_.back()->push_back({uci_move_str, "", "", {}});
-        std::cerr << "Warning: Failed to parse variation move " << uci_move_str << ": " << e.what() << std::endl;
+        std::cerr << "Warning: Failed to parse or convert move " << uci_move_str << ": " << e.what() << std::endl;
+        san_move = uci_move_str; // Fallback to UCI on error
     }
+
+    // The PgnPly struct members are ordered {san, clock, evaluation_comment}.
+    // The function parameters are (move_str, clock, eval_comment), so a direct mapping is correct.
+    // The first parameter is now the converted SAN move.
+    PgnPly ply{san_move, clock, eval_comment, {}};
+    active_lines_.back()->push_back(ply);
 }
 
 void PgnWriter::push_variation() {
     if (active_lines_.empty() || active_lines_.back()->empty()) return;
-
     auto* current_line = active_lines_.back();
+    auto& last_ply = current_line->back();
 
-    // A variation is an alternative to the most recently played move.
-    // Therefore, we attach the variation list to the ply immediately *preceding* it.
-    if (current_line->size() >= 2) {
-        auto& prev_ply = (*current_line)[current_line->size() - 2];
-        prev_ply.variations.push_back({});
-        active_lines_.push_back(&prev_ply.variations.back());
-    } else if (current_line->size() == 1) {
-        // Edge case: variation on the very first move.
-        // We append the variation to the first move itself to capture the branch.
-        auto& first_ply = current_line->back();
-        first_ply.variations.push_back({});
-        active_lines_.push_back(&first_ply.variations.back());
-    }
+    // Save current position state before branching
+    libchess::Position& pos_to_branch_from = active_lines_.size() > 1 ? pos_stack_.back() : pos_;
+    libchess::Position new_var_pos = pos_to_branch_from;
+    new_var_pos.undomove(); // Undo the last move to start the variation from the same board state
+    pos_stack_.push_back(new_var_pos);
+
+    // Create and switch to the new variation line
+    last_ply.variations.push_back({});
+    active_lines_.push_back(&last_ply.variations.back());
 }
 
 void PgnWriter::pop_variation() {
     if (active_lines_.size() > 1) {
+        // Restore position from before the variation
+        pos_stack_.pop_back();
         active_lines_.pop_back();
     }
 }
 
-void PgnWriter::add_stockfish_analysis(const std::vector<StockfishResult>& results) {
-    // Stockfish results correspond to positions, not plies.
-    // We need to add them as comments on the moves that follow those positions.
-    // The FEN at index i corresponds to the position BEFORE move i is played.
-    
-    for (size_t i = 0; i < results.size() && i < main_line_.size(); ++i) {
-        const auto& result = results[i];
-        
-        // Add evaluation as a comment on the move
-        if (i < main_line_.size()) {
-            auto& ply = main_line_[i];
-            
-            if (!result.lines.empty()) {
-                const auto& best_line = result.lines[0];
-                
-                // Format: [%eval +0.42] or [%eval #-3]
-                std::string eval_str;
-                if (best_line.is_mate) {
-                    eval_str = (best_line.mate_in > 0) ? 
-                        "#+" + std::to_string(best_line.mate_in) : 
-                        "#-" + std::to_string(std::abs(best_line.mate_in));
-                } else { // Centipawns
-                    double eval_cp = best_line.centipawns / 100.0;
-                    eval_str = (eval_cp >= 0 ? "+" : "") + std::to_string(eval_cp);
-                    // Remove trailing zeros
-                    eval_str.erase(eval_str.find_last_not_of('0') + 1, std::string::npos);
-                    if (eval_str.back() == '.') eval_str.pop_back();
+void PgnWriter::add_stockfish_analysis(const std::vector<StockfishResult>& results, int analysis_depth) {
+    // Stockfish results correspond to positions.
+    // The FEN at index i in the input `fens` vector corresponds to the position BEFORE move i is played.
+    // The analysis for the position AFTER move `i` is therefore at `results[i+1]`.
+
+    for (size_t i = 0; i < main_line_.size(); ++i) {
+        if (i + 1 >= results.size()) continue;
+
+        const auto& result = results[i + 1]; // Analysis of position after move `i`
+        auto& ply = main_line_[i];
+
+        if (result.lines.empty()) continue;
+
+        // Add evaluation comment for the position on the board (after the played move)
+        ply.evaluation_comment = format_eval_string(result.lines[0], result.fen);
+
+        // Add all top N engine lines as variations
+        for (const auto& line : result.lines) {
+            std::vector<PgnPly> variation_line;
+            libchess::Position var_pos(result.fen);
+            std::istringstream pv_stream(line.pv_line);
+            std::string move_uci_str;
+            int move_count = 0;
+
+            while (move_count < analysis_depth && (pv_stream >> move_uci_str)) {
+                try {
+                    libchess::Move m = var_pos.parse_move(move_uci_str);
+                    std::string san = build_san(var_pos, m, move_uci_str);
+                    variation_line.push_back({san, "", "", {}});
+                    var_pos.makemove(m);
+                } catch (...) {
+                    // Fallback for parsing errors
+                    variation_line.push_back({move_uci_str, "", "", {}});
                 }
-                
-                ply.evaluation_comment = eval_str;
-                
-                // Add alternative lines as variations (skip the best line which is main)
-                for (size_t j = 1; j < result.lines.size(); ++j) {
-                    const auto& alt_line = result.lines[j];
-                    
-                    // Push variation before adding alternative moves
-                    push_variation();
-                    
-                    // Parse PV line and add as variation moves
-                    libchess::Position current_var_pos(result.fen); // Initialize with the FEN of the analyzed position
-                    std::istringstream pv_stream(alt_line.pv_line);
-                    std::string move_uci_str;
-                    while (pv_stream >> move_uci_str) {
-                        add_variation_ply(current_var_pos, move_uci_str);
-                    }
-                    
-                    pop_variation();
-                }
+                move_count++;
+            }
+
+            if (!variation_line.empty()) {
+                // Add the evaluation comment to the first move of the variation
+                variation_line[0].evaluation_comment = format_eval_string(line, result.fen);
+                ply.variations.push_back(std::move(variation_line));
             }
         }
     }
 }
+
 
 std::string PgnWriter::build() const {
     std::ostringstream oss;
@@ -123,7 +237,7 @@ std::string PgnWriter::build() const {
     if (!headers_.empty()) oss << "\n";
 
     // Build Moves Recursively
-    build_line(oss, main_line_, 0, 0);
+    build_line(oss, main_line_, 1, 0);
     oss << "\n*\n";
 
     return oss.str();
@@ -131,24 +245,23 @@ std::string PgnWriter::build() const {
 
 void PgnWriter::build_line(std::ostringstream& oss, const std::vector<PgnPly>& line, int starting_ply_count, int indent_level) const {
     std::string indent(indent_level * 4, ' ');
-    int current_ply = starting_ply_count;
+    int ply_number = starting_ply_count;
 
     for (size_t i = 0; i < line.size(); ++i) {
         const auto& ply = line[i];
-        bool is_white = (current_ply % 2 == 0);
-        int move_num = (current_ply / 2) + 1;
+        bool is_white = ((ply_number - 1) % 2 == 0);
+        int move_num = (ply_number + 1) / 2;
 
         if (is_white) {
-            // Enforce exactly 1 move per line for main sequence
-            if (i > 0 && indent_level == 0) oss << "\n";
-            // If variation, stick to space delimitations
-            else if (i > 0) oss << " ";
-
-            oss << indent << move_num << ". " << ply.san;
+            if (indent_level == 0) {
+                if (i > 0) oss << "\n";
+                oss << indent << move_num << ". " << ply.san;
+            } else {
+                if (i > 0) oss << " ";
+                oss << move_num << ". " << ply.san;
+            }
         } else {
             if (i == 0) {
-                // First ply in a sub-line is black's
-                if (indent_level > 0) oss << indent;
                 oss << move_num << "... " << ply.san;
             } else {
                 oss << " " << ply.san;
@@ -157,7 +270,7 @@ void PgnWriter::build_line(std::ostringstream& oss, const std::vector<PgnPly>& l
 
         // Inject Evaluation Comments
         if (!ply.evaluation_comment.empty()) {
-            oss << " {[%eval " << ply.evaluation_comment << "]}";
+            oss << " {Stockfish [%eval " << ply.evaluation_comment << "]}";
         }
 
         // Inject Clocks
@@ -166,24 +279,25 @@ void PgnWriter::build_line(std::ostringstream& oss, const std::vector<PgnPly>& l
         }
 
         // Print nested variations
-        for (const auto& var : ply.variations) {
+        for (size_t v = 0; v < ply.variations.size(); ++v) {
+            const auto& var = ply.variations[v];
             oss << "\n" << indent << "  (";
-            build_line(oss, var, current_ply, indent_level + 1);
+            // A variation is an alternative for the CURRENT move, so ply_number remains the same
+            build_line(oss, var, ply_number, indent_level + 1);
             oss << ")";
 
-            // If the variation finishes and we are keeping this sequence,
-            // we must cleanly print the move number again so contexts aren't lost.
-            if (i + 1 < line.size()) {
-                if (indent_level == 0) oss << "\n" << indent;
-                else oss << " ";
-
-                if ((current_ply + 1) % 2 != 0) { // If the next move is Black's
+            // If all variations finished and we are keeping this sequence,
+            // cleanly print the move number again so contexts aren't lost.
+            if (v + 1 == ply.variations.size() && i + 1 < line.size()) {
+                if (ply_number % 2 != 0) { // If current move is White, next is Black
+                    if (indent_level == 0) oss << "\n" << indent;
+                    else oss << " ";
+                    
                     oss << move_num << "...";
                 }
             }
         }
-
-        current_ply++;
+        ply_number++;
     }
 }
 

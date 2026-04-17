@@ -2,6 +2,8 @@
 
 #include <string>
 #include <vector>
+#include <functional>
+#include <atomic>
 #include <memory>
 
 namespace aa {
@@ -21,7 +23,7 @@ struct StockfishResult {
 
 class StockfishAnalyzer {
 public:
-    explicit StockfishAnalyzer(int multi_pv = 1);
+    explicit StockfishAnalyzer(int multi_pv = 1, const std::string& stockfish_path = "");
     ~StockfishAnalyzer();
 
     // Delete copy/move
@@ -30,14 +32,18 @@ public:
     StockfishAnalyzer(StockfishAnalyzer&&) = delete;
     StockfishAnalyzer& operator=(StockfishAnalyzer&&) = delete;
 
+    using ProgressCallback = std::function<void(int, int)>; // current, total
+    void set_progress_callback(ProgressCallback cb);
+
     void set_multi_pv(int multi_pv);
-    StockfishResult analyze_position(const std::string& fen);
-    std::vector<StockfishResult> analyze_positions(const std::vector<std::string>& fens);
+    StockfishResult analyze_position(const std::string& fen, int depth, std::atomic<bool>* cancel_flag = nullptr);
+    std::vector<StockfishResult> analyze_positions(const std::vector<std::string>& fens, int depth, std::atomic<bool>* cancel_flag = nullptr);
 
 private:
     struct StockfishImpl;
     StockfishImpl* impl_;
     int multi_pv_;
+    ProgressCallback progress_callback_;
 };
 
 } // namespace aa
