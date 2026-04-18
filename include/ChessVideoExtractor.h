@@ -36,6 +36,10 @@ struct GameData {
     std::vector<ClockInfo> clocks;
     // A map from a ply's 0-based index to a list of variations that branch from it
     std::map<size_t, std::vector<VariationData>> variations;
+
+    std::vector<std::string> video_fens;
+    std::vector<double> video_timestamps;
+    std::vector<std::string> video_moves;
 };
 
 enum class DebugLevel {
@@ -48,7 +52,8 @@ class ChessVideoExtractor {
 public:
     ChessVideoExtractor(const std::string& board_asset_path,
                         const std::string& red_board_asset_path = "",
-                        DebugLevel debug_level = DebugLevel::None);
+                        DebugLevel debug_level = DebugLevel::None,
+                        int memory_limit_mb = 0);
     ~ChessVideoExtractor();
 
     using ProgressCallback = std::function<void(int percent, const std::string& message)>;
@@ -68,6 +73,7 @@ private:
     MoveScore score_moves_for_board(const std::vector<double>& sq_diffs);
 
     DebugLevel debug_level_;
+    int memory_limit_mb_ = 0;
     cv::Mat board_template_;
     cv::Mat red_board_template_;
     std::unique_ptr<BoardGeometry> geo_;

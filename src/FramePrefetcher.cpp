@@ -5,8 +5,8 @@
 
 namespace aa {
 
-FramePrefetcher::FramePrefetcher(const std::string& video_path)
-    : video_path_(video_path) {}
+FramePrefetcher::FramePrefetcher(const std::string& video_path, int memory_limit_mb)
+    : video_path_(video_path), memory_limit_mb_(memory_limit_mb) {}
 
 FramePrefetcher::~FramePrefetcher() {
     stop();
@@ -77,6 +77,23 @@ void FramePrefetcher::worker_loop() {
         }
         cv_.notify_one();
         return;
+    }
+
+    if (memory_limit_mb_ > 0) {
+        double width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+        double height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+        
+        // Dynamic calculation of queue cap based on resolution
+        size_t frame_bytes = static_cast<size_t>(width * height * 3); // BGR raw frame
+        size_t board_bytes = geo_.bw * geo_.bh * 4;                   // Board BGR + Grayscale
+        
+        size_t total_mb_per_frame = (frame_bytes + board_bytes) / (1024 * 1024);
+        if (total_mb_per_frame == 0) total_mb_per_frame = 1;
+        
+        // Apply the cap, ensuring we at least have a minimum queue of 2 for double-buffering
+        max_queue_size_ = std::max<size_t>(2, memory_limit_mb_ / total_mb_per_frame);
+        
+        std::cout << "FramePrefetcher: Memory limit " << memory_limit_mb_ << "MB applied. Queue capped at " << max_queue_size_ << " frames.\n";
     }
 
     double total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);

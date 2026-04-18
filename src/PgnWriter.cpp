@@ -198,6 +198,8 @@ void PgnWriter::add_stockfish_analysis(const std::vector<StockfishResult>& resul
 
         // Add all top N engine lines as variations
         for (const auto& line : result.lines) {
+            if (line.move_uci == "ANNOTATION") continue; // Skip dummy video annotation lines
+
             std::vector<PgnPly> variation_line;
             libchess::Position var_pos(result.fen);
             std::istringstream pv_stream(line.pv_line);

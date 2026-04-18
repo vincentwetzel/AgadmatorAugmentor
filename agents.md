@@ -87,7 +87,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Generates visual overlays statically per move (O(moves) instead of O(frames) for a 1000x speedup):
   - ✅ **Analysis Board:** A synchronized board showing the current FEN position in the corner of the video.
   - ✅ **Evaluation Bar:** A bar on the side of the video showing the Stockfish evaluation.
-  - ✅ **Move Arrows:** Arrows on the main board indicating the best engine moves.
+  - ✅ **Move Arrows:** Arrows on the main board indicating the best engine moves. The arrows dynamically scale in thickness and color intensity based on the evaluation difference from the principal variation.
   - ✅ **Principal Variation:** Text overlay showing the top engine line.
 - Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the final MP4.
 - Produces `output/output_with_analysis.mp4`.

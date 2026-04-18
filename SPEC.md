@@ -235,8 +235,8 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 | Feature | Status | Description |
 |---------|--------|-------------|
 | Stockfish Analysis | ✅ Implemented | Engine evaluation of positions (Phase 2) |
-| Overlay Rendering | 🔜 Not started | Visual overlays: eval bar, arrows, PV text (Phase 3) |
-| Video Compositing | 🔜 Not started | Composite overlays onto original video (Phase 4) |
+| Overlay Rendering | ✅ Implemented | Visual overlays: eval bar, dynamic arrows, PV text (Phase 3) |
+| Video Compositing | ✅ Implemented | Composite overlays onto original video (Phase 4) |
 | Audio Integration | 🔜 Not started | Sound event detection, speech-to-text |
 | Piece Classification | 🔜 Not started | Determine piece types via contour matching |
 | Parallel Agent Architecture | 🔜 Not started | Async, independent processing agents |

@@ -53,8 +53,8 @@ cd build\Release
 Override saved settings with command-line flags. This works for both `"ChessTube Analyzer.exe"` and `extract_moves.exe`.
 
 ```cmd
-# Example: Process a video with Stockfish (3 lines) and 8 CPU threads for decoding
-"ChessTube Analyzer.exe" "C:\videos\game.mp4" --stockfish --multi-pv 3 --threads 8 --pgn
+# Example: Process a video with Stockfish (3 lines), 8 CPU threads, and a 4GB RAM limit
+"ChessTube Analyzer.exe" "C:\videos\game.mp4" --stockfish --multi-pv 3 --threads 8 --pgn --memory-limit 4096
 
  # Show help for all available options
 "ChessTube Analyzer.exe" --help

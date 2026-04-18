@@ -33,6 +33,103 @@ namespace aa {
 
 namespace { // Anonymous namespace for helper functions
 
+std::array<char, 64> expand_fen_to_board(const std::string& fen) {
+    std::array<char, 64> board;
+    board.fill(' ');
+    int sq = 56;
+    for (char c : fen) {
+        if (c == ' ') break;
+        if (c == '/') sq -= 16;
+        else if (c >= '1' && c <= '8') sq += (c - '0');
+        else board[sq++] = c;
+    }
+    return board;
+}
+
+std::string build_san(const libchess::Position& pos, const libchess::Move& move, const std::string& uci_str) {
+    auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
+    auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
+    
+    std::array<char, 64> board = expand_fen_to_board(pos.get_fen());
+    char piece = board[from_sq];
+    char target_piece = board[to_sq];
+    
+    bool is_pawn = (piece == 'P' || piece == 'p');
+    bool is_capture = (target_piece != ' ') || (is_pawn && (from_sq % 8) != (to_sq % 8) && target_piece == ' ');
+    
+    if (move.type() == libchess::MoveType::ksc) return "O-O";
+    if (move.type() == libchess::MoveType::qsc) return "O-O-O";
+
+    if ((piece == 'K' || piece == 'k') && std::abs((from_sq % 8) - (to_sq % 8)) == 2) {
+        if (to_sq % 8 == 6) return "O-O";
+        if (to_sq % 8 == 2) return "O-O-O";
+    }
+
+    std::string san;
+    if (!is_pawn) {
+        san += static_cast<char>(std::toupper(piece));
+        bool file_conflict = false;
+        bool rank_conflict = false;
+        bool need_disambiguation = false;
+        
+        for (const auto& alt_move : pos.legal_moves()) {
+            auto alt_from = static_cast<int>(static_cast<unsigned int>(alt_move.from()));
+            auto alt_to = static_cast<int>(static_cast<unsigned int>(alt_move.to()));
+            
+            if (alt_from != from_sq && alt_to == to_sq && board[alt_from] == piece) {
+                need_disambiguation = true;
+                if (alt_from % 8 == from_sq % 8) file_conflict = true;
+                if (alt_from / 8 == from_sq / 8) rank_conflict = true;
+            }
+        }
+        
+        if (need_disambiguation) {
+            if (!file_conflict) san += static_cast<char>('a' + (from_sq % 8));
+            else if (!rank_conflict) san += static_cast<char>('1' + (from_sq / 8));
+            else {
+                san += static_cast<char>('a' + (from_sq % 8));
+                san += static_cast<char>('1' + (from_sq / 8));
+            }
+        }
+    } else {
+        if (is_capture) san += static_cast<char>('a' + (from_sq % 8));
+    }
+    
+    if (is_capture) san += "x";
+    san += static_cast<char>('a' + (to_sq % 8));
+    san += static_cast<char>('1' + (to_sq / 8));
+    
+    if (uci_str.length() >= 5) {
+        san += "=";
+        san += static_cast<char>(std::toupper(uci_str[4]));
+    }
+    
+    libchess::Position temp_pos = pos;
+    temp_pos.makemove(move);
+    if (temp_pos.is_checkmate()) san += "#";
+    else if (temp_pos.in_check()) san += "+";
+
+    return san;
+}
+
+std::string uci_to_san_line(const std::string& uci_line, const std::string& start_fen) {
+    std::istringstream iss(uci_line);
+    std::string uci_move;
+    std::string san_line;
+    try {
+        libchess::Position pos(start_fen);
+        while (iss >> uci_move) {
+            if (!san_line.empty()) san_line += " ";
+            libchess::Move m = pos.parse_move(uci_move);
+            san_line += build_san(pos, m, uci_move);
+            pos.makemove(m);
+        }
+    } catch (...) {
+        return uci_line; // fallback to original string on parsing error
+    }
+    return san_line.empty() ? uci_line : san_line;
+}
+
 void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scalar color, double squareSize, int thicknessPct) {
     double dx = end.x - start.x;
     double dy = end.y - start.y;
@@ -72,6 +169,127 @@ void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scala
     headPts.push_back(cv::Point(static_cast<int>(backCenter.x - (headWidth/2) * std::cos(pAngle)), static_cast<int>(backCenter.y - (headWidth/2) * std::sin(pAngle))));
     headPts.push_back(cv::Point(static_cast<int>(tip.x), static_cast<int>(tip.y)));
     cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{headPts}, color, cv::LINE_AA);
+}
+
+void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::string& sym, double sq_w, double sq_h) {
+    if (uci.length() < 4) return;
+    std::string clean_sym = sym;
+    clean_sym.erase(0, clean_sym.find_first_not_of(" "));
+    clean_sym.erase(clean_sym.find_last_not_of(" ") + 1);
+    if (clean_sym.empty()) return;
+
+    int to_col = uci[2] - 'a';
+    int to_row = 7 - (uci[3] - '1');
+    
+    if (to_col < 0 || to_col > 7 || to_row < 0 || to_row > 7) return;
+
+    double cx = (to_col + 0.5) * sq_w;
+    double cy = (to_row + 0.5) * sq_h;
+
+    int ax = static_cast<int>(cx + sq_w * 0.35);
+    int ay = static_cast<int>(cy - sq_h * 0.35);
+    int radius = static_cast<int>(sq_w * 0.18);
+
+    cv::Scalar bgColor;
+    bool drawStar = false;
+    bool drawBook = false;
+    bool drawThumbsUp = false;
+    
+    if (clean_sym == "!!") bgColor = cv::Scalar(80, 175, 75);      // Green (OpenCV uses BGR)
+    else if (clean_sym == "!") bgColor = cv::Scalar(215, 130, 40); // Blue
+    else if (clean_sym == "*") { bgColor = cv::Scalar(80, 175, 75); drawStar = true; } // Green Star
+    else if (clean_sym == "(Good)") { bgColor = cv::Scalar(80, 175, 75); drawThumbsUp = true; } // Green Thumbs Up
+    else if (clean_sym == "?") bgColor = cv::Scalar(50, 200, 240); // Yellow
+    else if (clean_sym == "X") bgColor = cv::Scalar(100, 100, 255); // Light red
+    else if (clean_sym == "??") bgColor = cv::Scalar(40, 40, 200);  // Darker red
+    else if (clean_sym == "(Book)") { bgColor = cv::Scalar(150, 180, 200); drawBook = true; } // Tan Book
+    else return; 
+
+    cv::circle(img, cv::Point(ax, ay), radius, bgColor, cv::FILLED, cv::LINE_AA);
+    cv::circle(img, cv::Point(ax, ay), radius, cv::Scalar(20, 20, 20), 1, cv::LINE_AA); // Dark outline
+
+    if (drawStar) {
+        std::vector<cv::Point> star_pts;
+        double out_r = radius * 0.65;
+        double in_r = out_r * 0.382; // Magic ratio for standard 5-pointed star
+        for (int i = 0; i < 10; ++i) {
+            double angle = i * CV_PI / 5.0 - CV_PI / 2.0;
+            double r = (i % 2 == 0) ? out_r : in_r;
+            star_pts.push_back(cv::Point(static_cast<int>(ax + r * std::cos(angle)), static_cast<int>(ay + r * std::sin(angle))));
+        }
+        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{star_pts}, cv::Scalar(255, 255, 255), cv::LINE_AA);
+    } else if (drawBook) {
+        std::vector<cv::Point> left_page = {
+            cv::Point(ax - radius*0.5, ay - radius*0.25),
+            cv::Point(ax - radius*0.05, ay - radius*0.1),
+            cv::Point(ax - radius*0.05, ay + radius*0.4),
+            cv::Point(ax - radius*0.5, ay + radius*0.25)
+        };
+        std::vector<cv::Point> right_page = {
+            cv::Point(ax + radius*0.5, ay - radius*0.25),
+            cv::Point(ax + radius*0.05, ay - radius*0.1),
+            cv::Point(ax + radius*0.05, ay + radius*0.4),
+            cv::Point(ax + radius*0.5, ay + radius*0.25)
+        };
+        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{left_page, right_page}, cv::Scalar(255, 255, 255), cv::LINE_AA);
+        cv::line(img, cv::Point(ax, ay - radius*0.1), cv::Point(ax, ay + radius*0.4), cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
+    } else if (drawThumbsUp) {
+        // Rounded silhouette styled to read closer to the chess.com "Good" badge
+        // at very small sizes: chunky palm, upright thumb, and soft finger bumps.
+        std::vector<cv::Point> palm = {
+            cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.32)),
+            cv::Point(static_cast<int>(ax - radius * 0.02), static_cast<int>(ay + radius * 0.32)),
+            cv::Point(static_cast<int>(ax + radius * 0.18), static_cast<int>(ay + radius * 0.24)),
+            cv::Point(static_cast<int>(ax + radius * 0.30), static_cast<int>(ay + radius * 0.08)),
+            cv::Point(static_cast<int>(ax + radius * 0.30), static_cast<int>(ay - radius * 0.18)),
+            cv::Point(static_cast<int>(ax + radius * 0.15), static_cast<int>(ay - radius * 0.28)),
+            cv::Point(static_cast<int>(ax - radius * 0.08), static_cast<int>(ay - radius * 0.28)),
+            cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.10)),
+            cv::Point(static_cast<int>(ax - radius * 0.28), static_cast<int>(ay + radius * 0.02)),
+            cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.18))
+        };
+        cv::fillConvexPoly(img, palm, cv::Scalar(255, 255, 255), cv::LINE_AA);
+
+        std::vector<cv::Point> thumb = {
+            cv::Point(static_cast<int>(ax - radius * 0.24), static_cast<int>(ay - radius * 0.05)),
+            cv::Point(static_cast<int>(ax - radius * 0.12), static_cast<int>(ay - radius * 0.12)),
+            cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.56)),
+            cv::Point(static_cast<int>(ax - radius * 0.20), static_cast<int>(ay - radius * 0.64)),
+            cv::Point(static_cast<int>(ax - radius * 0.32), static_cast<int>(ay - radius * 0.56)),
+            cv::Point(static_cast<int>(ax - radius * 0.35), static_cast<int>(ay - radius * 0.18))
+        };
+        cv::fillConvexPoly(img, thumb, cv::Scalar(255, 255, 255), cv::LINE_AA);
+
+        cv::circle(img, cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.60)),
+                   std::max(1, static_cast<int>(radius * 0.11)), cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+
+        const int fingerRadius = std::max(1, static_cast<int>(radius * 0.12));
+        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.23), static_cast<int>(ay - radius * 0.14)),
+                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.16), static_cast<int>(ay + radius * 0.03)),
+                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.07), static_cast<int>(ay + radius * 0.17)),
+                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+
+        cv::line(img,
+                 cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.02)),
+                 cv::Point(static_cast<int>(ax + radius * 0.18), static_cast<int>(ay - radius * 0.06)),
+                 bgColor, 1, cv::LINE_AA);
+        cv::line(img,
+                 cv::Point(static_cast<int>(ax - radius * 0.03), static_cast<int>(ay + radius * 0.12)),
+                 cv::Point(static_cast<int>(ax + radius * 0.14), static_cast<int>(ay + radius * 0.10)),
+                 bgColor, 1, cv::LINE_AA);
+    } else {
+        std::string txt = clean_sym;
+        int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+        double fontScale = (txt.length() > 1) ? radius * 0.045 : radius * 0.055;
+        int thickness = (txt.length() > 1) ? 1 : 2;
+        int baseline = 0;
+        cv::Size textSize = cv::getTextSize(txt, fontFace, fontScale, thickness, &baseline);
+        
+        cv::Point textOrg(ax - textSize.width / 2, ay + textSize.height / 2 - 1);
+        cv::putText(img, txt, textOrg, fontFace, fontScale, cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
+    }
 }
 
 void drawAnalysisBar(cv::Mat& img, cv::Rect rect, double cpScore) {
@@ -120,6 +338,13 @@ std::string format_eval_string(const StockfishLine& line, const std::string& fen
     }
     ss << eval_cp;
     return ss.str();
+}
+
+double get_line_score_cp(const StockfishLine& line) {
+    if (line.is_mate) {
+        return (line.mate_in > 0) ? (10000.0 - line.mate_in) : (-10000.0 - line.mate_in);
+    }
+    return static_cast<double>(line.centipawns);
 }
 
 double score_from_analysis(const std::optional<StockfishResult>& analysis, const std::string& fen) {
@@ -200,6 +425,74 @@ bool write_bmp_fast(const std::filesystem::path& path, const cv::Mat& image) {
     }
 
     return out.good();
+}
+
+void render_main_board_arrows(cv::Mat& image,
+                              const std::optional<StockfishResult>& analysis,
+                              const std::string& fen,
+                              int width, int height,
+                              int arrow_thickness_pct) {
+    image = cv::Mat::zeros(cv::Size(width, height), CV_8UC3);
+    if (!analysis.has_value() || analysis->lines.empty()) return;
+
+    double sq_w = static_cast<double>(width) / 8.0;
+    double sq_h = static_cast<double>(height) / 8.0;
+
+    try {
+        libchess::Position pos(fen);
+        double best_score = get_line_score_cp(analysis->lines.front());
+
+        // Draw worse lines first so best lines render on top
+        for (int i = static_cast<int>(analysis->lines.size()) - 1; i >= 0; --i) {
+            const auto& line = analysis->lines[i];
+            if (line.move_uci.empty() || line.move_uci == "ANNOTATION") continue;
+            
+            double line_score = get_line_score_cp(line);
+            double diff_cp = std::max(0.0, best_score - line_score);
+            
+            // Weight drops from 1.0 (best) to 0.2 (blunder: 300+ cp worse)
+            double weight = std::max(0.2, 1.0 - (diff_cp / 300.0));
+            int current_thickness_pct = static_cast<int>(arrow_thickness_pct * weight);
+
+            libchess::Move move = pos.parse_move(line.move_uci);
+            auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
+            auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
+
+            int from_row = 7 - (from_sq / 8);
+            int from_col = from_sq % 8;
+            int to_row = 7 - (to_sq / 8);
+            int to_col = to_sq % 8;
+
+            cv::Point start(static_cast<int>((from_col + 0.5) * sq_w), static_cast<int>((from_row + 0.5) * sq_h));
+            cv::Point end(static_cast<int>((to_col + 0.5) * sq_w), static_cast<int>((to_row + 0.5) * sq_h));
+
+            cv::Scalar color;
+            if (i == 0 || diff_cp <= 10.0) { 
+                color = cv::Scalar(122, 153, 122); 
+            } else {
+                double color_scale = std::max(0.5, weight);
+                color = cv::Scalar(112 * color_scale, 128 * color_scale, 144 * color_scale);
+            }
+            
+            drawEngineArrow(image, start, end, color, sq_w, current_thickness_pct);
+        }
+        
+        // Draw graphical move quality annotations on top of the main board
+        for (const auto& line : analysis->lines) {
+            if (line.move_uci == "ANNOTATION") {
+                std::string uci, sym;
+                size_t uci_len = 0;
+                while (uci_len < line.pv_line.length()) {
+                    char c = line.pv_line[uci_len];
+                    if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') uci_len++;
+                    else break;
+                }
+                uci = line.pv_line.substr(0, uci_len);
+                sym = line.pv_line.substr(uci_len);
+                drawMoveAnnotationOnBoard(image, uci, sym, sq_w, sq_h);
+            }
+        }
+    } catch(...) {}
 }
 
 } // anonymous namespace
@@ -319,10 +612,21 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
         try {
             cv::Mat arrow_overlay = cv::Mat::zeros(board.size(), board.type());
             libchess::Position pos(fen);
-            bool first_line = true;
-            for (const auto& line : analysis->lines) {
-                if (line.move_uci.empty()) continue;
+            
+            double best_score = get_line_score_cp(analysis->lines.front());
+
+            // Draw worse lines first so best lines render on top
+            for (int i = static_cast<int>(analysis->lines.size()) - 1; i >= 0; --i) {
+                const auto& line = analysis->lines[i];
+                if (line.move_uci.empty() || line.move_uci == "ANNOTATION") continue;
                 
+                double line_score = get_line_score_cp(line);
+                double diff_cp = std::max(0.0, best_score - line_score);
+                
+                // Weight drops from 1.0 (best) to 0.2 (blunder: 300+ cp worse)
+                double weight = std::max(0.2, 1.0 - (diff_cp / 300.0));
+                int current_thickness_pct = static_cast<int>(arrow_thickness_pct * weight);
+
                 libchess::Move move = pos.parse_move(line.move_uci);
                 auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
                 auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
@@ -335,13 +639,33 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
                 cv::Point start(static_cast<int>((from_col + 0.5) * sq_w), static_cast<int>((from_row + 0.5) * sq_h));
                 cv::Point end(static_cast<int>((to_col + 0.5) * sq_w), static_cast<int>((to_row + 0.5) * sq_h));
 
-                // Muted green for best move, slate-blue for others
-                cv::Scalar color = first_line ? cv::Scalar(122, 153, 122) : cv::Scalar(112, 128, 144);
-                drawEngineArrow(arrow_overlay, start, end, color, sq_w, arrow_thickness_pct);
+                cv::Scalar color;
+                if (i == 0 || diff_cp <= 10.0) { 
+                    color = cv::Scalar(122, 153, 122); 
+                } else {
+                    double color_scale = std::max(0.5, weight);
+                    color = cv::Scalar(112 * color_scale, 128 * color_scale, 144 * color_scale);
+                }
 
-                first_line = false;
+                drawEngineArrow(arrow_overlay, start, end, color, sq_w, current_thickness_pct);
             }
             cv::addWeighted(arrow_overlay, 0.5, board, 1.0, 0.0, board);
+            
+            // Draw graphical move quality annotations on top of the debug board
+            for (const auto& line : analysis->lines) {
+                if (line.move_uci == "ANNOTATION") {
+                    std::string uci, sym;
+                    size_t uci_len = 0;
+                    while (uci_len < line.pv_line.length()) {
+                        char c = line.pv_line[uci_len];
+                        if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') uci_len++;
+                        else break;
+                    }
+                    uci = line.pv_line.substr(0, uci_len);
+                    sym = line.pv_line.substr(uci_len);
+                    drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
+                }
+            }
         } catch(...) {
             // Ignore errors if FEN or move is invalid, just don't draw arrows
         }
@@ -362,10 +686,17 @@ void AnalysisVideoGenerator::render_analysis_text(cv::Mat& image,
     }
 
     int text_y_pos = 30;
+    auto lines = analysis->lines;
+
+    // Check for the smuggled annotation line
+    if (!lines.empty() && lines.back().move_uci == "ANNOTATION") {
+        lines.pop_back(); // Remove it so it doesn't render as an engine line
+    }
+
     bool first_line = true;
-    for (const auto& line : analysis->lines) {
+    for (const auto& line : lines) {
         std::string eval_str = format_eval_string(line, fen);
-        std::string text = eval_str + " | " + line.pv_line;
+        std::string text = eval_str + " | " + uci_to_san_line(line.pv_line, fen);
 
         cv::Scalar color = first_line ? cv::Scalar(144, 238, 144) : cv::Scalar(220, 220, 220);
         int thickness = first_line ? 2 : 1;
@@ -419,8 +750,55 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // We will NOT decode the original video in OpenCV. FFmpeg will handle it.
     cap.release(); 
 
+    // Unpack piggybacked codecs from the output_video_path string
+    std::string actual_output_path = output_video_path;
+    std::string vCodec = "libx264";
+    std::string aCodec = "copy";
+    std::string resolution = "Source Resolution";
+    std::string crf = "23";
+    std::string position = "Top-Right";
+    std::string overlay_size = "30";
+    std::string arrows_target = "Debug Board";
+
+    // Dynamically unpack pipe-delimited parameters safely
+    size_t pipe_pos = actual_output_path.find('|');
+    if (pipe_pos != std::string::npos) {
+        std::string options = actual_output_path.substr(pipe_pos + 1);
+        actual_output_path = actual_output_path.substr(0, pipe_pos);
+        
+        std::vector<std::string> tokens;
+        size_t start = 0, end;
+        while ((end = options.find('|', start)) != std::string::npos) {
+            tokens.push_back(options.substr(start, end - start));
+            start = end + 1;
+        }
+        tokens.push_back(options.substr(start));
+        
+        if (tokens.size() > 0) vCodec = tokens[0];
+        if (tokens.size() > 1) aCodec = tokens[1];
+        if (tokens.size() > 2) resolution = tokens[2];
+        if (tokens.size() > 3) crf = tokens[3];
+        if (tokens.size() > 4) position = tokens[4];
+        if (tokens.size() > 5) overlay_size = tokens[5];
+        if (tokens.size() > 6) arrows_target = tokens[6];
+    }
+
+    // Clean up codec UI string (e.g., "libx264 (H.264)" -> "libx264")
+    size_t space_idx = vCodec.find(' ');
+    if (space_idx != std::string::npos) vCodec = vCodec.substr(0, space_idx);
+    
+    // Clean up audio codec UI string (e.g., "copy (Original)" -> "copy")
+    size_t a_space_idx = aCodec.find(' ');
+    if (a_space_idx != std::string::npos) aCodec = aCodec.substr(0, a_space_idx);
+
+    bool draw_debug_arrows = (arrows_target == "Debug Board" || arrows_target == "Both");
+    bool draw_main_arrows = (arrows_target == "Main Board" || arrows_target == "Both");
+
+    double size_pct = 0.30;
+    try { size_pct = std::stod(overlay_size) / 100.0; } catch(...) {}
+
     // Define overlay dimensions
-    int debug_h = static_cast<int>(height * 0.30);
+    int debug_h = static_cast<int>(height * size_pct);
     debug_h += debug_h % 2; // Ensure even dimension
     int debug_w = (board_template_.cols * debug_h) / board_template_.rows;
     debug_w += debug_w % 2; // Ensure even dimension
@@ -442,7 +820,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Step 1: Render static images for each move and create FFmpeg concat demuxer files.
     // This drops the workload from O(Frames) (e.g., 36,000) to O(Moves) (e.g., 50),
     // speeding up generation by roughly 1000x and avoiding massive temp video files.
-    std::filesystem::path temp_dir = std::filesystem::path(output_video_path).parent_path() / "temp_overlays";
+    std::filesystem::path temp_dir = std::filesystem::path(actual_output_path).parent_path() / "temp_overlays";
     std::filesystem::create_directories(temp_dir);
 
     // RAII cleaner to ensure temp files are wiped even if an exception is thrown or generation fails early
@@ -464,6 +842,10 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::ofstream text_txt(text_txt_path);
     std::ofstream bar_txt(bar_txt_path);
 
+    std::string main_arrows_txt_path = (temp_dir / "main_arrows.txt").string();
+    std::ofstream main_arrows_txt;
+    if (draw_main_arrows) main_arrows_txt.open(main_arrows_txt_path);
+
     size_t num_states = timestamps.size() + 1;
     std::vector<size_t> states_to_render;
 
@@ -479,6 +861,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         std::string board_img = "board_" + std::to_string(i) + ".bmp";
         std::string text_img = "text_" + std::to_string(i) + ".bmp";
         std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
+        std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".bmp";
 
         board_txt << "file '" << board_img << "'\n";
         board_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
@@ -488,6 +871,11 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
         bar_txt << "file '" << bar_img << "'\n";
         bar_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        
+        if (draw_main_arrows) {
+            main_arrows_txt << "file '" << main_arrows_img << "'\n";
+            main_arrows_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        }
     }
 
     if (!states_to_render.empty()) {
@@ -495,11 +883,15 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         board_txt << "file 'board_" << last_idx << ".bmp'\n";
         text_txt << "file 'text_" << last_idx << ".bmp'\n";
         bar_txt << "file 'bar_" << last_idx << ".bmp'\n";
+        if (draw_main_arrows) {
+            main_arrows_txt << "file 'main_arrows_" << last_idx << ".bmp'\n";
+        }
     }
 
     board_txt.close();
     text_txt.close();
     bar_txt.close();
+    if (draw_main_arrows) main_arrows_txt.close();
 
     unsigned int hw_threads = std::thread::hardware_concurrency();
     int num_threads = (hw_threads > 0) ? static_cast<int>(hw_threads) : 4;
@@ -510,6 +902,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::atomic<int> completed_count = 0;
     std::atomic<bool> thread_failed = false;
     std::mutex io_mutex;
+
+    int main_arrow_w = geo.bw + (geo.bw % 2);
+    int main_arrow_h = geo.bh + (geo.bh % 2);
 
     for (int t = 0; t < num_threads; ++t) {
         threads.emplace_back([&]() {
@@ -535,15 +930,23 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     render_analysis_text(cached_text, current_analysis, current_fen, text_w, debug_h);
 
                     // --- Render Debug Board ---
-                    cv::Mat cached_board = render_board_state(current_fen, current_analysis, arrow_thickness_pct, scaled_board, scaled_pieces);
+                    std::optional<StockfishResult> board_analysis = draw_debug_arrows ? current_analysis : std::nullopt;
+                    cv::Mat cached_board = render_board_state(current_fen, board_analysis, arrow_thickness_pct, scaled_board, scaled_pieces);
 
                     // --- Render Analysis Bar ---
                     cv::Mat cached_bar;
                     render_analysis_bar(cached_bar, current_analysis, current_fen, bar_w, safe_height);
 
+                    // --- Render Main Arrows ---
+                    cv::Mat cached_main_arrows;
+                    if (draw_main_arrows) {
+                        render_main_board_arrows(cached_main_arrows, current_analysis, current_fen, main_arrow_w, main_arrow_h, arrow_thickness_pct);
+                    }
+
                     std::string board_img = "board_" + std::to_string(i) + ".bmp";
                     std::string text_img = "text_" + std::to_string(i) + ".bmp";
                     std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
+                    std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".bmp";
 
                     bool write_ok = true;
                     {
@@ -553,6 +956,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                         write_ok = write_bmp_fast(temp_dir / board_img, cached_board) &&
                                    write_bmp_fast(temp_dir / text_img, cached_text) &&
                                    write_bmp_fast(temp_dir / bar_img, cached_bar);
+                        if (write_ok && draw_main_arrows) {
+                            write_ok = write_bmp_fast(temp_dir / main_arrows_img, cached_main_arrows);
+                        }
                     }
                     if (!write_ok) {
                         throw std::runtime_error("Failed to write temporary overlay bitmaps.");
@@ -590,59 +996,158 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Step 2: Have FFmpeg perform the composition
     if (progress_callback) progress_callback(80, "Compositing video streams with FFmpeg...");
 
-    int text_x_pos = std::max(0, width - text_w - debug_w - 20);
-    int board_x_pos = std::max(0, width - debug_w - 20);
+    int overlay_y_pos = 20;
+    if (position.find("Bottom") != std::string::npos) {
+        overlay_y_pos = std::max(0, height - debug_h - 20);
+    }
+    overlay_y_pos -= overlay_y_pos % 2; // Ensure even dimension for YUV420
+
+    int board_x_pos = 0;
+    int text_x_pos = 0;
+    if (position.find("Left") != std::string::npos) {
+        board_x_pos = 20;
+        text_x_pos = board_x_pos + debug_w + 20;
+    } else { // Right
+        board_x_pos = std::max(0, width - debug_w - 20);
+        text_x_pos = std::max(0, board_x_pos - text_w - 20);
+    }
+    board_x_pos -= board_x_pos % 2;
+    text_x_pos -= text_x_pos % 2;
+
     int bar_x_pos = std::max(20, geo.bx - bar_w - 20); // Position analysis bar just to the left of the main board
-    int y_pos = 20;
+    bar_x_pos -= bar_x_pos % 2;
     
+    int safe_bx = geo.bx - (geo.bx % 2);
+    int safe_by = geo.by - (geo.by % 2);
+
     // Compose advanced FFMPEG CPU Filter Graph using the builder
     FFmpegFilterGraph graph;
     // 1. Draw a semi-transparent black box over the text area on the base video
-    graph.add_filter("[0:v]", "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(debug_h) + ":color=black@0.6:t=fill", "[bg_box]");
+    graph.add_filter("[0:v]", "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(overlay_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(debug_h) + ":color=black@0.6:t=fill", "[bg_box]");
+    
+    std::string base_for_txt = "[bg_box]";
+    if (draw_main_arrows) {
+        graph.add_filter("[4:v]", "colorkey=black:0.01:0.5", "[main_arrows_alpha]");
+        graph.add_filter("[bg_box][main_arrows_alpha]", "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by), "[bg_box_arr]");
+        base_for_txt = "[bg_box_arr]";
+    }
+
     // 2. Make the black background of the text video transparent
     graph.add_filter("[3:v]", "colorkey=black:0.01:0.5", "[txt_alpha]");
     // 3. Overlay the floating text onto the background with the box
-    graph.add_filter("[bg_box][txt_alpha]", "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(y_pos), "[bg_txt]");
+    graph.add_filter(base_for_txt + "[txt_alpha]", "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(overlay_y_pos), "[bg_txt]");
     // 4. Overlay the debug board
-    graph.add_filter("[bg_txt][1:v]", "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(y_pos), "[bg_brd]");
-    // 5. Overlay the analysis bar and set final output format
-    graph.add_filter("[bg_brd][2:v]", "overlay=" + std::to_string(bar_x_pos) + ":(H-h)/2,format=yuv420p");
+    graph.add_filter("[bg_txt][1:v]", "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(overlay_y_pos), "[bg_brd]");
+    
+    std::string scale_str = "";
+    if (resolution.find("1920x1080") != std::string::npos) scale_str = ",scale=1920:-2";
+    else if (resolution.find("1280x720") != std::string::npos) scale_str = ",scale=1280:-2";
+    else if (resolution.find("3840x2160") != std::string::npos) scale_str = ",scale=3840:-2";
+
+    // 5. Overlay the analysis bar, apply scaling if requested, and set final output format
+    graph.add_filter("[bg_brd][2:v]", "overlay=" + std::to_string(bar_x_pos) + ":(H-h)/2" + scale_str + ",format=yuv420p");
     std::string filter_complex = graph.build();
 
     std::string input_args = "-y -i \"" + input_video_path + "\" "
                              "-f concat -safe 0 -i \"" + board_txt_path + "\" "
                              "-f concat -safe 0 -i \"" + bar_txt_path + "\" "
                              "-f concat -safe 0 -i \"" + text_txt_path + "\" ";
-
-    std::string ffmpeg_cmd;
-    if (GPUAccelerator::is_available()) {
-        if (progress_callback) progress_callback(80, "Using GPU-accelerated FFmpeg (NVENC) with CPU filters...");
-        ffmpeg_cmd = "ffmpeg -threads 0 " + input_args + 
-                     "-filter_complex \"" + filter_complex + "\" "
-                     "-c:v h264_nvenc -preset p4 -cq 23 -c:a copy \"" + output_video_path + "\"";
-    } else {
-        if (progress_callback) progress_callback(80, "Using CPU-based FFmpeg (libx264)...");
-        ffmpeg_cmd = "ffmpeg -threads 0 " + input_args + 
-                     "-filter_complex \"" + filter_complex + "\" "
-                     "-c:v libx264 -preset fast -crf 23 -c:a copy \"" + output_video_path + "\"";
+                             
+    if (draw_main_arrows) {
+        input_args += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
     }
 
+    std::string ffmpeg_cmd;
+    std::string actual_vcodec = vCodec;
+    std::string extra_args = "";
+
+    if (vCodec == "libvpx-vp9") {
+        extra_args = "-deadline realtime -cpu-used 4 -row-mt 1 -crf " + crf + " -b:v 0";
+        if (progress_callback) progress_callback(80, "Using CPU-based FFmpeg (" + actual_vcodec + ")...");
+    } else {
+        if (GPUAccelerator::is_available()) {
+            if (vCodec == "libx264") { actual_vcodec = "h264_nvenc"; extra_args = "-preset p4 -cq " + crf; }
+            else if (vCodec == "libx265") { actual_vcodec = "hevc_nvenc"; extra_args = "-preset p4 -cq " + crf; }
+            if (progress_callback) progress_callback(80, "Using GPU-accelerated FFmpeg (" + actual_vcodec + ") with CPU filters...");
+        } else {
+            if (vCodec == "libx264") extra_args = "-preset fast -crf " + crf;
+            else if (vCodec == "libx265") extra_args = "-preset fast -crf " + crf;
+            if (progress_callback) progress_callback(80, "Using CPU-based FFmpeg (" + actual_vcodec + ")...");
+        }
+    }
+
+    // Fallback to copy if codec isn't set
+    if (aCodec.empty()) aCodec = "copy";
+
+    ffmpeg_cmd = "ffmpeg -threads 0 " + input_args + 
+                 "-filter_complex \"" + filter_complex + "\" "
+                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " \"" + actual_output_path + "\"";
+
 #ifdef _WIN32
-    ffmpeg_cmd += " > nul 2>&1";
-    
-    // Execute silently on Windows without flashing a cmd.exe window
-    std::string cmd = "cmd.exe /c " + ffmpeg_cmd;
+    SECURITY_ATTRIBUTES saAttr; 
+    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES); 
+    saAttr.bInheritHandle = TRUE; 
+    saAttr.lpSecurityDescriptor = NULL; 
+
+    HANDLE hReadPipe = NULL;
+    HANDLE hWritePipe = NULL;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &saAttr, 0)) {
+        if (progress_callback) progress_callback(-1, "Failed to create pipes for FFmpeg.");
+        return false;
+    }
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    si.hStdError = hWritePipe; // FFmpeg outputs progress to stderr
+    si.hStdOutput = hWritePipe;
+    si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
     ZeroMemory(&pi, sizeof(pi));
 
-    std::vector<char> cmd_buffer(cmd.begin(), cmd.end());
+    std::vector<char> cmd_buffer(ffmpeg_cmd.begin(), ffmpeg_cmd.end());
     cmd_buffer.push_back('\0');
 
     int result = -1;
-    if (CreateProcessA(NULL, cmd_buffer.data(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+    // TRUE for bInheritHandles so FFmpeg can use hWritePipe. CREATE_NO_WINDOW strictly prevents the console.
+    if (CreateProcessA(NULL, cmd_buffer.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(hWritePipe); // Close write end in parent
+        
+        char buffer[256];
+        DWORD bytesRead;
+        std::string output_acc;
+        
+        while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            if (cancel_flag && *cancel_flag) {
+                TerminateProcess(pi.hProcess, 1);
+                break;
+            }
+            buffer[bytesRead] = '\0';
+            output_acc += buffer;
+            
+            size_t frame_pos = output_acc.rfind("frame=");
+            if (frame_pos != std::string::npos) {
+                size_t end_pos = output_acc.find("fps=", frame_pos);
+                if (end_pos != std::string::npos) {
+                    std::string frame_str = output_acc.substr(frame_pos + 6, end_pos - (frame_pos + 6));
+                    try {
+                        int frame_num = std::stoi(frame_str);
+                        if (total_frames > 0 && progress_callback) {
+                            int percent = 80 + (frame_num * 20) / total_frames;
+                            percent = std::clamp(percent, 80, 99);
+                            progress_callback(percent, "Muxing video: frame " + std::to_string(frame_num) + " / " + std::to_string(total_frames));
+                        }
+                    } catch (...) {}
+                    output_acc = output_acc.substr(end_pos);
+                }
+            }
+            if (output_acc.length() > 1024) {
+                output_acc = output_acc.substr(output_acc.length() - 512);
+            }
+        }
+        
         WaitForSingleObject(pi.hProcess, INFINITE);
         DWORD exit_code = 0;
         if (GetExitCodeProcess(pi.hProcess, &exit_code)) {
@@ -650,10 +1155,43 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         }
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
+        CloseHandle(hReadPipe);
+    } else {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
     }
 #else
-    ffmpeg_cmd += " > /dev/null 2>&1";
-    int result = std::system(ffmpeg_cmd.c_str());
+    ffmpeg_cmd += " 2>&1"; // redirect stderr to stdout to capture it
+    FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
+    int result = -1;
+    if (pipe) {
+        char buffer[256];
+        std::string output_acc;
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            if (cancel_flag && *cancel_flag) {
+                break; // Break loop, pclose will wait.
+            }
+            output_acc += buffer;
+            size_t frame_pos = output_acc.rfind("frame=");
+            if (frame_pos != std::string::npos) {
+                size_t end_pos = output_acc.find("fps=", frame_pos);
+                if (end_pos != std::string::npos) {
+                    std::string frame_str = output_acc.substr(frame_pos + 6, end_pos - (frame_pos + 6));
+                    try {
+                        int frame_num = std::stoi(frame_str);
+                        if (total_frames > 0 && progress_callback) {
+                            int percent = 80 + (frame_num * 20) / total_frames;
+                            percent = std::clamp(percent, 80, 99);
+                            progress_callback(percent, "Muxing video: frame " + std::to_string(frame_num) + " / " + std::to_string(total_frames));
+                        }
+                    } catch (...) {}
+                    output_acc = output_acc.substr(end_pos);
+                }
+            }
+            if (output_acc.length() > 1024) output_acc = output_acc.substr(output_acc.length() - 512);
+        }
+        result = pclose(pipe);
+    }
 #endif
 
     if (result == 0) {

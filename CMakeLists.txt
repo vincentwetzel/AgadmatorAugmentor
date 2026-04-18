@@ -317,10 +317,14 @@ set_target_properties(extract_moves PROPERTIES
 
 # ── GUI Executable ───────────────────────────────────────────────────────────
 if(Qt6_FOUND AND BUILD_GUI)
-    add_executable(analyzer_gui WIN32
+    add_executable(augmentor_gui WIN32
         src/main_gui.cpp
         src/MainWindow.cpp
+        src/MainWindow_UI.cpp
+        src/MainWindow_Settings.cpp
         include/MainWindow.h
+        src/SettingsDialog.cpp
+        include/SettingsDialog.h
         src/VideoProcessorWorker.cpp
         include/VideoProcessorWorker.h
         src/ToggleSwitch.cpp
@@ -329,31 +333,31 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/ThemeManager.h
     )
 
-    target_include_directories(analyzer_gui PRIVATE
+    target_include_directories(augmentor_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
 
-    target_link_libraries(analyzer_gui PRIVATE
+    target_link_libraries(augmentor_gui PRIVATE
         chess_extraction_core
         chess_analysis_core
         Qt6::Widgets
         CLI11::CLI11
     )
 
-    enable_msvc_parallel_pdb_safety(analyzer_gui)
-    enable_msvc_compile_speedups(analyzer_gui)
-    enable_project_pch(analyzer_gui gui)
+    enable_msvc_parallel_pdb_safety(augmentor_gui)
+    enable_msvc_compile_speedups(augmentor_gui)
+    enable_project_pch(augmentor_gui gui)
 
     if(HAVE_SYSTEM_CUDA)
-        target_compile_definitions(analyzer_gui PRIVATE HAVE_SYSTEM_CUDA)
-        target_include_directories(analyzer_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
-        target_link_directories(analyzer_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(analyzer_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
-        target_link_libraries(analyzer_gui PRIVATE delayimp.lib
+        target_compile_definitions(augmentor_gui PRIVATE HAVE_SYSTEM_CUDA)
+        target_include_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
+        target_link_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
+        target_link_options(augmentor_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
+        target_link_libraries(augmentor_gui PRIVATE delayimp.lib
             cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
     endif()
 
-    set_target_properties(analyzer_gui PROPERTIES
+    set_target_properties(augmentor_gui PROPERTIES
         OUTPUT_NAME "ChessTube Analyzer"
         LINK_FLAGS "/STACK:8388608"
         AUTOMOC ON
@@ -362,7 +366,7 @@ if(Qt6_FOUND AND BUILD_GUI)
     )
 
     if(ENABLE_QT_RUNTIME_DEPLOYMENT)
-        add_runtime_deployment(analyzer_gui)
+        add_runtime_deployment(augmentor_gui)
     endif()
 endif()
 

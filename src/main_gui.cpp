@@ -79,6 +79,10 @@ int main(int argc, char *argv[]) {
     cliApp.add_option("--threads", ffmpeg_threads, "FFmpeg decode threads (1-16)")
         ->check(CLI::Range(1, 16));
 
+    int memory_limit = -1; // -1 means use saved/default
+    cliApp.add_option("--memory-limit", memory_limit, "Memory Limit in MB (0 = Unlimited)")
+        ->check(CLI::Range(0, 65536));
+
     bool show_version = false;
     cliApp.add_flag("--version,-v", show_version, "Show version and exit");
 
@@ -127,7 +131,8 @@ int main(int argc, char *argv[]) {
                                             stockfish_analysis_depth,
                                             QString::fromStdString(debug_level_str),
                                             QString::fromStdString(output),
-                                            QString::fromStdString(board_asset));
+                                            QString::fromStdString(board_asset),
+                                            memory_limit);
         return result;
     }
 

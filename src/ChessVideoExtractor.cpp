@@ -49,8 +49,9 @@ struct ChessVideoExtractor::ScratchBuffers {
 
 ChessVideoExtractor::ChessVideoExtractor(const std::string& board_asset_path,
                                           const std::string& red_board_asset_path,
-                                          DebugLevel debug_level)
-    : debug_level_(debug_level) {
+                                          DebugLevel debug_level,
+                                          int memory_limit_mb)
+    : debug_level_(debug_level), memory_limit_mb_(memory_limit_mb) {
     std::string safe_board_path = utils::get_safe_path(board_asset_path);
     board_template_ = cv::imread(safe_board_path);
     if (board_template_.empty()) {
@@ -245,6 +246,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // Initialize game data
     GameData data;
     data.fens.push_back(pos_ptr_->get_fen());
+    data.video_fens.push_back(pos_ptr_->get_fen());
 
     // Extract initial clocks
     ClockState init_clocks = extract_clocks(first_frame, board_template_, *geo_);
@@ -293,7 +295,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // ── Initialize frame prefetcher for async I/O hiding ─────────────────
     // The worker thread decodes frames (seek + read + crop + grayscale) in the
     // background while the main thread processes the current frame's results.
-    prefetcher_ = std::make_unique<FramePrefetcher>(safe_video_path);
+    prefetcher_ = std::make_unique<FramePrefetcher>(safe_video_path, memory_limit_mb_);
     prefetcher_->init(*geo_);
 
     // Kick off the first frames decode (non-blocking — starts background thread)
@@ -458,6 +460,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     // Rebuild libchess position from the correct FEN
                     pos_ptr_ = std::make_unique<libchess::Position>(data.fens.back());
 
+                    data.video_timestamps.push_back(t);
+                    data.video_fens.push_back(data.fens.back());
+                    data.video_moves.push_back("REVERT");
+
                     t = next_t;
                     continue;
                 }
@@ -585,6 +591,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             // ── All validations passed — accept the move ─────────────────────
             data.moves.push_back(move_uci);
             data.timestamps.push_back(t);
+            data.video_timestamps.push_back(t);
+            data.video_moves.push_back(move_uci);
 
             std::ostringstream move_log_ss;
             move_log_ss << utils::ts(elapsed()) << " [Branch " << branch_counter << "] Ply " << data.moves.size()
@@ -663,6 +671,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // Update FEN, board image history, and clock history
             data.fens.push_back(pos_ptr_->get_fen());
+            data.video_fens.push_back(pos_ptr_->get_fen());
             board_image_history.push_back(board_gray.clone());
             if (hash_computed) {
                 history_hashes.push_back(current_hash);

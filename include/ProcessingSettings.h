@@ -19,6 +19,7 @@ struct ProcessingSettings {
     QString stockfishPath;
     QString redBoardAssetPath;
     int debugLevel = 0; // 0: None, 1: Moves, 2: Full
+    int memoryLimitMB = 0; // 0 = Unlimited
 };
 
 } // namespace aa

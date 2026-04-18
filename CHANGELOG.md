@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Universal Tooltips:** Added comprehensive hover tooltips to all GUI elements to improve user experience.
 - **Universal Engine Variation Length:** The Stockfish variation length setting now universally applies to both the generated PGN files and the text overlays in the Analysis Video. Video text automatically scales down to fit longer variations.
 
+### Changed
+
+- **UI Clarity:** Renamed the ambiguous "Video Quality" setting to "Video Compression (CRF)" and updated the dropdown options to clearly explain the trade-off between file size and visual artifacts.
+
 ### Performance
 
 - **Golden Section Search for Board Localization** — Replaced linear 67-step scale sweep with O(log N) Golden Section Search (39 iterations: 15+12+12 vs 25+21+21). Linear fallback handles edge cases where both initial bracket points are out-of-bounds. **~42% fewer `matchTemplate` calls** per localization.

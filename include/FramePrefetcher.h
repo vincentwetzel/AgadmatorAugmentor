@@ -29,7 +29,7 @@ public:
         bool valid = false;
     };
 
-    explicit FramePrefetcher(const std::string& video_path);
+    explicit FramePrefetcher(const std::string& video_path, int memory_limit_mb = 0);
     ~FramePrefetcher();
 
     /// Initialize with board geometry. Must be called after locate_board().
@@ -56,6 +56,7 @@ private:
 
     std::string video_path_;
     BoardGeometry geo_;
+    int memory_limit_mb_ = 0;
     bool initialized_ = false;
 
     // Worker thread
@@ -69,7 +70,7 @@ private:
         double fps;
     };
     std::queue<Request> request_queue_;
-    const size_t max_queue_size_ = 3;
+    size_t max_queue_size_ = 3;
 
     // Results from worker thread
     std::queue<FrameData> result_queue_;

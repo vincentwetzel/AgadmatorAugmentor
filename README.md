@@ -15,7 +15,7 @@ This tool processes chess video files, identifies board states, and reconstructs
 - **PGN Export**: Generate PGN files with extracted moves, clock information, and analysis variations.
 - **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search depth, and engine variation length. The application can auto-find your Stockfish executable or you can specify a path.
 - **Custom Output**: Save analysis alongside the source video or in a custom directory
-- **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, best move arrows, and engine evaluation lines.
+- **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, dynamic best move arrows (scaled by evaluation strength), and engine evaluation lines.
 - **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
 
 ## Quick Start

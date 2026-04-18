@@ -41,7 +41,7 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 ## Long Term / Future Scope
 
 - [ ] **Parallel Agent Architecture** — Asynchronous processing agents for extraction, verification, and commentary.
-- [ ] **Analysis Video Agent** — Advanced overlay rendering and engine evaluation comparison.
+- [x] **Analysis Video Agent** — Advanced overlay rendering, dynamic engine evaluation arrows, and FFmpeg video compositing.
 
 ## Recently Completed
 
@@ -59,6 +59,7 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
   - [x] Add a dropdown for Stockfish "Best Lines" (MultiPV) with options: 1, 2, 3, or 4.
   - [x] Add a toggle switch to enable/disable Analysis Video generation.
   - [x] Add a control for Stockfish maximum analysis depth. Include an indicator for which setting is recommended based on the user's hardware.
+  - [x] Clarify video export settings (e.g., renaming "Video Quality" to "Video Compression (CRF)" with detailed tooltips).
 - [x] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
 - [x] **CLI Mode / Headless Execution (GUI Executable)** — Allow users to process videos directly from the command line.
   - [x] Accept a video file path as a CLI argument (e.g., `"ChessTube Analyzer.exe" video_to_process.mp4`).

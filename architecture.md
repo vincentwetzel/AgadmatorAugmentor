@@ -103,7 +103,7 @@ The PGN is saved alongside the source video or in a user-defined custom director
 
 ## 6. Overlay Augmentation
 
-The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video.
+The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
 
 ## 7. Source Module Organization
 

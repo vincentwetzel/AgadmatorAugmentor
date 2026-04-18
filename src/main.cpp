@@ -39,6 +39,9 @@ int main(int argc, char* argv[]) {
     int threads = 0;
     app.add_option("--threads", threads, "FFmpeg decode threads (1-16)")->check(CLI::Range(1, 16));
 
+    int memory_limit = 0;
+    app.add_option("--memory-limit", memory_limit, "Memory limit in MB (0 = Unlimited)")->check(CLI::Range(0, 65536));
+
     CLI11_PARSE(app, argc, argv);
 
     if (threads > 0) {
@@ -74,7 +77,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Starting C++ Extraction on: " << video_path << "\n\n";
 
     try {
-        aa::ChessVideoExtractor extractor(board_asset, "", debug_level);
+        aa::ChessVideoExtractor extractor(board_asset, "", debug_level, memory_limit);
         aa::GameData data = extractor.extract_moves_from_video(video_path, "");
 
         aa::PgnWriter pgn;
