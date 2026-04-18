@@ -154,14 +154,14 @@ void MainWindow::setupUi() {
 
     // Top layout (Video + Settings Cog)
     auto* fileLayout = new QHBoxLayout();
-    auto* videoLabel = new QLabel("Video File:");
-    videoLabel->setToolTip("Select the chess video file you want to process");
+    auto* videoLabel = new QLabel("Video File(s):");
+    videoLabel->setToolTip("Select the chess video file(s) you want to process");
     fileLayout->addWidget(videoLabel);
     videoPathEdit_ = new QLineEdit();
-    videoPathEdit_->setToolTip("Path to the selected video file");
+    videoPathEdit_->setToolTip("Path to the selected video file(s). Separate multiple files with a semicolon (;)");
     fileLayout->addWidget(videoPathEdit_);
     browseBtn_ = new QPushButton("Browse...");
-    browseBtn_->setToolTip("Open file dialog to select a video file");
+    browseBtn_->setToolTip("Open file dialog to select video file(s)");
     fileLayout->addWidget(browseBtn_);
 
     settingsBtn_ = new QPushButton();
@@ -238,8 +238,8 @@ void MainWindow::setupUi() {
         true
     ));
     togglesLayout->addWidget(createToggleRow(
-        "Enable Stockfish Engine Analysis",
-        "Enables Stockfish analysis to be included in the PGN and/or the Analysis Video",
+        "Generate PGN with Stockfish Analysis",
+        "Generates a PGN file of the game and includes Stockfish engine evaluations and variations for each move",
         stockfishToggle_,
         false
     ));
@@ -341,14 +341,14 @@ void MainWindow::setupUi() {
 
     // Stockfish Analysis Line Depth
     auto* analysisDepthLayout = new QHBoxLayout();
-    auto* analysisDepthLabel = new QLabel("PGN Variation Length:");
-    analysisDepthLabel->setToolTip("How many moves from each Stockfish line should be written into the PGN.");
+    auto* analysisDepthLabel = new QLabel("Engine Variation Length:");
+    analysisDepthLabel->setToolTip("How many moves from each Stockfish line should be included in the generated outputs.");
     analysisDepthLayout->addWidget(analysisDepthLabel);
     auto* analysisDepthSpinBox = new QSpinBox();
     analysisDepthSpinBox->setObjectName("analysisDepthSpinBox");
     analysisDepthSpinBox->setRange(1, 10);
     analysisDepthSpinBox->setValue(5);
-    analysisDepthSpinBox->setToolTip("Choose how many moves from each engine variation to include in the PGN output (1-10).");
+    analysisDepthSpinBox->setToolTip("Choose how many moves from each engine variation to include in the output (1-10).");
     analysisDepthLayout->addWidget(analysisDepthSpinBox);
     auto* analysisDepthHint = new QLabel("(Default: 5 moves)");
     analysisDepthHint->setToolTip("Default number of variation moves is 5");
@@ -393,19 +393,6 @@ void MainWindow::setupUi() {
     debugLevelLayout->addStretch();
     advancedGroupLayout->addLayout(debugLevelLayout);
 
-    // Red Board Template
-    auto* redBoardLayout = new QHBoxLayout();
-    auto* redBoardLabel = new QLabel("Red Board Template:");
-    redBoardLabel->setToolTip("Optional: Provide a red_board.png template for detecting streamer red square highlights");
-    redBoardLayout->addWidget(redBoardLabel);
-    redBoardPathEdit_ = new QLineEdit();
-    redBoardPathEdit_->setToolTip("Path to the red_board.png asset");
-    redBoardLayout->addWidget(redBoardPathEdit_);
-    auto* redBoardBtn = new QPushButton("Browse...");
-    redBoardBtn->setToolTip("Browse for red board template image");
-    redBoardLayout->addWidget(redBoardBtn);
-    advancedGroupLayout->addLayout(redBoardLayout);
-
     advancedLayout->addWidget(advancedGroup);
     advancedLayout->addStretch();
     tabWidget->addTab(advancedTab, "Advanced");
@@ -429,8 +416,6 @@ void MainWindow::setupUi() {
         }
     });
 
-    connect(redBoardBtn, &QPushButton::clicked, this, &MainWindow::browseRedBoard);
-    connect(redBoardPathEdit_, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
     connect(debugLevelComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
 
     // Log output
@@ -532,7 +517,6 @@ void MainWindow::loadSettings() {
     }
     
     debugLevelComboBox_->setCurrentIndex(settings.value("debugLevel", 0).toInt());
-    redBoardPathEdit_->setText(settings.value("redBoardPath", "").toString());
 
     themeComboBox_->setCurrentIndex(settings.value("themeMode", 0).toInt());
 
@@ -576,7 +560,6 @@ void MainWindow::saveSettings() {
     if (stockfishPathEdit) settings.setValue("stockfishPath", stockfishPathEdit->text());
 
     settings.setValue("debugLevel", debugLevelComboBox_->currentIndex());
-    settings.setValue("redBoardPath", redBoardPathEdit_->text());
 
     auto* sameAsSourceRadio = findChild<QRadioButton*>("sameAsSourceRadio");
     auto* customDirEdit = findChild<QLineEdit*>("customDirEdit");
@@ -586,18 +569,27 @@ void MainWindow::saveSettings() {
 
 ProcessingSettings MainWindow::gatherSettings() const {
     ProcessingSettings s;
-    s.videoPath = videoPathEdit_->text();
+    QString currentVideo = property("currentVideo").toString();
+    if (currentVideo.isEmpty()) {
+        currentVideo = videoPathEdit_->text().split(";", Qt::SkipEmptyParts).value(0);
+    }
+    s.videoPath = currentVideo.trimmed();
     
     // Robust path resolution for board asset
-    QString assetPath = "assets/board/board.png";
-    if (QFileInfo::exists(assetPath)) {
-        s.boardAssetPath = assetPath;
+    QString boardOverride = property("headlessBoardAssetOverride").toString();
+    if (!boardOverride.isEmpty()) {
+        s.boardAssetPath = boardOverride;
     } else {
-        QString buildFallback = QDir(QCoreApplication::applicationDirPath()).filePath("../../" + assetPath);
-        if (QFileInfo::exists(buildFallback)) {
-            s.boardAssetPath = buildFallback;
+        QString assetPath = "assets/board/board.png";
+        if (QFileInfo::exists(assetPath)) {
+            s.boardAssetPath = assetPath;
         } else {
-            s.boardAssetPath = assetPath; // Fallback
+            QString buildFallback = QDir(QCoreApplication::applicationDirPath()).filePath("../../" + assetPath);
+            if (QFileInfo::exists(buildFallback)) {
+                s.boardAssetPath = buildFallback;
+            } else {
+                s.boardAssetPath = assetPath; // Fallback
+            }
         }
     }
     
@@ -620,15 +612,27 @@ ProcessingSettings MainWindow::gatherSettings() const {
         baseDir = customDirEdit->text();
     }
     
-    QString baseName = "analysis";
-    if (!s.videoPath.isEmpty()) {
-        baseName = QFileInfo(s.videoPath).completeBaseName();
+    QString outOverride = property("headlessOutputOverride").toString();
+    if (!outOverride.isEmpty()) {
+        QFileInfo outInfo(outOverride);
+        if (outInfo.isDir() || outOverride.endsWith("/") || outOverride.endsWith("\\")) {
+            baseDir = outOverride;
+        } else {
+            s.outputPath = outOverride;
+        }
     }
-    s.outputPath = QDir(baseDir).filePath(baseName + ".pgn");
-    QDir().mkpath(baseDir); // Ensure output directory exists
+    
+    if (s.outputPath.isEmpty()) {
+        QString baseName = "analysis";
+        if (!s.videoPath.isEmpty()) {
+            baseName = QFileInfo(s.videoPath).completeBaseName();
+        }
+        s.outputPath = QDir(baseDir).filePath(baseName + ".pgn");
+        QDir().mkpath(baseDir); // Ensure output directory exists
+    }
     
     s.generatePgn = pgnExportToggle_->isChecked() || stockfishToggle_->isChecked();
-    s.enableStockfish = stockfishToggle_->isChecked() || analysisVideoToggle_->isChecked();
+    s.enableStockfish = stockfishToggle_->isChecked();
     s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
     s.multiPv = multiPvComboBox_->currentText().toInt();
     s.ffmpegThreads = threadSpinBox_->value();
@@ -642,7 +646,6 @@ ProcessingSettings MainWindow::gatherSettings() const {
     auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
     s.stockfishPath = stockfishPathEdit ? stockfishPathEdit->text() : "";
     s.debugLevel = debugLevelComboBox_->currentIndex();
-    s.redBoardAssetPath = redBoardPathEdit_->text();
     return s;
 }
 
@@ -667,10 +670,9 @@ void MainWindow::applySettingsToUi(const ProcessingSettings& settings) {
     auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit");
     if (stockfishPathEdit) stockfishPathEdit->setText(settings.stockfishPath);
     debugLevelComboBox_->setCurrentIndex(settings.debugLevel);
-    redBoardPathEdit_->setText(settings.redBoardAssetPath);
 }
 
-int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int analysisDepth, const QString& redBoard, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride) {
+int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int analysisDepth, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride) {
     videoPathEdit_->setText(videoPath);
     // Load persisted settings from INI file and apply to UI.
     // This ensures headless mode uses the same settings as the GUI.
@@ -691,10 +693,6 @@ int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int s
     auto* analysisDepthSpinBox = findChild<QSpinBox*>("analysisDepthSpinBox");
     if (analysisDepth > 0 && analysisDepthSpinBox) analysisDepthSpinBox->setValue(analysisDepth);
 
-    if (!redBoard.isEmpty() && redBoardPathEdit_) {
-        redBoardPathEdit_->setText(redBoard);
-    }
-
     if (!debugLevelStr.isEmpty() && debugLevelComboBox_) {
         if (debugLevelStr == "NONE") debugLevelComboBox_->setCurrentIndex(0);
         else if (debugLevelStr == "MOVES") debugLevelComboBox_->setCurrentIndex(1);
@@ -707,36 +705,36 @@ int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int s
     appendLog("=== Headless Mode ===");
     appendLog("Processing: " + videoPath);
 
-    // Build processing settings
-    ProcessingSettings settings = gatherSettings();
-    settings.videoPath = videoPath;
+    setProperty("headlessOutputOverride", outputOverride);
+    setProperty("headlessBoardAssetOverride", boardAssetOverride);
+    
+    QStringList videos = videoPath.split(";", Qt::SkipEmptyParts);
+    if (videos.isEmpty()) return 1;
+    
+    setProperty("currentVideo", videos.takeFirst().trimmed());
+    setProperty("pendingVideos", videos);
 
-    if (!outputOverride.isEmpty()) {
-        QFileInfo outInfo(outputOverride);
-        if (outInfo.isDir() || outputOverride.endsWith("/") || outputOverride.endsWith("\\")) {
-            settings.outputPath = QDir(outputOverride).filePath(QFileInfo(videoPath).completeBaseName() + ".pgn");
-        } else {
-            settings.outputPath = outputOverride;
-        }
-    }
-    if (!boardAssetOverride.isEmpty()) {
-        settings.boardAssetPath = boardAssetOverride;
-    }
+    // Build processing settings using the updated properties
+    ProcessingSettings settings = gatherSettings();
 
     // Use QEventLoop to wait for worker to finish
     QEventLoop loop;
     int resultCode = 0;
 
     QMetaObject::Connection conn1 = connect(worker_, &VideoProcessorWorker::finished, this, [&]() {
-        appendLog("Headless processing finished successfully.");
-        resultCode = 0;
-        loop.quit();
+        if (property("currentVideo").toString().isEmpty()) {
+            appendLog("Headless batch processing finished successfully.");
+            resultCode = 0;
+            loop.quit();
+        }
     });
 
     QMetaObject::Connection conn2 = connect(worker_, &VideoProcessorWorker::error, this, [&](const QString& msg) {
-        appendLog("Headless processing failed: " + msg);
-        resultCode = 1;
-        loop.quit();
+        if (property("currentVideo").toString().isEmpty()) {
+            appendLog("Headless batch processing failed: " + msg);
+            resultCode = 1;
+            loop.quit();
+        }
     });
 
     // Start processing
@@ -856,28 +854,14 @@ void MainWindow::browseStockfish() {
     }
 }
 
-void MainWindow::browseRedBoard() {
-    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
-    QString lastDir = settings.value("lastRedBoardDir", QDir::homePath()).toString();
-
-    QString fileName = QFileDialog::getOpenFileName(this, "Select Red Board Template", lastDir, "Image Files (*.png *.jpg *.jpeg)");
-    if (!fileName.isEmpty()) {
-        if (redBoardPathEdit_) {
-            redBoardPathEdit_->setText(fileName);
-        }
-        settings.setValue("lastRedBoardDir", QFileInfo(fileName).absolutePath());
-        saveSettings();
-    }
-}
-
 void MainWindow::browseVideo() {
     QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
     QString lastDir = settings.value("lastVideoDir", QDir::homePath()).toString();
 
-    QString fileName = QFileDialog::getOpenFileName(this, "Select Chess Video", lastDir, "Video Files (*.mp4 *.mkv *.avi)");
-    if (!fileName.isEmpty()) {
-        videoPathEdit_->setText(fileName);
-        settings.setValue("lastVideoDir", QFileInfo(fileName).absolutePath());
+    QStringList fileNames = QFileDialog::getOpenFileNames(this, "Select Chess Video(s)", lastDir, "Video Files (*.mp4 *.mkv *.avi);;All Files (*)");
+    if (!fileNames.isEmpty()) {
+        videoPathEdit_->setText(fileNames.join(";"));
+        settings.setValue("lastVideoDir", QFileInfo(fileNames.first()).absolutePath());
     }
 }
 
@@ -888,12 +872,19 @@ void MainWindow::onStartCancelClicked() {
         cancelRequested_ = true;
         startCancelBtn_->setEnabled(false); // Disable button until worker confirms cancellation
         startCancelBtn_->setText("Cancelling...");
+        setProperty("pendingVideos", QStringList());
     } else {
         // --- START ---
         if (videoPathEdit_->text().isEmpty()) {
             appendLog("Error: Please select a video file.");
             return;
         }
+
+        QStringList videos = videoPathEdit_->text().split(";", Qt::SkipEmptyParts);
+        if (videos.isEmpty()) return;
+        
+        setProperty("currentVideo", videos.takeFirst().trimmed());
+        setProperty("pendingVideos", videos);
 
         auto settings = gatherSettings();
         if (!settings.generatePgn && !settings.enableStockfish && !settings.generateAnalysisVideo) {
@@ -925,23 +916,59 @@ void MainWindow::updateProgress(int percentage) { progressBar_->setValue(percent
 void MainWindow::processingFinished() {
     if (cancelRequested_) {
         appendLog("Processing cancelled.");
+        setProperty("pendingVideos", QStringList());
+        setProperty("currentVideo", QString());
     } else {
-        appendLog("Processing finished successfully.");
+        appendLog("Processing finished successfully for: " + property("currentVideo").toString());
+        
+        QStringList pending = property("pendingVideos").toStringList();
+        if (!pending.isEmpty()) {
+            QString nextVideo = pending.takeFirst().trimmed();
+            setProperty("pendingVideos", pending);
+            setProperty("currentVideo", nextVideo);
+            
+            appendLog("Starting next video: " + nextVideo);
+            progressBar_->setValue(0);
+            cancelRequested_ = false;
+            
+            auto settings = gatherSettings();
+            QMetaObject::invokeMethod(worker_, "process", Q_ARG(ProcessingSettings, settings), Q_ARG(std::atomic<bool>*, &cancelRequested_));
+            return; // Skip UI reset until full batch is done
+        }
+        
+        appendLog("All videos processed successfully.");
         progressBar_->setValue(100);
     }
     isProcessing_ = false;
     startCancelBtn_->setText("Start Processing");
     startCancelBtn_->setEnabled(true);
     browseBtn_->setEnabled(true);
+    setProperty("currentVideo", QString());
     QCoreApplication::processEvents();
 }
 
 void MainWindow::processingError(const QString& errorMessage) {
-    isProcessing_ = false;
     appendLog("Error: " + errorMessage);
+    
+    QStringList pending = property("pendingVideos").toStringList();
+    if (!pending.isEmpty() && !cancelRequested_) {
+        QString nextVideo = pending.takeFirst().trimmed();
+        setProperty("pendingVideos", pending);
+        setProperty("currentVideo", nextVideo);
+        
+        appendLog("Skipping to next video: " + nextVideo);
+        progressBar_->setValue(0);
+        
+        auto settings = gatherSettings();
+        QMetaObject::invokeMethod(worker_, "process", Q_ARG(ProcessingSettings, settings), Q_ARG(std::atomic<bool>*, &cancelRequested_));
+        return; // Skip UI reset
+    }
+    
+    isProcessing_ = false;
     startCancelBtn_->setText("Start Processing");
     startCancelBtn_->setEnabled(true);
     browseBtn_->setEnabled(true);
+    setProperty("currentVideo", QString());
 }
 
 void MainWindow::togglePgnExport(bool checked) {
@@ -950,7 +977,7 @@ void MainWindow::togglePgnExport(bool checked) {
 }
 
 void MainWindow::toggleStockfish(bool checked) {
-    appendLog(checked ? "Stockfish analysis enabled" : "Stockfish analysis disabled");
+    appendLog(checked ? "PGN with Stockfish analysis enabled" : "PGN with Stockfish analysis disabled");
     saveSettings();
 }
 

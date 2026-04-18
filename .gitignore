@@ -29,7 +29,8 @@ output/
 sf_test.txt
 sf_test_out.txt
 vcpkg_output.txt
-cpp/test_pgn_parser.*
+test_pgn_parser.*
+settings.ini
 
 # IDE
 .vscode/

@@ -14,9 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GUI Application:** Fully featured Qt6-based interface with settings persistence, theme manager (Light/Dark/System), and headless CLI execution mode.
 - **Analysis Video Generation:** Added `AnalysisVideoGenerator` class to generate a copy of the source video with a synchronized analysis board overlay in the top-right corner. This feature can be toggled in the GUI.
 - Comprehensive `spec.md` documenting all functional and non-functional requirements
+- **Streamlined GUI:** Removed the Red Board Template file picker from the GUI. The backend now relies entirely on its robust dynamic fallback threshold for detecting streamer red square highlights.
 - `changelog.md` for tracking project history
 - **File size soft limit** convention (~400 lines) documented in TODO.md
 - **Universal Tooltips:** Added comprehensive hover tooltips to all GUI elements to improve user experience.
+- **Universal Engine Variation Length:** The Stockfish variation length setting now universally applies to both the generated PGN files and the text overlays in the Analysis Video. Video text automatically scales down to fit longer variations.
 
 ### Performance
 

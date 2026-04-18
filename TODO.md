@@ -35,6 +35,13 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 - [ ] **Piece Type Classification** — Utilize contour matching or a small CNN to identify piece types.
 - [ ] **Audio Integration** — Implement audio classification using templates in `sample_sounds/` to supplement visual move detection.
 - [ ] **Commentary Agent** — Transcribe audio feed and correlate with visual arrows/highlights.
+- [ ] **Detection Tuning** — Tune detection thresholds for higher recall.
+- [ ] **OCR Improvements** — Improve OCR reliability with better preprocessing.
+
+## Long Term / Future Scope
+
+- [ ] **Parallel Agent Architecture** — Asynchronous processing agents for extraction, verification, and commentary.
+- [ ] **Analysis Video Agent** — Advanced overlay rendering and engine evaluation comparison.
 
 ## Recently Completed
 

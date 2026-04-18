@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <algorithm>
 #include <map>
+#include <sstream>
 
 namespace aa {
 
@@ -48,7 +49,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
         ChessVideoExtractor extractor(
             settings.boardAssetPath.toStdString(),
-            settings.redBoardAssetPath.toStdString(),
+            "", // Red board template GUI option removed, backend will use fallback
             static_cast<DebugLevel>(settings.debugLevel)
         );
 
@@ -91,6 +92,22 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             if (cancelFlag && *cancelFlag) {
                 emit finished();
                 return;
+            }
+            
+            // Truncate PV lines to the requested analysis depth so it universally applies to both PGN and Video outputs
+            for (auto& result : stockfishResults) {
+                for (auto& line : result.lines) {
+                    std::istringstream pv_stream(line.pv_line);
+                    std::string move_uci;
+                    std::string truncated_pv;
+                    int count = 0;
+                    while (count < settings.stockfishAnalysisDepth && (pv_stream >> move_uci)) {
+                        if (!truncated_pv.empty()) truncated_pv += " ";
+                        truncated_pv += move_uci;
+                        count++;
+                    }
+                    line.pv_line = truncated_pv;
+                }
             }
             
             emit logMessage("Stockfish analysis complete. Analyzed " + 
@@ -147,8 +164,8 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
             }
 
-            // Inject Stockfish analysis if available (decoupled from PGN generation)
-            if (!stockfishResults.empty()) {
+            // Inject Stockfish analysis if requested for PGN
+            if (settings.enableStockfish && !stockfishResults.empty()) {
                 pgn.add_stockfish_analysis(stockfishResults, settings.stockfishAnalysisDepth);
             }
 

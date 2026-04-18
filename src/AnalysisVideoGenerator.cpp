@@ -22,6 +22,13 @@
 #include <cstdint>
 #include <mutex>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace aa {
 
 namespace { // Anonymous namespace for helper functions
@@ -363,7 +370,17 @@ void AnalysisVideoGenerator::render_analysis_text(cv::Mat& image,
         cv::Scalar color = first_line ? cv::Scalar(144, 238, 144) : cv::Scalar(220, 220, 220);
         int thickness = first_line ? 2 : 1;
 
-        cv::putText(image, text, cv::Point(15, text_y_pos), cv::FONT_HERSHEY_SIMPLEX, 0.6, color, thickness, cv::LINE_AA);
+        // Auto-adapt font size so long variations fit within the designated text area
+        double font_scale = 0.6;
+        int baseline = 0;
+        cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+        
+        while (text_size.width > width - 30 && font_scale > 0.3) {
+            font_scale -= 0.05;
+            text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+        }
+
+        cv::putText(image, text, cv::Point(15, text_y_pos), cv::FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv::LINE_AA);
         text_y_pos += 25;
         first_line = false;
     }
@@ -612,11 +629,32 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
 #ifdef _WIN32
     ffmpeg_cmd += " > nul 2>&1";
+    
+    // Execute silently on Windows without flashing a cmd.exe window
+    std::string cmd = "cmd.exe /c " + ffmpeg_cmd;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    std::vector<char> cmd_buffer(cmd.begin(), cmd.end());
+    cmd_buffer.push_back('\0');
+
+    int result = -1;
+    if (CreateProcessA(NULL, cmd_buffer.data(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(pi.hProcess, &exit_code)) {
+            result = static_cast<int>(exit_code);
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
 #else
     ffmpeg_cmd += " > /dev/null 2>&1";
-#endif
-
     int result = std::system(ffmpeg_cmd.c_str());
+#endif
 
     if (result == 0) {
         if (progress_callback) progress_callback(100, "Debug video generation complete.");

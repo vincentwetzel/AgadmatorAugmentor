@@ -53,9 +53,6 @@ int main(int argc, char *argv[]) {
     std::string output = "";
     cliApp.add_option("--output", output, "Path to save the extracted data (PGN/Video)");
 
-    std::string red_board_asset;
-    cliApp.add_option("--red-board", red_board_asset, "Path to red board template image")->check(CLI::ExistingFile);
-
     std::string debug_level_str = "";
     cliApp.add_option("--debug-level", debug_level_str, "Debug image generation (NONE, MOVES, FULL)")
         ->check(CLI::IsMember({"NONE", "MOVES", "FULL"}));
@@ -128,7 +125,6 @@ int main(int argc, char *argv[]) {
                                             ffmpeg_threads, 
                                             stockfish_depth, 
                                             stockfish_analysis_depth,
-                                            QString::fromStdString(red_board_asset),
                                             QString::fromStdString(debug_level_str),
                                             QString::fromStdString(output),
                                             QString::fromStdString(board_asset));

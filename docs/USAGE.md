@@ -29,10 +29,10 @@ You can run the analysis using either the GUI or the command-line tools.
 ### GUI Application (`ChessTube Analyzer.exe`)
 
 Simply run `ChessTube Analyzer.exe` from the `build/Release` directory. The GUI provides an intuitive interface to:
-- Browse for a video file.
+- Browse for one or multiple video files.
 - Select an output directory.
 - Toggle PGN and Stockfish analysis.
-- Configure Stockfish settings (MultiPV, search depth, analysis line length).
+- Configure Stockfish settings (MultiPV, search depth, engine variation length).
 - Automatically find or manually specify the path to your Stockfish executable.
 - Start the analysis and monitor progress.
 
@@ -42,7 +42,6 @@ Both executables can be used from the command line for automated processing. The
 
 #### Basic Usage
 
-Process a video using saved or default settings.
 
 ```cmd
 cd build\Release

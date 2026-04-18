@@ -13,7 +13,7 @@ This tool processes chess video files, identifies board states, and reconstructs
 - **UI Detection**: Automatic detection of yellow highlights, arrows, clocks, and hover boxes
 - **Clock Recognition**: Hu Moments-based OCR for clock time extraction
 - **PGN Export**: Generate PGN files with extracted moves, clock information, and analysis variations.
-- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search depth, and analysis line length. The application can auto-find your Stockfish executable or you can specify a path.
+- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search depth, and engine variation length. The application can auto-find your Stockfish executable or you can specify a path.
 - **Custom Output**: Save analysis alongside the source video or in a custom directory
 - **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, best move arrows, and engine evaluation lines.
 - **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
@@ -51,7 +51,7 @@ cd build\Release
 **CLI Mode:**
 ```cmd
 cd build\Release
-extract_moves.exe "path\to\video.mp4" --board-asset "path\to\board.png"
+"ChessTube Analyzer.exe" "path\to\video1.mp4;path\to\video2.mp4" --board-asset "path\to\board.png"
 ```
 
 ### Test
