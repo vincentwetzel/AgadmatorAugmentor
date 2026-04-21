@@ -28,19 +28,63 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 | CLI Mode / Headless | ✅ Implemented |
 | Settings Persistence | ✅ QSettings |
 | UI Tooltips | ✅ All elements have hover hints |
+| Overlay Templates | ✅ Built-in + custom templates with queue-level selection |
 
 ## Remaining (Roadmap to v1.0.0)
 
+- [x] **NSIS Installer Architecture** — Move away from portable mode. Centralize configuration to `%APPDATA%`, generated outputs to `Documents`, and debug image dumps to `%TEMP%`.
 - [ ] **Promotion Detection** — Detect and handle pawn promotion dialogs in the UI.
 - [ ] **Piece Type Classification** — Utilize contour matching or a small CNN to identify piece types.
-- [ ] **Audio Integration** — Implement audio classification using templates in `sample_sounds/` to supplement visual move detection.
-- [ ] **Commentary Agent** — Transcribe audio feed and correlate with visual arrows/highlights.
 - [ ] **Detection Tuning** — Tune detection thresholds for higher recall.
 - [ ] **OCR Improvements** — Improve OCR reliability with better preprocessing.
 
+## Feature Roadmap: WYSIWYG Overlay Editor
+
+This plan outlines the steps to replace hardcoded overlay positions with a drag-and-drop visual editor.
+
+### Phase 1: Configuration Data Model
+- [x] Define `OverlayElement` struct (`enabled`, `x_percent`, `y_percent`, `scale`).
+- [x] Define `VideoOverlayConfig` struct containing elements for `board`, `evalBar`, and `pvText`.
+- [x] Route overlay layout through `ProcessingSettings::overlayConfig` instead of the old global position/size enums.
+
+### Phase 2: Interactive Editor UI (Qt6 Graphics View)
+- [x] Create `DraggableOverlay` class (inheriting `QGraphicsPixmapItem`) for movable elements.
+- [x] Create `OverlayEditorDialog` with a `QGraphicsScene` and `QGraphicsView`.
+- [x] Use a static reference screenshot as the positioning canvas.
+- [x] Add controls to load a reference screenshot, toggle elements on/off, and save configurations.
+
+### Phase 3: Settings UI Integration
+- [x] Remove the old position/size UI controls from `SettingsDialog`.
+- [x] Move template editing into a dedicated "Manage Templates" workflow from the main window.
+- [x] Ensure the selected queue-item template passes its `VideoOverlayConfig` into processing.
+
+### Phase 4: FFmpeg Compositing Updates
+- [x] Update `AnalysisVideoGenerator` to read `VideoOverlayConfig`.
+- [x] Modify the FFmpeg filter graph string generation to map `x_percent` and `y_percent` to absolute video coordinates (e.g., `x=0.75*(W-w):y=0.05*(H-h)`).
+
+## Feature Roadmap: Channel-Specific Overlay Templates
+This plan outlines the overhaul of the overlay system to support per-channel templates with reference screenshots and auto-detection.
+
+### Phase 1: Template Data Model & Storage
+- [x] Define `OverlayTemplate` struct (Name, Regex/Keywords, Screenshot Path, `VideoOverlayConfig`).
+- [x] Create a `TemplateManager` to handle saving/loading templates to `%APPDATA%\ChessTubeAnalyzer\templates`.
+- [x] Bundle default templates (agadmator, etc.) and their reference screenshots with the application (e.g., via Qt Resources or installer) to be copied to AppData on first run.
+
+### Phase 2: Queue UI & Auto-Detection
+- [x] Upgrade the `MainWindow` queue row UI with a custom item widget to support per-item controls.
+- [x] Add a per-video "Template" dropdown to the queue.
+- [x] Implement filename parsing (e.g., `[agadmator's Chess Channel]`) to auto-select the correct template when a video is added to the queue.
+- [x] Ensure the selected template configuration is passed correctly to the `VideoProcessorWorker`.
+
+### Phase 3: Overlay Editor Revamp
+- [x] Remove the heavy video playback components (`QMediaPlayer`, `QGraphicsVideoItem`) from `OverlayEditorDialog` and remove QtMultimedia from CMake.
+- [x] Replace the background with a static `QGraphicsPixmapItem` displaying the template's reference screenshot.
+- [x] Add UI controls to the editor to switch between templates, create new templates, load custom screenshots, and save overrides.
+- [x] Update `SettingsDialog` and `MainWindow` to reflect the new "Manage Templates" workflow.
+
 ## Long Term / Future Scope
 
-- [ ] **Parallel Agent Architecture** — Asynchronous processing agents for extraction, verification, and commentary.
+- [x] **Parallel Agent Architecture** — Asynchronous processing agents for extraction and verification.
 - [x] **Analysis Video Agent** — Advanced overlay rendering, dynamic engine evaluation arrows, and FFmpeg video compositing.
 
 ## Recently Completed
@@ -84,6 +128,7 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 ```
 
 Settings (PGN toggle, Stockfish toggle, MultiPV, threads) are persisted across sessions via `QSettings` and are automatically loaded in headless mode.
+Overlay templates are stored separately under `%APPDATA%\ChessTubeAnalyzer\templates` and are reused by both GUI and analysis-video generation.
 
 ## Test Control Panel
 
@@ -107,7 +152,7 @@ Toggle tests in `tests/test_ui_detectors.cpp`:
 
 - **File Size Soft Limit:** Keep source files under ~400 lines. Split along natural boundaries when possible. Orchestrator and complex algorithms may exceed it.
 - **Every test must have a `#define` toggle** in the control panel above.
-- **Robust Path Resolution:** Assets and outputs must resolve paths via `QCoreApplication::applicationDirPath()` fallbacks and `QDir::mkpath()` to prevent CWD/missing folder crashes.
+- **Robust Path Resolution:** Assets should resolve relative to `QCoreApplication::applicationDirPath()`. User data, outputs, and settings MUST go to `%APPDATA%` (via `QSettings`), `%TEMP%` (via `std::filesystem::temp_directory_path`), or the user's `Documents` folder (via `QStandardPaths`) to strictly support NSIS installations without write-permission crashes.
 
 ## UI Requirements
 

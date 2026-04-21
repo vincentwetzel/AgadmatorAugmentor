@@ -1,0 +1,21 @@
+{
+    "id": "generic",
+    "name": "Generic Default",
+    "screenshotFilename": "generic_ref.png",
+    "isBuiltIn": true,
+    "keywords": [],
+    "config": {
+        "boardEnabled": true,
+        "boardScale": 0.3,
+        "boardX": 1.0,
+        "boardY": 0.0,
+        "evalBarEnabled": true,
+        "evalBarScale": 1.0,
+        "evalBarX": 0.0,
+        "evalBarY": 0.0,
+        "pvTextEnabled": true,
+        "pvTextScale": 1.0,
+        "pvTextX": 0.5,
+        "pvTextY": 0.95
+    }
+}

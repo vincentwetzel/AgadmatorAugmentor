@@ -733,6 +733,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                                                      const std::vector<double>& timestamps,
                                                      const std::vector<StockfishResult>& stockfish_results,
                                                      int arrow_thickness_pct,
+                                                     const VideoOverlayConfig& overlay_config,
                                                      std::atomic<bool>* cancel_flag,
                                                      std::function<void(int, const std::string&)> progress_callback) {
     cv::VideoCapture cap(input_video_path);
@@ -756,8 +757,6 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::string aCodec = "copy";
     std::string resolution = "Source Resolution";
     std::string crf = "23";
-    std::string position = "Top-Right";
-    std::string overlay_size = "30";
     std::string arrows_target = "Debug Board";
 
     // Dynamically unpack pipe-delimited parameters safely
@@ -778,8 +777,6 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (tokens.size() > 1) aCodec = tokens[1];
         if (tokens.size() > 2) resolution = tokens[2];
         if (tokens.size() > 3) crf = tokens[3];
-        if (tokens.size() > 4) position = tokens[4];
-        if (tokens.size() > 5) overlay_size = tokens[5];
         if (tokens.size() > 6) arrows_target = tokens[6];
     }
 
@@ -794,17 +791,18 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     bool draw_debug_arrows = (arrows_target == "Debug Board" || arrows_target == "Both");
     bool draw_main_arrows = (arrows_target == "Main Board" || arrows_target == "Both");
 
-    double size_pct = 0.30;
-    try { size_pct = std::stod(overlay_size) / 100.0; } catch(...) {}
-
-    // Define overlay dimensions
-    int debug_h = static_cast<int>(height * size_pct);
+    // Define dynamic overlay dimensions based on user config scale
+    int debug_h = static_cast<int>(height * overlay_config.board.scale);
     debug_h += debug_h % 2; // Ensure even dimension
     int debug_w = (board_template_.cols * debug_h) / board_template_.rows;
     debug_w += debug_w % 2; // Ensure even dimension
-    int text_w = 400;
-    int bar_w = 30; // Widened from 20 to 30 for better visibility
+    int text_w = static_cast<int>(400 * overlay_config.pvText.scale);
+    text_w += text_w % 2;
+    int bar_w = static_cast<int>(30 * overlay_config.evalBar.scale);
+    bar_w += bar_w % 2;
     int safe_height = height + (height % 2); // Ensure even dimension
+    int bar_h = static_cast<int>(safe_height * overlay_config.evalBar.scale);
+    bar_h += bar_h % 2;
 
     // Pre-scale assets to target resolution to avoid resizing inside the render loop
     cv::Mat scaled_board;
@@ -863,14 +861,18 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
         std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".bmp";
 
-        board_txt << "file '" << board_img << "'\n";
-        board_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
-
-        text_txt << "file '" << text_img << "'\n";
-        text_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
-
-        bar_txt << "file '" << bar_img << "'\n";
-        bar_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        if (overlay_config.board.enabled) {
+            board_txt << "file '" << board_img << "'\n";
+            board_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        }
+        if (overlay_config.pvText.enabled) {
+            text_txt << "file '" << text_img << "'\n";
+            text_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        }
+        if (overlay_config.evalBar.enabled) {
+            bar_txt << "file '" << bar_img << "'\n";
+            bar_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        }
         
         if (draw_main_arrows) {
             main_arrows_txt << "file '" << main_arrows_img << "'\n";
@@ -880,9 +882,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
     if (!states_to_render.empty()) {
         size_t last_idx = states_to_render.back();
-        board_txt << "file 'board_" << last_idx << ".bmp'\n";
-        text_txt << "file 'text_" << last_idx << ".bmp'\n";
-        bar_txt << "file 'bar_" << last_idx << ".bmp'\n";
+        if (overlay_config.board.enabled) board_txt << "file 'board_" << last_idx << ".bmp'\n";
+        if (overlay_config.pvText.enabled) text_txt << "file 'text_" << last_idx << ".bmp'\n";
+        if (overlay_config.evalBar.enabled) bar_txt << "file 'bar_" << last_idx << ".bmp'\n";
         if (draw_main_arrows) {
             main_arrows_txt << "file 'main_arrows_" << last_idx << ".bmp'\n";
         }
@@ -927,15 +929,22 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
                     // --- Render Analysis Text ---
                     cv::Mat cached_text;
-                    render_analysis_text(cached_text, current_analysis, current_fen, text_w, debug_h);
+                    if (overlay_config.pvText.enabled) {
+                        render_analysis_text(cached_text, current_analysis, current_fen, text_w, debug_h);
+                    }
 
                     // --- Render Debug Board ---
                     std::optional<StockfishResult> board_analysis = draw_debug_arrows ? current_analysis : std::nullopt;
-                    cv::Mat cached_board = render_board_state(current_fen, board_analysis, arrow_thickness_pct, scaled_board, scaled_pieces);
+                    cv::Mat cached_board;
+                    if (overlay_config.board.enabled) {
+                        cached_board = render_board_state(current_fen, board_analysis, arrow_thickness_pct, scaled_board, scaled_pieces);
+                    }
 
                     // --- Render Analysis Bar ---
                     cv::Mat cached_bar;
-                    render_analysis_bar(cached_bar, current_analysis, current_fen, bar_w, safe_height);
+                    if (overlay_config.evalBar.enabled) {
+                        render_analysis_bar(cached_bar, current_analysis, current_fen, bar_w, bar_h);
+                    }
 
                     // --- Render Main Arrows ---
                     cv::Mat cached_main_arrows;
@@ -953,9 +962,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                         // Keep temp image writes efficient and predictable; too many concurrent large writes
                         // can become slower than the CPU rendering work itself.
                         std::lock_guard<std::mutex> lock(io_mutex);
-                        write_ok = write_bmp_fast(temp_dir / board_img, cached_board) &&
-                                   write_bmp_fast(temp_dir / text_img, cached_text) &&
-                                   write_bmp_fast(temp_dir / bar_img, cached_bar);
+                        if (overlay_config.board.enabled) write_ok &= write_bmp_fast(temp_dir / board_img, cached_board);
+                        if (overlay_config.pvText.enabled) write_ok &= write_bmp_fast(temp_dir / text_img, cached_text);
+                        if (overlay_config.evalBar.enabled) write_ok &= write_bmp_fast(temp_dir / bar_img, cached_bar);
                         if (write_ok && draw_main_arrows) {
                             write_ok = write_bmp_fast(temp_dir / main_arrows_img, cached_main_arrows);
                         }
@@ -996,66 +1005,79 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Step 2: Have FFmpeg perform the composition
     if (progress_callback) progress_callback(80, "Compositing video streams with FFmpeg...");
 
-    int overlay_y_pos = 20;
-    if (position.find("Bottom") != std::string::npos) {
-        overlay_y_pos = std::max(0, height - debug_h - 20);
-    }
-    overlay_y_pos -= overlay_y_pos % 2; // Ensure even dimension for YUV420
-
-    int board_x_pos = 0;
-    int text_x_pos = 0;
-    if (position.find("Left") != std::string::npos) {
-        board_x_pos = 20;
-        text_x_pos = board_x_pos + debug_w + 20;
-    } else { // Right
-        board_x_pos = std::max(0, width - debug_w - 20);
-        text_x_pos = std::max(0, board_x_pos - text_w - 20);
-    }
+    int board_x_pos = static_cast<int>(overlay_config.board.x_percent * std::max(0.0, static_cast<double>(width - debug_w)));
+    int board_y_pos = static_cast<int>(overlay_config.board.y_percent * std::max(0.0, static_cast<double>(height - debug_h)));
     board_x_pos -= board_x_pos % 2;
-    text_x_pos -= text_x_pos % 2;
+    board_y_pos -= board_y_pos % 2;
 
-    int bar_x_pos = std::max(20, geo.bx - bar_w - 20); // Position analysis bar just to the left of the main board
+    int text_x_pos = static_cast<int>(overlay_config.pvText.x_percent * std::max(0.0, static_cast<double>(width - text_w)));
+    int text_y_pos = static_cast<int>(overlay_config.pvText.y_percent * std::max(0.0, static_cast<double>(height - debug_h)));
+    text_x_pos -= text_x_pos % 2;
+    text_y_pos -= text_y_pos % 2;
+
+    int bar_x_pos = static_cast<int>(overlay_config.evalBar.x_percent * std::max(0.0, static_cast<double>(width - bar_w)));
+    int bar_y_pos = static_cast<int>(overlay_config.evalBar.y_percent * std::max(0.0, static_cast<double>(height - bar_h)));
     bar_x_pos -= bar_x_pos % 2;
+    bar_y_pos -= bar_y_pos % 2;
     
     int safe_bx = geo.bx - (geo.bx % 2);
     int safe_by = geo.by - (geo.by % 2);
 
-    // Compose advanced FFMPEG CPU Filter Graph using the builder
-    FFmpegFilterGraph graph;
-    // 1. Draw a semi-transparent black box over the text area on the base video
-    graph.add_filter("[0:v]", "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(overlay_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(debug_h) + ":color=black@0.6:t=fill", "[bg_box]");
-    
-    std::string base_for_txt = "[bg_box]";
+    int stream_idx = 1;
+    std::string board_stream, bar_stream, text_stream, arrows_stream;
+    std::string input_args = "-y -i \"" + input_video_path + "\" ";
+
+    if (overlay_config.board.enabled) {
+        input_args += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
+        board_stream = "[" + std::to_string(stream_idx++) + ":v]";
+    }
+    if (overlay_config.evalBar.enabled) {
+        input_args += "-f concat -safe 0 -i \"" + bar_txt_path + "\" ";
+        bar_stream = "[" + std::to_string(stream_idx++) + ":v]";
+    }
+    if (overlay_config.pvText.enabled) {
+        input_args += "-f concat -safe 0 -i \"" + text_txt_path + "\" ";
+        text_stream = "[" + std::to_string(stream_idx++) + ":v]";
+    }
     if (draw_main_arrows) {
-        graph.add_filter("[4:v]", "colorkey=black:0.01:0.5", "[main_arrows_alpha]");
-        graph.add_filter("[bg_box][main_arrows_alpha]", "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by), "[bg_box_arr]");
-        base_for_txt = "[bg_box_arr]";
+        input_args += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
+        arrows_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
 
-    // 2. Make the black background of the text video transparent
-    graph.add_filter("[3:v]", "colorkey=black:0.01:0.5", "[txt_alpha]");
-    // 3. Overlay the floating text onto the background with the box
-    graph.add_filter(base_for_txt + "[txt_alpha]", "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(overlay_y_pos), "[bg_txt]");
-    // 4. Overlay the debug board
-    graph.add_filter("[bg_txt][1:v]", "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(overlay_y_pos), "[bg_brd]");
+    // Compose advanced FFMPEG CPU Filter Graph using the builder
+    FFmpegFilterGraph graph;
+    std::string current_bg = "[0:v]";
+    
+    if (draw_main_arrows) {
+        graph.add_filter(arrows_stream, "colorkey=black:0.01:0.5", "[main_arrows_alpha]");
+        graph.add_filter(current_bg + "[main_arrows_alpha]", "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by), "[bg_arr]");
+        current_bg = "[bg_arr]";
+    }
+
+    if (overlay_config.pvText.enabled) {
+        graph.add_filter(current_bg, "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(text_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(debug_h) + ":color=black@0.6:t=fill", "[bg_box]");
+        graph.add_filter(text_stream, "colorkey=black:0.01:0.5", "[txt_alpha]");
+        graph.add_filter("[bg_box][txt_alpha]", "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]");
+        current_bg = "[bg_txt]";
+    }
+
+    if (overlay_config.board.enabled) {
+        graph.add_filter(current_bg + board_stream, "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(board_y_pos), "[bg_brd]");
+        current_bg = "[bg_brd]";
+    }
     
     std::string scale_str = "";
     if (resolution.find("1920x1080") != std::string::npos) scale_str = ",scale=1920:-2";
     else if (resolution.find("1280x720") != std::string::npos) scale_str = ",scale=1280:-2";
     else if (resolution.find("3840x2160") != std::string::npos) scale_str = ",scale=3840:-2";
 
-    // 5. Overlay the analysis bar, apply scaling if requested, and set final output format
-    graph.add_filter("[bg_brd][2:v]", "overlay=" + std::to_string(bar_x_pos) + ":(H-h)/2" + scale_str + ",format=yuv420p");
-    std::string filter_complex = graph.build();
-
-    std::string input_args = "-y -i \"" + input_video_path + "\" "
-                             "-f concat -safe 0 -i \"" + board_txt_path + "\" "
-                             "-f concat -safe 0 -i \"" + bar_txt_path + "\" "
-                             "-f concat -safe 0 -i \"" + text_txt_path + "\" ";
-                             
-    if (draw_main_arrows) {
-        input_args += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
+    if (overlay_config.evalBar.enabled) {
+        graph.add_filter(current_bg + bar_stream, "overlay=" + std::to_string(bar_x_pos) + ":" + std::to_string(bar_y_pos) + scale_str + ",format=yuv420p");
+    } else {
+        std::string final_filter = scale_str.empty() ? "format=yuv420p" : scale_str.substr(1) + ",format=yuv420p";
+        graph.add_filter(current_bg, final_filter);
     }
+    std::string filter_complex = graph.build();
 
     std::string ffmpeg_cmd;
     std::string actual_vcodec = vCodec;

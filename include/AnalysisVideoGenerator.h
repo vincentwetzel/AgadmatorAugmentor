@@ -9,6 +9,7 @@
 #include <opencv2/core.hpp>
 #include "StockfishAnalyzer.h"
 #include "BoardLocalizer.h"
+#include "VideoOverlayConfig.h"
 
 namespace aa {
 
@@ -26,6 +27,7 @@ public:
      * @param timestamps List of timestamps (in seconds) corresponding to each move
      * @param stockfish_results Analysis data from Stockfish
      * @param arrow_thickness_pct Thickness of engine arrows as a percentage
+     * @param overlay_config The visual overlay configuration (positions, scales, toggles)
      * @param cancel_flag Atomic flag to signal cancellation
      * @param progress_callback Optional callback to report completion percentage and status text
      */
@@ -36,6 +38,7 @@ public:
                                  const std::vector<double>& timestamps,
                                  const std::vector<StockfishResult>& stockfish_results,
                                  int arrow_thickness_pct,
+                                 const VideoOverlayConfig& overlay_config,
                                  std::atomic<bool>* cancel_flag,
                                  std::function<void(int, const std::string&)> progress_callback = nullptr);
 

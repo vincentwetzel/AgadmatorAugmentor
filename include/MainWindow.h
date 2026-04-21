@@ -115,6 +115,7 @@ private:
     QPushButton* moveDownBtn_;
     QPushButton* removeSelectedBtn_;
     QPushButton* clearQueueBtn_;
+    QPushButton* templatesBtn_;
     QPushButton* settingsBtn_;
     QPushButton* startCancelBtn_;
     QTextEdit* logOutput_;
@@ -128,6 +129,9 @@ private:
     // State
     bool isProcessing_ = false;
     std::atomic<bool> cancelRequested_{false};
+
+    // Memory for the template fallback
+    mutable QString lastUsedTemplateId_;
 
     // Static Configuration
     static const char* SETTINGS_ORG;

@@ -13,7 +13,7 @@ const char* ThemeManager::SETTINGS_APP = "ChessTubeAnalyzer";
 const char* ThemeManager::SETTINGS_THEME_KEY = "themeMode";
 
 ThemeManager::ThemeManager() : currentTheme_(ThemeMode::System), settings_(nullptr) {
-    settings_ = new QSettings(SETTINGS_ORG, SETTINGS_APP);
+    settings_ = new QSettings();
     loadSettings();
 }
 

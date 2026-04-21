@@ -140,12 +140,27 @@ void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& cloc
     libchess::Move move;
     std::string san_move;
 
+        // Separate pure UCI from annotation (e.g. "e2e4!!" -> "e2e4" + "!!")
+        std::string pure_uci;
+        std::string annotation;
+        size_t uci_len = 0;
+        while (uci_len < uci_move_str.length()) {
+            char c = uci_move_str[uci_len];
+            if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') {
+                uci_len++;
+            } else {
+                break;
+            }
+        }
+        pure_uci = uci_move_str.substr(0, uci_len);
+        annotation = uci_move_str.substr(uci_len);
+
     try {
-        move = current_pos.parse_move(uci_move_str);
-        san_move = build_san(current_pos, move, uci_move_str);
+            move = current_pos.parse_move(pure_uci);
+            san_move = build_san(current_pos, move, pure_uci) + annotation;
         current_pos.makemove(move);
     } catch (const std::exception& e) {
-        std::cerr << "Warning: Failed to parse or convert move " << uci_move_str << ": " << e.what() << std::endl;
+            std::cerr << "Warning: Failed to parse or convert move " << pure_uci << ": " << e.what() << std::endl;
         san_move = uci_move_str; // Fallback to UCI on error
     }
 

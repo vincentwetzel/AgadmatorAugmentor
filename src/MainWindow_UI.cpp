@@ -2,6 +2,7 @@
 #include "ToggleSwitch.h"
 #include "ThemeManager.h"
 #include "SettingsDialog.h"
+#include "OverlayEditorDialog.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -125,6 +126,10 @@ void MainWindow::setupUi() {
     clearQueueBtn_->setToolTip("Remove all queue entries except for the video that is currently processing");
     fileLayout->addWidget(clearQueueBtn_);
 
+    templatesBtn_ = new QPushButton("Manage Templates");
+    templatesBtn_->setToolTip("Manage channel-specific analysis overlay templates");
+    fileLayout->addWidget(templatesBtn_);
+
     settingsBtn_ = new QPushButton();
     settingsBtn_->setObjectName("settingsBtn");
     settingsBtn_->setText("");
@@ -194,6 +199,12 @@ void MainWindow::setupUi() {
     connect(startCancelBtn_, &QPushButton::clicked, this, &MainWindow::onStartCancelClicked);
     connect(queueList_, &QListWidget::itemSelectionChanged, this, &MainWindow::refreshQueueUi);
     
+    connect(templatesBtn_, &QPushButton::clicked, this, [this]() {
+        OverlayEditorDialog dlg(this);
+        if (dlg.exec() == QDialog::Accepted) {
+            refreshQueueItem(queueList_->currentItem()); // Refresh UI incase active template was modified
+        }
+    });
     connect(settingsBtn_, &QPushButton::clicked, settingsDialog_, &QDialog::exec);
     connect(settingsDialog_, &SettingsDialog::logMessage, this, &MainWindow::appendLog);
     connect(settingsDialog_, &SettingsDialog::themeChanged, this, &MainWindow::applyTheme);
@@ -202,7 +213,7 @@ void MainWindow::setupUi() {
 }
 
 void MainWindow::applyTheme() {
-    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QSettings settings;
     int themeIndex = settings.value("themeMode", 0).toInt();
     ThemeMode mode = static_cast<ThemeMode>(themeIndex);
     ThemeManager::instance().setTheme(mode);

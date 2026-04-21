@@ -2,6 +2,7 @@
 
 #include <QDialog>
 #include "ProcessingSettings.h"
+#include "VideoOverlayConfig.h"
 
 class QLineEdit;
 class QSpinBox;
@@ -71,6 +72,7 @@ private:
     QComboBox* debugLevelComboBox_;
     QSpinBox* threadSpinBox_;
     QGroupBox* stockfishSettingsGroup_;
+    VideoOverlayConfig currentOverlayConfig_;
 };
 
 } // namespace aa

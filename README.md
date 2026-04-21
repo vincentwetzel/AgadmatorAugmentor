@@ -14,13 +14,17 @@ This tool processes chess video files, identifies board states, and reconstructs
 - **Clock Recognition**: Hu Moments-based OCR for clock time extraction
 - **PGN Export**: Generate PGN files with extracted moves, clock information, and analysis variations.
 - **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search depth, and engine variation length. The application can auto-find your Stockfish executable or you can specify a path.
-- **Custom Output**: Save analysis alongside the source video or in a custom directory
+- **Custom Output**: Save analysis alongside the source video or in a custom directory (defaults to your Documents folder).
+- **Channel-Specific Templates**: Auto-detect and apply custom visual overlay layouts tailored for different chess YouTube channels via a built-in screenshot-based template editor.
 - **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, dynamic best move arrows (scaled by evaluation strength), and engine evaluation lines.
 - **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
 
 ## Quick Start
 
-### Build
+### Windows Installer (Recommended)
+Download and run the latest NSIS installer from the Releases page. The application stores configuration in `%APPDATA%\ChessTubeAnalyzer`, including overlay templates in `%APPDATA%\ChessTubeAnalyzer\templates`, and exports generated files to your `Documents` folder by default to avoid write-permission errors.
+
+### Developer Build
 ```cmd
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static
 cmake --build build --config Release
@@ -66,7 +70,7 @@ See `TODO.md` for the full list of tests and how to toggle them.
 
 | Dependency | Purpose |
 |-----------|---------|
-| FFmpeg | Required for the "Generate Debug Video" feature to mux audio into the final output. Must be available in the system's PATH. |
+| FFmpeg | Required for analysis video generation to composite overlays and mux audio into the final MP4. Must be available in the system's PATH. |
 
 ## Dependencies
 
@@ -79,6 +83,7 @@ All dependencies are managed via vcpkg on `E:\vcpkg`:
 | CLI11 | CLI argument parsing |
 | libchess (E:\libchess) | Legal move generation, FEN I/O |
 | Google Test | Unit testing |
+| qtbase | Qt6 Core GUI framework |
 
 **Removed dependencies:** Tesseract — replaced with a lightweight Hu Moments-based digit recognizer (zero external dependencies, runs in microseconds).
 
@@ -120,8 +125,8 @@ ChessTubeAnalyzer/
 ├── TODO.md                          # Optimization status & project conventions
 ├── README.md
 ├── architecture.md
-├── spec.md
-├── changelog.md
+├── SPEC.md
+├── CHANGELOG.md
 ├── agents.md
 └── PROJECT_PLAN.md
 ```
@@ -162,7 +167,8 @@ The extractor treats the chess.com UI as a deterministic state machine:
 8. **Conditional Clock OCR** — Cached clock ROIs; Hu Moments digit recognizer runs in microseconds when pixels change
 9. **Move Settling** — Adaptive 0.2s peek-ahead, skipped when confidence >90%
 10. **Output** — A PGN file (`<video_name>.pgn`) containing moves, timestamps, and clock data. If Stockfish analysis is enabled, the PGN will also include engine variations and evaluations.
-11. **Video Compositing** — Generates static overlay PNGs combined using an FFmpeg `concat` demuxer script, dropping overlay render time from minutes to under a second.
+11. **Overlay Templates** — Each queued video carries a selected overlay template. Templates are auto-matched from filename keywords, can be overridden per queue item, and provide independent enable/position/scale settings for the board, eval bar, and PV text.
+12. **Video Compositing** — Generates static overlay BMPs combined using FFmpeg `concat` demuxer scripts, dropping overlay render time from minutes to under a second while keeping overlays synchronized with the source video.
 
 Progress is shown as an inline `[XX.X%]` ticker during scanning.
 
@@ -177,7 +183,7 @@ Progress is shown as an inline `[XX.X%]` ticker during scanning.
 | Unit tests | 9/9 passing |
 | Integration tests | 7/7 plies, 17/17 with revert |
 
-See [architecture.md](architecture.md) and [spec.md](spec.md) for full details.
+See [architecture.md](architecture.md) and [SPEC.md](SPEC.md) for full details.
 
 ## Troubleshooting
 

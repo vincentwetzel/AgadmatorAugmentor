@@ -97,7 +97,7 @@ void SettingsDialog::setupUi() {
     connect(sameAsSourceRadio, &QRadioButton::toggled, this, [this]() { saveSettings(); });
     connect(customDirEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
     connect(customDirBtn, &QPushButton::clicked, this, [this, customDirEdit]() {
-        QSettings qs(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+        QSettings qs;
         QString lastDir = qs.value("lastCustomDir", QDir::homePath()).toString();
         QString dir = QFileDialog::getExistingDirectory(this, "Select Output Directory", lastDir);
         if (!dir.isEmpty()) {
@@ -203,24 +203,6 @@ void SettingsDialog::setupUi() {
     qualityLayout->addWidget(qualityComboBox);
     qualityLayout->addStretch();
     encodingLayout->addLayout(qualityLayout);
-
-    auto* overlayLayout = new QHBoxLayout();
-    overlayLayout->addWidget(new QLabel("Analysis Overlay:"));
-    auto* positionComboBox = new QComboBox();
-    positionComboBox->setObjectName("positionComboBox");
-    positionComboBox->addItems({"Top-Right", "Top-Left", "Bottom-Right", "Bottom-Left"});
-    positionComboBox->setProperty("class", "dropdown");
-    positionComboBox->setToolTip("Select the corner where the chess board overlay will be positioned.");
-    overlayLayout->addWidget(positionComboBox);
-    overlayLayout->addWidget(new QLabel("Size (%):"));
-    auto* sizeSpinBox = new QSpinBox();
-    sizeSpinBox->setObjectName("sizeSpinBox");
-    sizeSpinBox->setRange(10, 80);
-    sizeSpinBox->setValue(30);
-    sizeSpinBox->setToolTip("Set the size of the board overlay as a percentage of the video height.");
-    overlayLayout->addWidget(sizeSpinBox);
-    overlayLayout->addStretch();
-    encodingLayout->addLayout(overlayLayout);
 
     auto* arrowsLayout = new QHBoxLayout();
     arrowsLayout->addWidget(new QLabel("Engine Arrows:"));
@@ -355,7 +337,7 @@ void SettingsDialog::setupUi() {
     connect(threadSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
     connect(multiPvComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(stockfishPathBtn, &QPushButton::clicked, this, [this]() {
-        QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+        QSettings settings;
         QString lastDir = settings.value("lastStockfishDir", QDir::homePath()).toString();
         QString filter = "All Files (*)";
 #ifdef _WIN32
@@ -445,14 +427,14 @@ void SettingsDialog::setupUi() {
     connect(extensionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(resolutionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(qualityComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(positionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(sizeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    
+
     connect(arrowsComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(debugLevelComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
 }
 
 void SettingsDialog::loadSettings() {
-    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QSettings settings;
     const auto widgets = this->findChildren<QWidget*>();
     for (auto* w : widgets) w->blockSignals(true);
 
@@ -515,11 +497,7 @@ void SettingsDialog::loadSettings() {
         int idx = q->findData(val);
         q->setCurrentIndex(idx >= 0 ? idx : 2);
     }
-    if (auto* p = findChild<QComboBox*>("positionComboBox")) {
-        int pIdx = p->findText(settings.value("videoOverlayPosition", "Top-Right").toString());
-        p->setCurrentIndex(pIdx >= 0 ? pIdx : 0);
-    }
-    if (auto* s = findChild<QSpinBox*>("sizeSpinBox")) s->setValue(settings.value("videoOverlaySize", 30).toInt());
+
     if (auto* a = findChild<QComboBox*>("arrowsComboBox")) {
         int aIdx = a->findText(settings.value("videoAnalysisArrows", "Debug Board").toString());
         a->setCurrentIndex(aIdx >= 0 ? aIdx : 0);
@@ -530,7 +508,7 @@ void SettingsDialog::loadSettings() {
 }
 
 void SettingsDialog::saveSettings() {
-    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QSettings settings;
     settings.setValue("generatePgn", pgnExportToggle_->isChecked());
     settings.setValue("enableStockfish", stockfishToggle_->isChecked());
     settings.setValue("generateAnalysisVideo", analysisVideoToggle_->isChecked());
@@ -553,8 +531,8 @@ void SettingsDialog::saveSettings() {
     if (auto* ec = findChild<QComboBox*>("extensionComboBox")) settings.setValue("videoExtension", ec->currentText());
     if (auto* rc = findChild<QComboBox*>("resolutionComboBox")) settings.setValue("videoResolution", rc->currentText());
     if (auto* q = findChild<QComboBox*>("qualityComboBox")) settings.setValue("videoQuality", q->currentData().toInt());
-    if (auto* p = findChild<QComboBox*>("positionComboBox")) settings.setValue("videoOverlayPosition", p->currentText());
-    if (auto* s = findChild<QSpinBox*>("sizeSpinBox")) settings.setValue("videoOverlaySize", s->value());
+    
+
     if (auto* a = findChild<QComboBox*>("arrowsComboBox")) settings.setValue("videoAnalysisArrows", a->currentText());
     if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) settings.setValue("memoryLimitMB", m->value());
 }

@@ -225,7 +225,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             c = '_';
         }
     }
-    std::string debug_dir = "debug_screenshots/cpp_extraction/" + debug_dir_name;
+    std::filesystem::path temp_base = std::filesystem::temp_directory_path() / "ChessTubeAnalyzer" / "debug_screenshots" / "cpp_extraction";
+    std::string debug_dir = (temp_base / debug_dir_name).string();
 
     if (std::filesystem::exists(debug_dir)) {
         std::filesystem::remove_all(debug_dir);

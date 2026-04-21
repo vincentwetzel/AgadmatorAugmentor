@@ -34,6 +34,11 @@ Simply run `ChessTube Analyzer.exe` from the `build/Release` directory. The GUI 
 - Toggle PGN and Stockfish analysis.
 - Configure Stockfish settings (MultiPV, search depth, engine variation length).
 - Automatically find or manually specify the path to your Stockfish executable.
+- Manage channel-specific templates via the **Manage Templates** button:
+  - **Auto-Detection:** Templates use keywords (e.g., `[agadmator]`) to automatically select the right overlay layout when videos are dropped into the queue.
+  - **Visual Editor:** Load a reference screenshot and visually drag, resize, enable, or disable the Board, Evaluation Bar, and PV Text overlays.
+  - **Custom Layouts:** Create and save multiple unique templates for your favorite channels.
+- Override the auto-detected template per queue item before processing.
 - Start the analysis and monitor progress.
 
 ### Headless / Command-Line Mode
@@ -65,8 +70,9 @@ Override saved settings with command-line flags. This works for both `"ChessTube
 
 ### Output Files
 
-The analysis produces the following files in the specified output directory (or alongside the source video by default):
-The analysis produces a PGN file (`<video_name>.pgn`) in the specified output directory (or alongside the source video by default). This file contains the extracted moves and clock times. If Stockfish analysis is enabled, it will also include rich engine variations and evaluations for each move.
+The analysis produces a PGN file (`<video_name>.pgn`) in the specified output directory, or alongside the source video by default. This file contains the extracted moves and clock times. If Stockfish analysis is enabled, it also includes engine variations and evaluations for each move.
+
+If analysis-video generation is enabled, the application also produces an annotated MP4 using the selected overlay template for that queue item.
 
 ## Testing
 

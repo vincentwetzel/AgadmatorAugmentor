@@ -101,11 +101,25 @@ The primary output is a PGN file that contains the extracted moves, clock times,
 
 The PGN is saved alongside the source video or in a user-defined custom directory.
 
-## 6. Overlay Augmentation
+## 6. Overlay Templates & Layout Model
 
-The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
+Analysis-video layout is driven by a template-backed configuration model rather than a single global corner/size setting.
 
-## 7. Source Module Organization
+- **Data Model:** `VideoOverlayConfig` contains three independently configurable `OverlayElement`s: `board`, `evalBar`, and `pvText`.
+- **Per-Element Controls:** Each element stores `enabled`, `x_percent`, `y_percent`, and `scale`.
+- **Template Persistence:** `TemplateManager` copies bundled template JSON files into `%APPDATA%\ChessTubeAnalyzer\templates` on first run, then loads and saves user edits from there.
+- **Auto-Detection:** When a video is added to the queue, the filename is matched against each template's keyword list. If nothing matches, the built-in `generic` template is used.
+- **Per-Queue Overrides:** Each queue entry carries its own selected template, so mixed-channel batches can use different overlay layouts in one run.
+- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually.
+
+## 7. Overlay Augmentation
+
+The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. 
+
+Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
+The FFmpeg composition stage now conditionally includes the board, evaluation bar, PV text, and main-board engine arrows based on the active template, and maps normalized template coordinates into absolute video positions at render time.
+
+## 8. Source Module Organization
 
 The detector code is split into three focused modules to keep files manageable (soft limit: ~400 lines):
 
@@ -115,16 +129,18 @@ The detector code is split into three focused modules to keep files manageable (
 | Board Analysis | `BoardAnalysis.h/.cpp` | 356 | Square means, yellow squares, piece counting, red squares, hover boxes |
 | Arrow Detector | `ArrowDetector.h/.cpp` | 141 | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
 | Clock Recognizer | `ClockRecognizer.h/.cpp` | 264 | Hu Moments digit recognizer, clock extraction, conditional caching |
-| Orchestrator | `ChessVideoExtractor.h/.cpp` | ~630 | Video scanning loop, move scoring, revert detection, JSON output |
+| Orchestrator | `ChessVideoExtractor.h/.cpp` | ~630 | Video scanning loop, move scoring, revert detection, PGN-bound game data |
 | Move Validation | `MoveValidations.h/.cpp` | 97 | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Frame Prefetcher | `FramePrefetcher.h/.cpp` | 125 | Async frame pre-decoding in background thread |
+| Template Manager | `TemplateManager.h/.cpp` | ~200 | Overlay template loading, matching, persistence in AppData |
+| Overlay Editor | `OverlayEditorDialog.h/.cpp` | ~450 | Screenshot-based WYSIWYG editor for overlay template layout |
 | Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
 
-## 8. Attempted Speedup Optimizations
+## 9. Attempted Speedup Optimizations
 
 The following optimizations were investigated but abandoned due to correctness regressions or complexity vs ROI:
 
@@ -137,7 +153,7 @@ The following optimizations were investigated but abandoned due to correctness r
 
 **Current bottleneck:** Frame decode from the prefetcher at ~15ms/frame. The theoretical minimum for 788 frames at 15ms decode is ~11.8s; the system achieves ~15s with ~3s overhead for scoring, validation, and revert detection.
 
-## 9. Integrations & Future Scope
+## 10. Integrations & Future Scope
 
 - **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — ✅ Implemented). Integrated into PGN generation with configurable MultiPV, depth, and time limits.
 - **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 4 — ✅ Implemented).
@@ -147,7 +163,7 @@ The following optimizations were investigated but abandoned due to correctness r
 - **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection.
 - **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md`.
 
-## 10. Architectural Trade-offs & Rejected Optimizations
+## 11. Architectural Trade-offs & Rejected Optimizations
 
 During the C++ migration and optimization phase, several optimizations were investigated but ultimately abandoned. They are documented here to prevent future redundant efforts:
 

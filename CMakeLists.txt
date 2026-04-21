@@ -119,7 +119,7 @@ find_package(OpenCV REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
-find_package(Qt6 COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
 if(Qt6_FOUND AND BUILD_GUI)
     message(STATUS "Qt6 found, GUI will be built")
 elseif(Qt6_FOUND)
@@ -317,7 +317,7 @@ set_target_properties(extract_moves PROPERTIES
 
 # ── GUI Executable ───────────────────────────────────────────────────────────
 if(Qt6_FOUND AND BUILD_GUI)
-    add_executable(augmentor_gui WIN32
+    add_executable(chesstube_gui WIN32
         src/main_gui.cpp
         src/MainWindow.cpp
         src/MainWindow_UI.cpp
@@ -331,33 +331,37 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/ToggleSwitch.h
         src/ThemeManager.cpp
         include/ThemeManager.h
+        src/OverlayEditorDialog.cpp
+        include/OverlayEditorDialog.h
+        src/TemplateManager.cpp
+        include/TemplateManager.h
     )
 
-    target_include_directories(augmentor_gui PRIVATE
+    target_include_directories(chesstube_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
 
-    target_link_libraries(augmentor_gui PRIVATE
+    target_link_libraries(chesstube_gui PRIVATE
         chess_extraction_core
         chess_analysis_core
         Qt6::Widgets
         CLI11::CLI11
     )
 
-    enable_msvc_parallel_pdb_safety(augmentor_gui)
-    enable_msvc_compile_speedups(augmentor_gui)
-    enable_project_pch(augmentor_gui gui)
+    enable_msvc_parallel_pdb_safety(chesstube_gui)
+    enable_msvc_compile_speedups(chesstube_gui)
+    enable_project_pch(chesstube_gui gui)
 
     if(HAVE_SYSTEM_CUDA)
-        target_compile_definitions(augmentor_gui PRIVATE HAVE_SYSTEM_CUDA)
-        target_include_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
-        target_link_directories(augmentor_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(augmentor_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
-        target_link_libraries(augmentor_gui PRIVATE delayimp.lib
+        target_compile_definitions(chesstube_gui PRIVATE HAVE_SYSTEM_CUDA)
+        target_include_directories(chesstube_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
+        target_link_directories(chesstube_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
+        target_link_options(chesstube_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
+        target_link_libraries(chesstube_gui PRIVATE delayimp.lib
             cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
     endif()
 
-    set_target_properties(augmentor_gui PROPERTIES
+    set_target_properties(chesstube_gui PROPERTIES
         OUTPUT_NAME "ChessTube Analyzer"
         LINK_FLAGS "/STACK:8388608"
         AUTOMOC ON
@@ -366,7 +370,7 @@ if(Qt6_FOUND AND BUILD_GUI)
     )
 
     if(ENABLE_QT_RUNTIME_DEPLOYMENT)
-        add_runtime_deployment(augmentor_gui)
+        add_runtime_deployment(chesstube_gui)
     endif()
 endif()
 

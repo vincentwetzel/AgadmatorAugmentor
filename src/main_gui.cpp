@@ -1,5 +1,6 @@
 // Extracted from cpp directory
 #include "MainWindow.h"
+#include "TemplateManager.h"
 #include <QApplication>
 #include <QMetaType>
 #include <CLI/CLI.hpp>
@@ -110,8 +111,13 @@ int main(int argc, char *argv[]) {
     QApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
     QApplication app(argc, argv);
-    QApplication::setApplicationName("ChessTube Analyzer GUI");
+    QApplication::setOrganizationName("ChessTubeAnalyzer");
+    QApplication::setApplicationName("ChessTubeAnalyzer");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setApplicationVersion("0.3.0");
+
+    // Initialize template manager (copies defaults to AppData and loads them)
+    aa::TemplateManager::instance().initialize();
 
     aa::MainWindow window;
 

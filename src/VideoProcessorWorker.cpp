@@ -96,14 +96,19 @@ namespace { // Anonymous namespace for helper function
             return "0:00:00"; // Fallback for blank or malformed clocks
         } else if (std::count(clockStr.begin(), clockStr.end(), ':') == 0) {
             // If there are no colons but there is a decimal (e.g. "14.5")
-            if (clockStr.find('.') != std::string::npos) {
-                if (clockStr.find('.') == 1) {
+            size_t dot_pos = clockStr.find('.');
+            if (dot_pos != std::string::npos) {
+                if (dot_pos == 1) {
                     return "0:00:0" + clockStr; // e.g., "9.5" -> "0:00:09.5"
                 } else {
                     return "0:00:" + clockStr;  // e.g., "14.5" -> "0:00:14.5"
                 }
             } else {
-                return "0:00:00"; // Fallback
+                if (clockStr.length() == 1) {
+                    return "0:00:0" + clockStr; // e.g., "9" -> "0:00:09"
+                } else {
+                    return "0:00:" + clockStr;  // e.g., "45" -> "0:00:45"
+                }
             }
         } else if (std::count(clockStr.begin(), clockStr.end(), ':') == 1) {
             if (clockStr.find(':') == 1) {
@@ -244,7 +249,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
         // Step 2a: Optional move quality annotation based on Stockfish analysis
         std::vector<std::string> move_annotations(gameData.moves.size(), "");
-        QSettings q_settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+            QSettings q_settings;
         bool enableMoveAnnotations = q_settings.value("analysis/enableMoveAnnotations", true).toBool();
 
         if (enableMoveAnnotations && (settings.enableStockfish || settings.generateAnalysisVideo)) {
@@ -514,16 +519,14 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         if (settings.generateAnalysisVideo) {
             emit logMessage("Starting Analysis Video generation...");
             
-            QSettings qs(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+            QSettings qs;
             QString ext = qs.value("videoExtension", ".mp4").toString();
             QString vCodec = qs.value("videoCodec", "libx264 (H.264)").toString();
             QString aCodec = qs.value("audioCodec", "aac").toString();
             QString res = qs.value("videoResolution", "Source Resolution").toString();
             QString crf = qs.value("videoQuality", 23).toString();
-            QString pos = qs.value("videoOverlayPosition", "Top-Right").toString();
-            QString size = qs.value("videoOverlaySize", "30").toString();
             QString arrows = qs.value("videoAnalysisArrows", "Debug Board").toString();
-            emit logMessage(QString("Using video encoding settings: Codec=%1, Audio=%2, Container=%3, Resolution=%4, Quality (CRF)=%5, Overlay=%6 at %7%, Arrows=%8").arg(vCodec).arg(aCodec).arg(ext).arg(res).arg(crf).arg(pos).arg(size).arg(arrows));
+            emit logMessage(QString("Using video encoding settings: Codec=%1, Audio=%2, Container=%3, Resolution=%4, Quality (CRF)=%5, Arrows=%6").arg(vCodec).arg(aCodec).arg(ext).arg(res).arg(crf).arg(arrows));
 
             try {
                 AnalysisVideoGenerator generator(settings.assetsPath.toStdString());
@@ -551,7 +554,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 } else {
                     // Pack the UI codec settings into the path string to seamlessly pass them 
                     // without altering the underlying C++ interface signature.
-                    QString magicVideoPath = analysisVideoPath + "|" + vCodec + "|" + aCodec + "|" + res + "|" + crf + "|" + pos + "|" + size + "|" + arrows;
+                    QString magicVideoPath = analysisVideoPath + "|" + vCodec + "|" + aCodec + "|" + res + "|" + crf + "|||" + arrows;
 
                     bool success = generator.generate_analysis_video(
                         settings.videoPath.toStdString(),
@@ -560,7 +563,8 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                         gameData.video_fens,
                         gameData.video_timestamps,
                         videoStockfishResults,
-                    15, // Hardcoded engine arrow thickness percentage
+                        15, // Hardcoded engine arrow thickness percentage
+                        settings.overlayConfig,
                         cancelFlag,
                         generator_progress_callback
                     );

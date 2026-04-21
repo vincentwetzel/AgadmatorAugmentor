@@ -4,6 +4,7 @@
 #include "ToggleSwitch.h"
 #include "ThemeManager.h"
 #include "SettingsDialog.h"
+#include "TemplateManager.h"
 
 #include <QApplication>
 #include <QVBoxLayout>
@@ -57,6 +58,7 @@ constexpr int kQueuePathRole = Qt::UserRole;
 constexpr int kQueueStatusRole = Qt::UserRole + 1;
 constexpr int kQueueProgressRole = Qt::UserRole + 2;
 constexpr int kQueueOutputDirRole = Qt::UserRole + 3;
+constexpr int kQueueTemplateRole = Qt::UserRole + 4;
 
 QString queueStatusText(aa::MainWindow::QueueItemStatus status) {
     switch (status) {
@@ -152,6 +154,7 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     const QueueItemStatus status = itemStatus(item);
     const int progress = item->data(kQueueProgressRole).toInt();
     const QString outputDir = item->data(kQueueOutputDirRole).toString();
+    const QString templateId = item->data(kQueueTemplateRole).toString();
 
     auto* container = new QFrame();
     container->setToolTip(path + "\nStatus: " + queueStatusText(status));
@@ -181,6 +184,31 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     pathLabel->setToolTip(path);
     pathLabel->setWordWrap(true);
     layout->addWidget(pathLabel);
+
+    auto* templateRow = new QHBoxLayout();
+    templateRow->setContentsMargins(0, 0, 0, 0);
+    templateRow->setSpacing(8);
+    
+    auto* tplLabel = new QLabel("Template:");
+    tplLabel->setToolTip("The overlay template used to position elements in the analysis video.");
+    templateRow->addWidget(tplLabel);
+    
+    auto* tplCombo = new QComboBox();
+    tplCombo->setToolTip("Select the analysis overlay layout tailored for this video.");
+    const auto templates = aa::TemplateManager::instance().getAllTemplates();
+    for (const auto& t : templates) {
+        tplCombo->addItem(t.name, t.id);
+    }
+    int idx = tplCombo->findData(templateId);
+    if (idx >= 0) tplCombo->setCurrentIndex(idx);
+    tplCombo->setEnabled(status == QueueItemStatus::Queued);
+    QObject::connect(tplCombo, &QComboBox::currentIndexChanged, container, [item, tplCombo, this]() {
+        QString newId = tplCombo->currentData().toString();
+        item->setData(kQueueTemplateRole, newId);
+        lastUsedTemplateId_ = newId; // Update memory for subsequent drops
+    });
+    templateRow->addWidget(tplCombo, 1);
+    layout->addLayout(templateRow);
 
     auto* progressBar = new QProgressBar();
     progressBar->setRange(0, 100);
@@ -226,7 +254,8 @@ void MainWindow::refreshQueueItem(QListWidgetItem* item) {
     }
 
     item->setToolTip(path + "\nStatus: " + queueStatusText(status));
-    item->setSizeHint(QSize(0, 96));
+    // Increase height to accommodate the new Template dropdown row
+    item->setSizeHint(QSize(0, 128));
 
     if (auto* oldWidget = queueList_->itemWidget(item)) {
         queueList_->removeItemWidget(item);
@@ -326,6 +355,14 @@ void MainWindow::startProcessingItem(QListWidgetItem* item) {
     setItemProgress(item, 0);
 
     auto settings = gatherSettings();
+    
+    // Inject the layout configuration from the selected template
+    QString tplId = item->data(kQueueTemplateRole).toString();
+    auto optTpl = aa::TemplateManager::instance().getTemplate(tplId);
+    if (optTpl.has_value()) {
+        settings.overlayConfig = optTpl->config;
+    }
+
     item->setData(kQueueOutputDirRole, QFileInfo(settings.outputPath).absolutePath());
     QMetaObject::invokeMethod(worker_, "process", Q_ARG(ProcessingSettings, settings), Q_ARG(std::atomic<bool>*, &cancelRequested_));
 }
@@ -403,6 +440,14 @@ void MainWindow::addVideosToQueue(const QStringList& paths) {
         item->setData(kQueuePathRole, localPath);
         item->setData(kQueueStatusRole, static_cast<int>(QueueItemStatus::Queued));
         item->setData(kQueueProgressRole, 0);
+        
+        auto matchedTpl = aa::TemplateManager::instance().matchTemplate(info.fileName());
+        QString assignId = matchedTpl.id;
+        if (assignId == "generic" && !lastUsedTemplateId_.isEmpty()) {
+            assignId = lastUsedTemplateId_; // Fallback to last used memory
+        }
+        item->setData(kQueueTemplateRole, assignId);
+
         queueList_->addItem(item);
         refreshQueueItem(item);
         addedNames << info.fileName();
@@ -479,7 +524,7 @@ int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int s
 }
 
 void MainWindow::browseVideo() {
-    QSettings settings(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QSettings settings;
     QString lastDir = settings.value("lastVideoDir", QDir::homePath()).toString();
 
     QStringList fileNames = QFileDialog::getOpenFileNames(this, "Select Chess Video(s)", lastDir, "Video Files (*.mp4 *.mkv *.avi);;All Files (*)");
