@@ -10,9 +10,9 @@
 
 // Forward declarations to avoid including heavy headers
 namespace libchess { class Position; }
-namespace aa { class FramePrefetcher; class GPUPipeline; struct BoardGeometry; struct ClockCache; }
+namespace cta { class FramePrefetcher; class GPUPipeline; struct BoardGeometry; struct ClockCache; }
 
-namespace aa {
+namespace cta {
 
 struct ClockInfo {
     std::string active;
@@ -87,4 +87,4 @@ private:
     ProgressCallback progress_callback_;
 };
 
-} // namespace aa
+} // namespace cta

@@ -106,18 +106,19 @@ The PGN is saved alongside the source video or in a user-defined custom director
 Analysis-video layout is driven by a template-backed configuration model rather than a single global corner/size setting.
 
 - **Data Model:** `VideoOverlayConfig` contains three independently configurable `OverlayElement`s: `board`, `evalBar`, and `pvText`.
-- **Per-Element Controls:** Each element stores `enabled`, `x_percent`, `y_percent`, and `scale`.
+- **Per-Element Controls:** Each element stores `enabled`, `x_percent`, `y_percent`, and `scale`. For elements requiring independent X and Y scaling without changing legacy data structures (like the Evaluation Bar), the `scale` float is mathematically encoded to store both dimensions (e.g., `X.XXYYYY`).
+- **Arrow Targeting:** `VideoOverlayConfig` also stores `arrowsTarget`, allowing engine arrows to render on the generated analysis board, the original board in the video, both, or neither.
 - **Template Persistence:** `TemplateManager` copies bundled template JSON files into `%APPDATA%\ChessTubeAnalyzer\templates` on first run, then loads and saves user edits from there.
-- **Auto-Detection:** When a video is added to the queue, the filename is matched against each template's keyword list. If nothing matches, the built-in `generic` template is used.
-- **Per-Queue Overrides:** Each queue entry carries its own selected template, so mixed-channel batches can use different overlay layouts in one run.
-- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually.
+- **Auto-Detection:** When a video is added to the queue, the filename is matched against each template's exact name, falling back to its keyword list. If nothing matches, the built-in `generic` template is used.
+- **Per-Queue Overrides:** Each queue entry carries its own selected template and a serialized snapshot of that template's layout config, so mixed-channel batches can use different overlay layouts in one run even if templates are edited later.
+- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually. Elements feature 8-way sizing handles (corners and edges) for precise proportional or independent axis scaling, and the dialog exposes visibility toggles plus engine-arrow routing controls.
 
 ## 7. Overlay Augmentation
 
 The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. 
 
 Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
-The FFmpeg composition stage now conditionally includes the board, evaluation bar, PV text, and main-board engine arrows based on the active template, and maps normalized template coordinates into absolute video positions at render time.
+The FFmpeg composition stage now conditionally includes the board, evaluation bar, PV text, and main-board engine arrows based on the active template snapshot, and maps normalized template coordinates into absolute video positions at render time.
 
 ## 8. Source Module Organization
 

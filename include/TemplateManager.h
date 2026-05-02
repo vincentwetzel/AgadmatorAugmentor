@@ -6,7 +6,7 @@
 #include <optional>
 #include "ProcessingSettings.h" // Assuming VideoOverlayConfig is defined here or in a similar header
 
-namespace aa {
+namespace cta {
 
 struct OverlayTemplate {
     QString id;                 // Unique identifier (e.g., "agadmator")
@@ -34,9 +34,12 @@ public:
     // The ultimate fallback template
     OverlayTemplate getFallbackTemplate() const;
 
+    void reloadTemplates();
+    bool loadTemplate(const QString& id, QString* errorMessage = nullptr);
+
     // Setters
-    bool saveTemplate(const OverlayTemplate& tpl);
-    bool deleteTemplate(const QString& id);
+    bool saveTemplate(const OverlayTemplate& tpl, QString* errorMessage = nullptr);
+    bool deleteTemplate(const QString& id, QString* errorMessage = nullptr);
 
     // Helper to get the absolute path to a template's reference screenshot
     QString getScreenshotPath(const QString& screenshotFilename) const;
@@ -49,4 +52,4 @@ private:
     QString appDataTemplateDir_;
 };
 
-} // namespace aa
+} // namespace cta

@@ -1,10 +1,10 @@
 #pragma once
 
-#include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
 
-namespace aa {
+namespace cta {
 
 // Forward declaration
 struct BoardGeometry;
@@ -184,4 +184,4 @@ private:
     static std::string device_name_;
 };
 
-} // namespace aa
+} // namespace cta

@@ -24,7 +24,7 @@
 #include <windows.h>
 #endif
 
-namespace aa {
+namespace cta {
 
 namespace { // Anonymous namespace for helper function
 
@@ -151,6 +151,25 @@ namespace { // Anonymous namespace for helper function
 
 void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atomic<bool>* cancelFlag) {
     try {
+        emit logMessage(
+            QString("Overlay config: board(enabled=%1, x=%2, y=%3, scale=%4), "
+                    "eval(enabled=%5, x=%6, y=%7, scale=%8), "
+                    "pv(enabled=%9, x=%10, y=%11, scale=%12), arrows=%13")
+                .arg(settings.overlayConfig.board.enabled ? "true" : "false")
+                .arg(settings.overlayConfig.board.x_percent, 0, 'f', 3)
+                .arg(settings.overlayConfig.board.y_percent, 0, 'f', 3)
+                .arg(settings.overlayConfig.board.scale, 0, 'f', 3)
+                .arg(settings.overlayConfig.evalBar.enabled ? "true" : "false")
+                .arg(settings.overlayConfig.evalBar.x_percent, 0, 'f', 3)
+                .arg(settings.overlayConfig.evalBar.y_percent, 0, 'f', 3)
+                .arg(settings.overlayConfig.evalBar.scale, 0, 'f', 5)
+                .arg(settings.overlayConfig.pvText.enabled ? "true" : "false")
+                .arg(settings.overlayConfig.pvText.x_percent, 0, 'f', 3)
+                .arg(settings.overlayConfig.pvText.y_percent, 0, 'f', 3)
+                .arg(settings.overlayConfig.pvText.scale, 0, 'f', 3)
+                .arg(QString::fromStdString(settings.overlayConfig.arrowsTarget))
+        );
+
         if (settings.generateAnalysisVideo) {
             emit logMessage("Verifying FFmpeg installation...");
             if (!is_ffmpeg_available()) {
@@ -206,14 +225,18 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
             }
             
-            emit logMessage("Starting Stockfish analysis (MultiPV=" + QString::number(settings.multiPv) + ", " + QString::number(unique_fens.size()) + " unique positions)...");
+            QString limitsStr = QString("Depth=%1").arg(settings.stockfishDepth);
+            if (settings.stockfishTime > 0) limitsStr += QString(", Time=%1s").arg(settings.stockfishTime);
+            if (settings.stockfishNodes > 0) limitsStr += QString(", Nodes=%1").arg(settings.stockfishNodes);
+            
+            emit logMessage("Starting Stockfish analysis (MultiPV=" + QString::number(settings.multiPv) + ", " + limitsStr + ", " + QString::number(unique_fens.size()) + " unique positions)...");
 
             StockfishAnalyzer analyzer(settings.multiPv, settings.stockfishPath.toStdString());
             analyzer.set_progress_callback([this, cancelFlag](int current, int total) {
                 QString msg = QString("Analyzing position %1 of %2...").arg(current).arg(total);
                 emit logMessage(msg);
             });
-            std::vector<StockfishResult> unique_results = analyzer.analyze_positions(unique_fens, settings.stockfishDepth, cancelFlag);
+            std::vector<StockfishResult> unique_results = analyzer.analyze_positions(unique_fens, settings.stockfishDepth, settings.stockfishTime * 1000, settings.stockfishNodes, cancelFlag);
             if (cancelFlag && *cancelFlag) {
                 emit finished();
                 return;
@@ -339,7 +362,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                         video_ann = "?";
                     }
 
-                    aa::StockfishLine dummy;
+                    cta::StockfishLine dummy;
                     dummy.move_uci = "ANNOTATION";
                     dummy.pv_line = gameData.video_moves[i] + video_ann;
                     videoStockfishResults[i + 1].lines.push_back(dummy);
@@ -525,8 +548,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             QString aCodec = qs.value("audioCodec", "aac").toString();
             QString res = qs.value("videoResolution", "Source Resolution").toString();
             QString crf = qs.value("videoQuality", 23).toString();
-            QString arrows = qs.value("videoAnalysisArrows", "Debug Board").toString();
-            emit logMessage(QString("Using video encoding settings: Codec=%1, Audio=%2, Container=%3, Resolution=%4, Quality (CRF)=%5, Arrows=%6").arg(vCodec).arg(aCodec).arg(ext).arg(res).arg(crf).arg(arrows));
+            emit logMessage(QString("Using video encoding settings: Codec=%1, Audio=%2, Container=%3, Resolution=%4, Quality (CRF)=%5").arg(vCodec).arg(aCodec).arg(ext).arg(res).arg(crf));
 
             try {
                 AnalysisVideoGenerator generator(settings.assetsPath.toStdString());
@@ -554,7 +576,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 } else {
                     // Pack the UI codec settings into the path string to seamlessly pass them 
                     // without altering the underlying C++ interface signature.
-                    QString magicVideoPath = analysisVideoPath + "|" + vCodec + "|" + aCodec + "|" + res + "|" + crf + "|||" + arrows;
+                    QString magicVideoPath = analysisVideoPath + "|" + vCodec + "|" + aCodec + "|" + res + "|" + crf;
 
                     bool success = generator.generate_analysis_video(
                         settings.videoPath.toStdString(),
@@ -599,4 +621,4 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
     }
 }
 
-} // namespace aa
+} // namespace cta

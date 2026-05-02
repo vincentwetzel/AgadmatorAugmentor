@@ -5,7 +5,7 @@
 #include <cmath>
 #include <tuple>
 
-namespace aa {
+namespace cta {
 
 // Downscale factor for passes 1-2: 1/4 resolution → 16x faster matchTemplate
 static constexpr int DOWNSCALE = 4;
@@ -211,4 +211,4 @@ void draw_board_grid(cv::Mat& image, const BoardGeometry& geo,
     }
 }
 
-} // namespace aa
+} // namespace cta

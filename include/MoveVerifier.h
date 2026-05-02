@@ -8,7 +8,7 @@
 #include <string>
 #include <optional> // For optional return values
 
-namespace aa {
+namespace cta {
 
 struct MoveVerificationResult {
     bool move_found = false;
@@ -50,4 +50,4 @@ private:
     double score_move(const libchess::Move& move, const std::vector<double>& square_diffs, const libchess::Position& current_pos) const;
 };
 
-} // namespace aa
+} // namespace cta

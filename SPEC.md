@@ -103,7 +103,7 @@ The system is designed for **high accuracy** rather than speed — it treats the
 | ID | Requirement |
 |----|-------------|
 | OF-1 | Output must primarily be a PGN file named after the video (`<video_basename>.pgn`). |
-| OF-2 | The PGN must contain the extracted moves, clock times via `[%clk ...]` tags, and optionally Stockfish engine analysis variations and evaluations. The intermediate JSON representation is no longer required to be written to disk. |
+| OF-2 | The PGN must contain the extracted moves, clock times via `[%clk ...]` tags, and optionally Stockfish engine analysis variations and evaluations bounded by configured depth, time, or node limits. The intermediate JSON representation is no longer required to be written to disk. |
 
 ---
 

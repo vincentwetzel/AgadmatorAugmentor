@@ -5,7 +5,7 @@
 #include <atomic>
 #include "ProcessingSettings.h"
 
-namespace aa {
+namespace cta {
 
 class VideoProcessorWorker : public QObject {
     Q_OBJECT
@@ -23,4 +23,4 @@ signals:
     void error(const QString& errorMessage);
 };
 
-} // namespace aa
+} // namespace cta

@@ -2,7 +2,7 @@
 #include "BoardLocalizer.h"
 #include <algorithm>
 
-namespace aa {
+namespace cta {
 namespace validation {
 
 double check_yellowness(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* sq_name) {
@@ -89,4 +89,4 @@ bool check_hover_box(const cv::Mat& board_bgr, const BoardGeometry& geo, cv::Mat
 }
 
 } // namespace validation
-} // namespace aa
+} // namespace cta

@@ -39,9 +39,23 @@ QWidget* createToggleRow(const QString& label, const QString& tooltip, ToggleSwi
     rowWidget->setLayout(layout);
     return rowWidget;
 }
+
+QLabel* createSettingsLabel(const QString& text, const QString& tooltip) {
+    auto* label = new QLabel(text);
+    label->setToolTip(tooltip);
+    return label;
+}
+
+QLabel* createHelpText(const QString& text, const QString& tooltip) {
+    auto* label = new QLabel(text);
+    label->setWordWrap(true);
+    label->setToolTip(tooltip);
+    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    return label;
+}
 } // namespace
 
-namespace aa {
+namespace cta {
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("Settings");
@@ -182,7 +196,7 @@ void SettingsDialog::setupUi() {
     resolutionLayout->addWidget(new QLabel("Output Resolution:"));
     auto* resolutionComboBox = new QComboBox();
     resolutionComboBox->setObjectName("resolutionComboBox");
-    resolutionComboBox->addItems({"Source Resolution (No Scaling)", "1080p (1920x1080)", "720p (1280x720)", "4K (3840x2160)"});
+    resolutionComboBox->addItems({"Source Resolution (No Scaling)", "4K (3840x2160)", "1080p (1920x1080)", "720p (1280x720)"});
     resolutionComboBox->setProperty("class", "dropdown");
     resolutionComboBox->setToolTip("Select the output video resolution. Scaling down can save processing time and space.");
     resolutionLayout->addWidget(resolutionComboBox);
@@ -204,17 +218,6 @@ void SettingsDialog::setupUi() {
     qualityLayout->addStretch();
     encodingLayout->addLayout(qualityLayout);
 
-    auto* arrowsLayout = new QHBoxLayout();
-    arrowsLayout->addWidget(new QLabel("Engine Arrows:"));
-    auto* arrowsComboBox = new QComboBox();
-    arrowsComboBox->setObjectName("arrowsComboBox");
-    arrowsComboBox->addItems({"Debug Board", "Main Board", "Both", "None"});
-    arrowsComboBox->setProperty("class", "dropdown");
-    arrowsComboBox->setToolTip("Select where the engine evaluation arrows should be drawn.");
-    arrowsLayout->addWidget(arrowsComboBox);
-    arrowsLayout->addStretch();
-    encodingLayout->addLayout(arrowsLayout);
-
     videoExportLayout->addWidget(encodingGroup);
     videoExportLayout->addStretch();
     tabWidget->addTab(videoExportTab, "Video Export");
@@ -222,51 +225,108 @@ void SettingsDialog::setupUi() {
     // === Tab 3: Stockfish ===
     auto* stockfishTab = new QWidget();
     auto* stockfishLayout = new QVBoxLayout(stockfishTab);
-    stockfishSettingsGroup_ = new QGroupBox("Shared Stockfish Analysis Settings");
-    stockfishSettingsGroup_->setToolTip("Configure how the Stockfish chess engine evaluates positions");
+    stockfishSettingsGroup_ = new QGroupBox("Stockfish Analysis Settings");
+    stockfishSettingsGroup_->setToolTip("Choose how much engine analysis to add to PGNs and analysis videos");
     auto* stockfishOptionsLayout = new QVBoxLayout(stockfishSettingsGroup_);
 
+    stockfishOptionsLayout->addWidget(createHelpText(
+        "Recommended starting point: use 1-2 lines, depth 15, and leave time/nodes unlimited. Raise depth or lines only if you want stronger analysis and do not mind waiting longer.",
+        "Beginner guidance for balancing Stockfish strength against processing time"
+    ));
+
     auto* stockfishPathLayout = new QHBoxLayout();
-    stockfishPathLayout->addWidget(new QLabel("Stockfish Executable:"));
+    stockfishPathLayout->addWidget(createSettingsLabel(
+        "Stockfish App:",
+        "The Stockfish executable file ChessTube Analyzer will run for engine analysis"
+    ));
     auto* stockfishPathEdit = new QLineEdit();
     stockfishPathEdit->setObjectName("stockfishPathEdit");
-    stockfishPathEdit->setToolTip("Path to the Stockfish engine executable file");
+    stockfishPathEdit->setToolTip("Path to the Stockfish engine app. Leave blank only if Stockfish is bundled or already discoverable.");
     stockfishPathLayout->addWidget(stockfishPathEdit);
     auto* stockfishPathBtn = new QPushButton("Browse...");
-    stockfishPathBtn->setToolTip("Browse for the Stockfish executable file");
+    stockfishPathBtn->setToolTip("Choose the Stockfish executable file manually");
     stockfishPathLayout->addWidget(stockfishPathBtn);
     auto* stockfishSearchBtn = new QPushButton("Auto-Find");
-    stockfishSearchBtn->setToolTip("Automatically search for Stockfish in common local directories");
+    stockfishSearchBtn->setToolTip("Search common folders for a Stockfish executable");
     stockfishPathLayout->addWidget(stockfishSearchBtn);
     stockfishOptionsLayout->addLayout(stockfishPathLayout);
 
     auto* multiPvLayout = new QHBoxLayout();
-    multiPvLayout->addWidget(new QLabel("Lines Per Position:"));
+    multiPvLayout->addWidget(createSettingsLabel(
+        "Best Moves to Show:",
+        "How many candidate moves Stockfish should show for each position"
+    ));
     multiPvComboBox_ = new QComboBox();
-    multiPvComboBox_->addItems({"1", "2", "3", "4"});
+    multiPvComboBox_->addItem("1 best move (fastest, easiest to read)", 1);
+    multiPvComboBox_->addItem("2 best moves (good for comparison)", 2);
+    multiPvComboBox_->addItem("3 best moves (more detail)", 3);
+    multiPvComboBox_->addItem("4 best moves (slowest)", 4);
     multiPvComboBox_->setProperty("class", "dropdown");
-    multiPvComboBox_->setToolTip("Set the number of top engine lines (MultiPV) Stockfish should calculate");
+    multiPvComboBox_->setToolTip("More best moves means richer analysis, but each position takes longer to process.");
     multiPvLayout->addWidget(multiPvComboBox_);
     multiPvLayout->addStretch();
     stockfishOptionsLayout->addLayout(multiPvLayout);
 
     auto* depthLayout = new QHBoxLayout();
-    depthLayout->addWidget(new QLabel("Engine Search Depth:"));
+    depthLayout->addWidget(createSettingsLabel(
+        "Thinking Depth:",
+        "How many half-moves ahead Stockfish tries to calculate"
+    ));
     auto* depthSpinBox = new QSpinBox();
     depthSpinBox->setObjectName("depthSpinBox");
     depthSpinBox->setRange(1, 40);
-    depthSpinBox->setToolTip("Set the target search depth. Higher depth provides better analysis but takes longer.");
+    depthSpinBox->setSuffix(" plies");
+    depthSpinBox->setToolTip("Higher depth is usually stronger, but slower. Try 15 for normal use; 20+ is better for fast CPUs.");
     depthLayout->addWidget(depthSpinBox);
-    depthLayout->addWidget(new QLabel("(Rec: 15 for older CPUs, 20+ for fast CPUs)"));
+    depthLayout->addWidget(createSettingsLabel(
+        "15 normal, 20+ strong",
+        "A simple rule of thumb for choosing Stockfish depth"
+    ));
     depthLayout->addStretch();
     stockfishOptionsLayout->addLayout(depthLayout);
+    
+    auto* timeLayout = new QHBoxLayout();
+    timeLayout->addWidget(createSettingsLabel(
+        "Time Limit per Position:",
+        "Optional cap on how long Stockfish may spend on each board position"
+    ));
+    auto* timeSpinBox = new QSpinBox();
+    timeSpinBox->setObjectName("timeSpinBox");
+    timeSpinBox->setRange(0, 600); // Up to 10 minutes
+    timeSpinBox->setSingleStep(1);
+    timeSpinBox->setSpecialValueText("No time limit");
+    timeSpinBox->setSuffix(" s");
+    timeSpinBox->setToolTip("Optional safety cap in seconds. 0 means Stockfish stops by depth instead of by time.");
+    timeLayout->addWidget(timeSpinBox);
+    timeLayout->addStretch();
+    stockfishOptionsLayout->addLayout(timeLayout);
+
+    auto* nodesLayout = new QHBoxLayout();
+    nodesLayout->addWidget(createSettingsLabel(
+        "Position Limit:",
+        "Optional cap on how many possible positions Stockfish may examine"
+    ));
+    auto* nodesSpinBox = new QSpinBox();
+    nodesSpinBox->setObjectName("nodesSpinBox");
+    nodesSpinBox->setRange(0, 1000000000);
+    nodesSpinBox->setSingleStep(100000);
+    nodesSpinBox->setSpecialValueText("No position limit");
+    nodesSpinBox->setSuffix(" nodes");
+    nodesSpinBox->setToolTip("Advanced limit on Stockfish's search work. Most users should leave this at 0.");
+    nodesLayout->addWidget(nodesSpinBox);
+    nodesLayout->addStretch();
+    stockfishOptionsLayout->addLayout(nodesLayout);
 
     auto* analysisDepthLayout = new QHBoxLayout();
-    analysisDepthLayout->addWidget(new QLabel("Engine Variation Length:"));
+    analysisDepthLayout->addWidget(createSettingsLabel(
+        "Moves to Write in Each Line:",
+        "How many moves of each suggested Stockfish continuation should appear in the PGN/video text"
+    ));
     auto* analysisDepthSpinBox = new QSpinBox();
     analysisDepthSpinBox->setObjectName("analysisDepthSpinBox");
     analysisDepthSpinBox->setRange(1, 10);
-    analysisDepthSpinBox->setToolTip("Set the maximum number of moves to export for each engine variation line");
+    analysisDepthSpinBox->setSuffix(" moves");
+    analysisDepthSpinBox->setToolTip("Controls how long each displayed engine line is. Shorter lines are easier to read.");
     analysisDepthLayout->addWidget(analysisDepthSpinBox);
     analysisDepthLayout->addStretch();
     stockfishOptionsLayout->addLayout(analysisDepthLayout);
@@ -360,6 +420,35 @@ void SettingsDialog::setupUi() {
 #ifdef _WIN32
         execName = "stockfish.exe";
 #endif
+        const QStringList exePatterns = {
+#ifdef _WIN32
+            "stockfish.exe",
+            "stockfish-*.exe",
+#else
+            "stockfish",
+            "stockfish-*",
+#endif
+        };
+
+        auto findMatchingExecutable = [&exePatterns](const QString& directoryPath) -> QString {
+            QDir dir(directoryPath);
+            if (!dir.exists()) {
+                return {};
+            }
+
+            for (const QString& pattern : exePatterns) {
+                const QFileInfoList files = dir.entryInfoList(
+                    QStringList() << pattern,
+                    QDir::Files | QDir::Executable | QDir::NoSymLinks
+                );
+                if (!files.isEmpty()) {
+                    return files.first().absoluteFilePath();
+                }
+            }
+
+            return {};
+        };
+
         QStringList candidatePaths = {
             appDir + "/stockfish/" + execName, appDir + "/../stockfish/" + execName,
             appDir + "/../../stockfish/" + execName, appDir + "/" + execName
@@ -368,14 +457,39 @@ void SettingsDialog::setupUi() {
             if (QFileInfo::exists(p)) { foundPath = QFileInfo(p).absoluteFilePath(); break; }
         }
         if (foundPath.isEmpty()) {
-            QStringList baseDirs = { QDir::rootPath(), QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) };
+            const QStringList candidateDirs = {
+                appDir,
+                appDir + "/stockfish",
+                appDir + "/../stockfish",
+                appDir + "/../../stockfish",
+                "C:/stockfish",
+                "C:/stockfish/stockfish",
+                "C:/stockfish-windows-x86-64-avx2",
+                "C:/stockfish-windows-x86-64-avx2/stockfish"
+            };
+            for (const QString& dirPath : candidateDirs) {
+                foundPath = findMatchingExecutable(dirPath);
+                if (!foundPath.isEmpty()) {
+                    break;
+                }
+            }
+        }
+        if (foundPath.isEmpty()) {
+            QStringList baseDirs = {
+                QDir::rootPath(),
+                "C:/",
+                QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
+            };
             for (const QString& base : baseDirs) {
                 QDir dir(base);
                 if (!dir.exists()) continue;
                 QFileInfoList subdirs = dir.entryInfoList(QStringList() << "*stockfish*", QDir::Dirs | QDir::NoDotAndDotDot);
                 for (const QFileInfo& sInfo : subdirs) {
-                    QDirIterator it(sInfo.absoluteFilePath(), QStringList() << ("*" + execName), QDir::Files | QDir::Executable, QDirIterator::Subdirectories);
-                    if (it.hasNext()) { foundPath = it.next(); break; }
+                    QDirIterator it(sInfo.absoluteFilePath(), exePatterns, QDir::Files | QDir::Executable, QDirIterator::Subdirectories);
+                    if (it.hasNext()) {
+                        foundPath = it.next();
+                        break;
+                    }
                 }
                 if (!foundPath.isEmpty()) break;
             }
@@ -390,6 +504,8 @@ void SettingsDialog::setupUi() {
         }
     });
     connect(depthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(timeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(nodesSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
     connect(analysisDepthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
     connect(stockfishPathEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
     connect(themeComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
@@ -427,9 +543,6 @@ void SettingsDialog::setupUi() {
     connect(extensionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(resolutionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(qualityComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    
-
-    connect(arrowsComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(debugLevelComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
 }
 
@@ -446,11 +559,13 @@ void SettingsDialog::loadSettings() {
     }
 
     int multiPv = settings.value("multiPv", 3).toInt();
-    int multiPvIdx = multiPvComboBox_->findText(QString::number(multiPv));
+    int multiPvIdx = multiPvComboBox_->findData(multiPv);
     multiPvComboBox_->setCurrentIndex(multiPvIdx >= 0 ? multiPvIdx : 2);
     threadSpinBox_->setValue(settings.value("ffmpegThreads", 4).toInt());
     
     if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(settings.value("stockfishDepth", 15).toInt());
+    if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(settings.value("stockfishTime", 0).toInt());
+    if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(settings.value("stockfishNodes", 0).toInt());
     if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(settings.value("stockfishAnalysisDepth", 5).toInt());
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) p->setText(settings.value("stockfishPath", "").toString());
     
@@ -498,10 +613,6 @@ void SettingsDialog::loadSettings() {
         q->setCurrentIndex(idx >= 0 ? idx : 2);
     }
 
-    if (auto* a = findChild<QComboBox*>("arrowsComboBox")) {
-        int aIdx = a->findText(settings.value("videoAnalysisArrows", "Debug Board").toString());
-        a->setCurrentIndex(aIdx >= 0 ? aIdx : 0);
-    }
     if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) m->setValue(settings.value("memoryLimitMB", 0).toInt());
 
     for (auto* w : widgets) w->blockSignals(false);
@@ -512,7 +623,7 @@ void SettingsDialog::saveSettings() {
     settings.setValue("generatePgn", pgnExportToggle_->isChecked());
     settings.setValue("enableStockfish", stockfishToggle_->isChecked());
     settings.setValue("generateAnalysisVideo", analysisVideoToggle_->isChecked());
-    settings.setValue("multiPv", multiPvComboBox_->currentText().toInt());
+    settings.setValue("multiPv", multiPvComboBox_->currentData().toInt());
     settings.setValue("ffmpegThreads", threadSpinBox_->value());
     settings.setValue("themeMode", themeComboBox_->currentIndex());
     if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
@@ -520,6 +631,8 @@ void SettingsDialog::saveSettings() {
     }
 
     if (auto* d = findChild<QSpinBox*>("depthSpinBox")) settings.setValue("stockfishDepth", d->value());
+    if (auto* t = findChild<QSpinBox*>("timeSpinBox")) settings.setValue("stockfishTime", t->value());
+    if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) settings.setValue("stockfishNodes", n->value());
     if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) settings.setValue("stockfishAnalysisDepth", ad->value());
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) settings.setValue("stockfishPath", p->text());
     settings.setValue("debugLevel", debugLevelComboBox_->currentIndex());
@@ -532,8 +645,6 @@ void SettingsDialog::saveSettings() {
     if (auto* rc = findChild<QComboBox*>("resolutionComboBox")) settings.setValue("videoResolution", rc->currentText());
     if (auto* q = findChild<QComboBox*>("qualityComboBox")) settings.setValue("videoQuality", q->currentData().toInt());
     
-
-    if (auto* a = findChild<QComboBox*>("arrowsComboBox")) settings.setValue("videoAnalysisArrows", a->currentText());
     if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) settings.setValue("memoryLimitMB", m->value());
 }
 
@@ -541,9 +652,11 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
     s.generatePgn = pgnExportToggle_->isChecked() || stockfishToggle_->isChecked();
     s.enableStockfish = stockfishToggle_->isChecked();
     s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
-    s.multiPv = multiPvComboBox_->currentText().toInt();
+    s.multiPv = multiPvComboBox_->currentData().toInt();
     s.ffmpegThreads = threadSpinBox_->value();
     s.stockfishDepth = findChild<QSpinBox*>("depthSpinBox") ? findChild<QSpinBox*>("depthSpinBox")->value() : 15;
+    s.stockfishTime = findChild<QSpinBox*>("timeSpinBox") ? findChild<QSpinBox*>("timeSpinBox")->value() : 0;
+    s.stockfishNodes = findChild<QSpinBox*>("nodesSpinBox") ? findChild<QSpinBox*>("nodesSpinBox")->value() : 0;
     s.stockfishAnalysisDepth = findChild<QSpinBox*>("analysisDepthSpinBox") ? findChild<QSpinBox*>("analysisDepthSpinBox")->value() : 5;
     s.stockfishPath = findChild<QLineEdit*>("stockfishPathEdit") ? findChild<QLineEdit*>("stockfishPathEdit")->text() : "";
     s.debugLevel = debugLevelComboBox_->currentIndex();
@@ -554,24 +667,28 @@ void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     pgnExportToggle_->setChecked(settings.generatePgn);
     stockfishToggle_->setChecked(settings.enableStockfish);
     analysisVideoToggle_->setChecked(settings.generateAnalysisVideo);
-    int idx = multiPvComboBox_->findText(QString::number(settings.multiPv));
+    int idx = multiPvComboBox_->findData(settings.multiPv);
     if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
     threadSpinBox_->setValue(settings.ffmpegThreads);
     if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(settings.stockfishDepth);
+    if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(settings.stockfishTime);
+    if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(settings.stockfishNodes);
     if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(settings.stockfishAnalysisDepth);
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) p->setText(settings.stockfishPath);
     debugLevelComboBox_->setCurrentIndex(settings.debugLevel);
 }
 
-void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int analysisDepth, const QString& debugLevelStr, int memoryLimit) {
+void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit) {
     if (pgnOverride != -1) pgnExportToggle_->setChecked(pgnOverride != 0);
     if (stockfishOverride != -1) stockfishToggle_->setChecked(stockfishOverride != 0);
     if (multiPv > 0) {
-        int idx = multiPvComboBox_->findText(QString::number(multiPv));
+        int idx = multiPvComboBox_->findData(multiPv);
         if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
     }
     if (threads > 0) threadSpinBox_->setValue(threads);
     if (depth > 0) { if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(depth); }
+    if (time >= 0) { if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(time); }
+    if (nodes >= 0) { if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(nodes); }
     if (analysisDepth > 0) { if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(analysisDepth); }
     if (memoryLimit >= 0) { if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) m->setValue(memoryLimit); }
     if (!debugLevelStr.isEmpty() && debugLevelComboBox_) {
@@ -581,4 +698,4 @@ void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int stockfishOverri
     }
 }
 
-} // namespace aa
+} // namespace cta

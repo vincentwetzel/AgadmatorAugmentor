@@ -2,8 +2,12 @@
 #include "MainWindow.h"
 #include "TemplateManager.h"
 #include <QApplication>
+#include <QCommandLineOption>
+#include <QCommandLineParser>
+#include <QFileInfo>
 #include <QMetaType>
-#include <CLI/CLI.hpp>
+#include <QSettings>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 
@@ -15,7 +19,19 @@
 #include <stdio.h>
 #endif
 
-static void set_ffmpeg_threads(int threads) {
+namespace {
+
+#ifdef _WIN32
+LONG WINAPI UnhandledExceptionFilter_(EXCEPTION_POINTERS* exception_info);
+#endif
+
+void configure_platform_exception_handler() {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(UnhandledExceptionFilter_);
+#endif
+}
+
+void set_ffmpeg_threads(int threads) {
     std::string val = std::to_string(threads);
 #ifdef _WIN32
     _putenv_s("OPENCV_FFMPEG_THREADS", val.c_str());
@@ -35,113 +51,142 @@ LONG WINAPI UnhandledExceptionFilter_(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 #endif
 
+bool parse_int_option(const QCommandLineParser& parser,
+                      const QString& option_name,
+                      int minimum,
+                      int maximum,
+                      int& output,
+                      std::ostream& err) {
+    if (!parser.isSet(option_name)) {
+        return true;
+    }
+
+    bool ok = false;
+    const int parsed_value = parser.value(option_name).toInt(&ok);
+    if (!ok || parsed_value < minimum || parsed_value > maximum) {
+        err << "Invalid value for --" << option_name.toStdString()
+            << ". Expected an integer in [" << minimum << ", " << maximum << "].\n";
+        return false;
+    }
+
+    output = parsed_value;
+    return true;
+}
+
+bool validate_existing_file(const QString& path,
+                            const char* option_name,
+                            std::ostream& err) {
+    if (path.isEmpty()) {
+        return true;
+    }
+
+    if (!QFileInfo::exists(path) || !QFileInfo(path).isFile()) {
+        err << "Path provided to " << option_name << " does not exist or is not a file: "
+            << path.toStdString() << "\n";
+        return false;
+    }
+
+    return true;
+}
+
+} // namespace
+
 int main(int argc, char *argv[]) {
-#ifdef _WIN32
-    SetUnhandledExceptionFilter(UnhandledExceptionFilter_);
-#endif
-
-    // Parse CLI arguments before QApplication
-    CLI::App cliApp{"ChessTube Analyzer GUI — Process chess videos with optional headless mode"};
-
-    std::string video_path;
-    cliApp.add_option("video_path", video_path, "Path to the input video file (enables headless mode)")
-        ->check(CLI::ExistingFile);
-
-    std::string board_asset;
-    cliApp.add_option("--board-asset", board_asset, "Path to board template image")
-        ->check(CLI::ExistingFile);
-
-    std::string output = "";
-    cliApp.add_option("--output", output, "Path to save the extracted data (PGN/Video)");
-
-    std::string debug_level_str = "";
-    cliApp.add_option("--debug-level", debug_level_str, "Debug image generation (NONE, MOVES, FULL)")
-        ->check(CLI::IsMember({"NONE", "MOVES", "FULL"}));
-
-    bool generate_pgn = true;
-    cliApp.add_flag("--pgn", generate_pgn, "Enable PGN file generation (default: on)");
-
-    bool enable_stockfish = false;
-    cliApp.add_flag("--stockfish", enable_stockfish, "Enable Stockfish engine analysis");
-
-    int multi_pv = 0; // 0 means use saved/default
-    cliApp.add_option("--multi-pv", multi_pv, "Number of best lines for Stockfish (1-4)")
-        ->check(CLI::Range(1, 4));
-
-    int stockfish_depth = 0;
-    cliApp.add_option("--depth", stockfish_depth, "Stockfish search depth (1-24)")
-        ->check(CLI::Range(1, 24));
-
-    int stockfish_analysis_depth = 0;
-    cliApp.add_option("--analysis-depth", stockfish_analysis_depth, "Stockfish analysis line depth (1-20)")
-        ->check(CLI::Range(1, 20));
-
-    int ffmpeg_threads = 0; // 0 means use saved/default
-    cliApp.add_option("--threads", ffmpeg_threads, "FFmpeg decode threads (1-16)")
-        ->check(CLI::Range(1, 16));
-
-    int memory_limit = -1; // -1 means use saved/default
-    cliApp.add_option("--memory-limit", memory_limit, "Memory Limit in MB (0 = Unlimited)")
-        ->check(CLI::Range(0, 65536));
-
-    bool show_version = false;
-    cliApp.add_flag("--version,-v", show_version, "Show version and exit");
-
-    try {
-        cliApp.parse(argc, argv);
-    } catch (const CLI::ParseError& e) {
-        std::cout << cliApp.help();
-        return e.get_exit_code();
-    }
-
-    if (show_version) {
-        std::cout << "ChessTube Analyzer v0.3.0" << std::endl;
-        return 0;
-    }
-
-    if (ffmpeg_threads > 0) {
-        set_ffmpeg_threads(ffmpeg_threads);
-    } else {
-        set_ffmpeg_threads(std::thread::hardware_concurrency());
-    }
-
-    // Register custom types for queued signal/slot connections
-    qRegisterMetaType<aa::ProcessingSettings>("ProcessingSettings");
+    configure_platform_exception_handler();
 
     QApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
-
     QApplication app(argc, argv);
     QApplication::setOrganizationName("ChessTubeAnalyzer");
     QApplication::setApplicationName("ChessTubeAnalyzer");
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setApplicationVersion("0.3.0");
 
-    // Initialize template manager (copies defaults to AppData and loads them)
-    aa::TemplateManager::instance().initialize();
+    QCommandLineParser parser;
+    parser.setApplicationDescription("ChessTube Analyzer GUI - Process chess videos with optional headless mode");
+    parser.addHelpOption();
 
-    aa::MainWindow window;
+    QCommandLineOption version_option(QStringList{"v", "version"}, "Show version and exit");
+    QCommandLineOption board_asset_option("board-asset", "Path to board template image.", "path");
+    QCommandLineOption output_option("output", "Path to save the extracted data (PGN/Video).", "path");
+    QCommandLineOption debug_level_option("debug-level", "Debug image generation (NONE, MOVES, FULL).", "level");
+    QCommandLineOption pgn_option("pgn", "Enable PGN file generation.");
+    QCommandLineOption stockfish_option("stockfish", "Enable Stockfish engine analysis.");
+    QCommandLineOption multi_pv_option("multi-pv", "Number of best lines for Stockfish (1-4).", "count");
+    QCommandLineOption depth_option("depth", "Stockfish search depth (1-24).", "depth");
+    QCommandLineOption time_option("time", "Stockfish max time per move in seconds (0 = no limit).", "s");
+    QCommandLineOption nodes_option("nodes", "Stockfish max nodes per move (0 = no limit).", "count");
+    QCommandLineOption analysis_depth_option("analysis-depth", "Stockfish analysis line depth (1-20).", "depth");
+    QCommandLineOption threads_option("threads", "FFmpeg decode threads (1-16).", "count");
+    QCommandLineOption memory_limit_option("memory-limit", "Memory limit in MB (0 = Unlimited).", "mb");
 
-    // Headless mode: if video_path is provided, process and exit
-    if (!video_path.empty()) {
-        window.showMinimized();
-        
-        int pgn_override = cliApp.get_option("--pgn")->count() > 0 ? (generate_pgn ? 1 : 0) : -1;
-        int stockfish_override = cliApp.get_option("--stockfish")->count() > 0 ? (enable_stockfish ? 1 : 0) : -1;
+    parser.addOption(version_option);
+    parser.addOption(board_asset_option);
+    parser.addOption(output_option);
+    parser.addOption(debug_level_option);
+    parser.addOption(pgn_option);
+    parser.addOption(stockfish_option);
+    parser.addOption(multi_pv_option);
+    parser.addOption(depth_option);
+    parser.addOption(time_option);
+    parser.addOption(nodes_option);
+    parser.addOption(analysis_depth_option);
+    parser.addOption(threads_option);
+    parser.addOption(memory_limit_option);
+    parser.addPositionalArgument("video_path", "Path to the input video file (enables headless mode).");
 
-        int result = window.processHeadless(QString::fromStdString(video_path), 
-                                            pgn_override, 
-                                            stockfish_override, 
-                                            multi_pv, 
-                                            ffmpeg_threads, 
-                                            stockfish_depth, 
-                                            stockfish_analysis_depth,
-                                            QString::fromStdString(debug_level_str),
-                                            QString::fromStdString(output),
-                                            QString::fromStdString(board_asset),
-                                            memory_limit);
-        return result;
+    if (!parser.parse(QCoreApplication::arguments())) {
+        std::cerr << parser.errorText().toStdString() << "\n\n"
+                  << parser.helpText().toStdString();
+        return 1;
     }
 
-    window.show();
+    if (parser.isSet(version_option)) {
+        std::cout << "ChessTube Analyzer v0.3.0" << std::endl;
+        return 0;
+    }
+
+    // Initialize the template manager to load/copy templates from/to AppData.
+    // This makes them available for both GUI and headless mode.
+    cta::TemplateManager::instance().initialize();
+
+    const QStringList positional_arguments = parser.positionalArguments();
+    if (positional_arguments.size() > 1) {
+        std::cerr << "Only one positional video_path is supported.\n\n"
+                  << parser.helpText().toStdString();
+        return 1;
+    }
+
+    const QString video_path = positional_arguments.isEmpty() ? QString{} : positional_arguments.front();
+    const QString board_asset = parser.value(board_asset_option);
+    const QString output = parser.value(output_option);
+    const QString debug_level_str = parser.value(debug_level_option);
+
+    int multi_pv = -1, depth = -1, time = -1, nodes = -1, analysis_depth = -1, threads = -1, memory_limit = -1;
+    
+    if (!parse_int_option(parser, "multi-pv", 1, 4, multi_pv, std::cerr) ||
+        !parse_int_option(parser, "depth", 1, 40, depth, std::cerr) ||
+        !parse_int_option(parser, "time", 0, 600, time, std::cerr) ||
+        !parse_int_option(parser, "nodes", 0, 1000000000, nodes, std::cerr) ||
+        !parse_int_option(parser, "analysis-depth", 1, 20, analysis_depth, std::cerr) ||
+        !parse_int_option(parser, "threads", 1, 16, threads, std::cerr) ||
+        !parse_int_option(parser, "memory-limit", 0, 65536, memory_limit, std::cerr)) {
+        return 1;
+    }
+
+    if (!validate_existing_file(video_path, "video_path", std::cerr) ||
+        !validate_existing_file(board_asset, "--board-asset", std::cerr)) {
+        return 1;
+    }
+
+    int pgn_override = parser.isSet(pgn_option) ? 1 : -1;
+    int stockfish_override = parser.isSet(stockfish_option) ? 1 : -1;
+
+    cta::MainWindow main_window;
+    
+    if (!video_path.isEmpty()) {
+        return main_window.processHeadless(video_path, pgn_override, stockfish_override, multi_pv, threads, depth, time, nodes, analysis_depth, debug_level_str, output, board_asset, memory_limit);
+    }
+
+    main_window.show();
     return app.exec();
 }

@@ -6,7 +6,7 @@
 #include <atomic>
 #include <memory>
 
-namespace aa {
+namespace cta {
 
 struct StockfishLine {
     std::string move_uci;
@@ -36,8 +36,8 @@ public:
     void set_progress_callback(ProgressCallback cb);
 
     void set_multi_pv(int multi_pv);
-    StockfishResult analyze_position(const std::string& fen, int depth, std::atomic<bool>* cancel_flag = nullptr);
-    std::vector<StockfishResult> analyze_positions(const std::vector<std::string>& fens, int depth, std::atomic<bool>* cancel_flag = nullptr);
+    StockfishResult analyze_position(const std::string& fen, int depth, int time_ms = 0, int nodes = 0, std::atomic<bool>* cancel_flag = nullptr);
+    std::vector<StockfishResult> analyze_positions(const std::vector<std::string>& fens, int depth, int time_ms = 0, int nodes = 0, std::atomic<bool>* cancel_flag = nullptr);
 
 private:
     struct StockfishImpl;
@@ -46,4 +46,4 @@ private:
     ProgressCallback progress_callback_;
 };
 
-} // namespace aa
+} // namespace cta

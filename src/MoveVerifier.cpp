@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <iostream> // For debug output, can be replaced with a proper logger
 
-namespace aa {
+namespace cta {
 
 MoveVerifier::MoveVerifier(const BoardAnalysis& board_analysis, const ClockRecognizer& clock_recognizer)
     : board_analysis_(board_analysis), clock_recognizer_(clock_recognizer) {}
@@ -180,4 +180,4 @@ MoveVerificationResult MoveVerifier::verify_and_score_move(
     return result;
 }
 
-} // namespace aa
+} // namespace cta

@@ -16,7 +16,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace aa {
+namespace cta {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GPUMat Implementation
@@ -542,4 +542,4 @@ void GPUPipeline::download_diff(cv::Mat& host) const {
     diff_gray_.download(host);
 }
 
-} // namespace aa
+} // namespace cta

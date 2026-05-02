@@ -4,7 +4,7 @@
 #include <vector>
 #include <sstream>
 
-namespace aa {
+namespace cta {
 
 class FFmpegFilterGraph {
 public:
@@ -21,4 +21,4 @@ private:
     std::vector<std::string> filters_;
 };
 
-} // namespace aa
+} // namespace cta

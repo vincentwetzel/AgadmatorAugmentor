@@ -2,7 +2,7 @@
 
 #include <opencv2/core.hpp>
 
-namespace aa {
+namespace cta {
 
 /// Result of board localization.
 struct BoardGeometry {
@@ -23,4 +23,4 @@ void draw_board_grid(cv::Mat& image, const BoardGeometry& geo,
                      int thickness = 2,
                      bool draw_labels = false);
 
-} // namespace aa
+} // namespace cta

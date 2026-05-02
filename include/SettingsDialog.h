@@ -12,7 +12,7 @@ class QRadioButton;
 
 class ToggleSwitch;
 
-namespace aa {
+namespace cta {
 
 /**
  * @class SettingsDialog
@@ -52,7 +52,7 @@ public:
     /**
      * @brief Applies CLI-provided overrides directly to the active configuration state.
      */
-    void applyHeadlessOverrides(int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int analysisDepth, const QString& debugLevelStr, int memoryLimit);
+    void applyHeadlessOverrides(int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit);
 
 signals:
     /// @brief Emitted when the settings dialog needs to append a message to the main application log.
@@ -75,4 +75,4 @@ private:
     VideoOverlayConfig currentOverlayConfig_;
 };
 
-} // namespace aa
+} // namespace cta

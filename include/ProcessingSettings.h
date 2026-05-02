@@ -3,7 +3,7 @@
 #include <QString>
 #include "VideoOverlayConfig.h"
 
-namespace aa {
+namespace cta {
 
 struct ProcessingSettings {
     QString videoPath;
@@ -16,6 +16,8 @@ struct ProcessingSettings {
     int multiPv = 3;
     int ffmpegThreads = 4;
     int stockfishDepth = 15;
+    int stockfishTime = 0;
+    int stockfishNodes = 0;
     int stockfishAnalysisDepth = 5;
     QString stockfishPath;
     QString redBoardAssetPath;
@@ -24,4 +26,4 @@ struct ProcessingSettings {
     VideoOverlayConfig overlayConfig;
 };
 
-} // namespace aa
+} // namespace cta

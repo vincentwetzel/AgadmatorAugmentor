@@ -1,0 +1,113 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2022-dev",
+      "displayName": "Visual Studio 2022 dev build",
+      "description": "Fast incremental developer build: PCH on, LTO off, runtime deployment off.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "BUILD_TESTS": "OFF",
+        "ENABLE_CMAKE_AUTO_REGEN": "OFF",
+        "ENABLE_IPO": "OFF",
+        "ENABLE_PCH": "ON",
+        "ENABLE_QT_RUNTIME_DEPLOYMENT": "OFF",
+        "ENABLE_VCPKG_APPLOCAL_DEPS": "OFF",
+        "ENABLE_UNITY_BUILD": "OFF",
+        "VCPKG_APPLOCAL_DEPS": "OFF"
+      }
+    },
+    {
+      "name": "vs2022-dev-unity",
+      "displayName": "Visual Studio 2022 dev unity build",
+      "description": "Fast full rebuild preset using CMake unity builds. Use when touching many translation units.",
+      "inherits": "vs2022-dev",
+      "binaryDir": "${sourceDir}/build-unity",
+      "cacheVariables": {
+        "ENABLE_UNITY_BUILD": "ON"
+      }
+    },
+    {
+      "name": "vs2022-release-package",
+      "displayName": "Visual Studio 2022 release/package build",
+      "description": "Slower optimized build for packaging or final benchmarking.",
+      "inherits": "vs2022-dev",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "ENABLE_IPO": "ON",
+        "ENABLE_CMAKE_AUTO_REGEN": "ON",
+        "ENABLE_QT_RUNTIME_DEPLOYMENT": "ON",
+        "ENABLE_VCPKG_APPLOCAL_DEPS": "ON",
+        "ENABLE_UNITY_BUILD": "OFF",
+        "VCPKG_APPLOCAL_DEPS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gui-debug",
+      "displayName": "Build GUI Debug",
+      "configurePreset": "vs2022-dev",
+      "configuration": "Debug",
+      "targets": [
+        "augmentor_gui"
+      ]
+    },
+    {
+      "name": "gui-release",
+      "displayName": "Build GUI Release",
+      "configurePreset": "vs2022-dev",
+      "configuration": "Release",
+      "targets": [
+        "augmentor_gui"
+      ]
+    },
+    {
+      "name": "cli-debug",
+      "displayName": "Build CLI Debug",
+      "configurePreset": "vs2022-dev",
+      "configuration": "Debug",
+      "targets": [
+        "extract_moves"
+      ]
+    },
+    {
+      "name": "cli-release",
+      "displayName": "Build CLI Release",
+      "configurePreset": "vs2022-dev",
+      "configuration": "Release",
+      "targets": [
+        "extract_moves"
+      ]
+    },
+    {
+      "name": "gui-release-unity",
+      "displayName": "Build GUI Release with unity",
+      "configurePreset": "vs2022-dev-unity",
+      "configuration": "Release",
+      "targets": [
+        "augmentor_gui"
+      ]
+    },
+    {
+      "name": "release-package",
+      "displayName": "Build release package",
+      "configurePreset": "vs2022-release-package",
+      "configuration": "Release",
+      "targets": [
+        "augmentor_gui",
+        "extract_moves"
+      ]
+    }
+  ]
+}

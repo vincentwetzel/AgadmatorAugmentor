@@ -6,7 +6,7 @@
 #include <winreg.h>
 #endif
 
-namespace aa {
+namespace cta {
 
 const char* ThemeManager::SETTINGS_ORG = "ChessTubeAnalyzer";
 const char* ThemeManager::SETTINGS_APP = "ChessTubeAnalyzer";
@@ -69,6 +69,12 @@ ThemeManager::ThemeColors ThemeManager::colors() const {
         c.selectionText = "#ffffff";
         c.progressBarBackground = "#3d3d3d";
         c.progressBarChunk = "#0078d4";
+        c.controlBackground = "#2b2f33";
+        c.controlHoverBackground = "#343a40";
+        c.controlPressedBackground = "#24384a";
+        c.controlBorder = "#515861";
+        c.controlFocusBorder = "#4aa3ff";
+        c.controlMutedText = "#a8b0ba";
         c.toggleCheckedBackground = "#4CAF50";
         c.toggleUncheckedBackground = "#666666";
         c.toggleThumb = "#ffffff";
@@ -90,6 +96,12 @@ ThemeManager::ThemeColors ThemeManager::colors() const {
         c.selectionText = "#ffffff";
         c.progressBarBackground = "#e0e0e0";
         c.progressBarChunk = "#0078d4";
+        c.controlBackground = "#f7f9fc";
+        c.controlHoverBackground = "#eef4fb";
+        c.controlPressedBackground = "#dcecff";
+        c.controlBorder = "#b9c4d0";
+        c.controlFocusBorder = "#0078d4";
+        c.controlMutedText = "#5f6b78";
         c.toggleCheckedBackground = "#4CAF50";
         c.toggleUncheckedBackground = "#888888";
         c.toggleThumb = "#ffffff";
@@ -142,20 +154,25 @@ QString ThemeManager::generateStyleSheet() const {
 
         /* Text input fields */
         QLineEdit, QTextEdit, QPlainTextEdit {
-            background-color: %6;
-            color: %7;
-            border: 1px solid %9;
-            border-radius: 4px;
-            padding: 4px;
+            background-color: %1;
+            color: %2;
+            border: 2px solid %9;
+            border-radius: 6px;
+            padding: 6px 10px;
             selection-background-color: %12;
             selection-color: %13;
         }
+        QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {
+            border: 2px solid %11;
+        }
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
             border: 2px solid %11;
+            background-color: %1;
         }
         QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
             background-color: %3;
             color: #888888;
+            border: 2px solid %9;
         }
 
         /* Radio Buttons */
@@ -207,84 +224,116 @@ QString ThemeManager::generateStyleSheet() const {
             color: %10;
         }
 
-        /* Combo boxes - Dropdown Style */
+        /* Combo boxes */
         QComboBox {
-            background-color: %6;
-            color: %7;
-            border: 2px solid %9;
+            background-color: %16;
+            color: %2;
+            border: 1px solid %19;
             border-radius: 5px;
-            padding: 6px 30px 6px 10px;
-            min-height: 32px;
-            font-size: 13px;
+            padding: 6px 34px 6px 10px;
+            min-height: 24px;
         }
         QComboBox:hover {
-            border: 2px solid %11;
-            background-color: %5;
+            background-color: %17;
+            border: 1px solid %20;
         }
-        QComboBox:on {
-            border: 2px solid %11;
-            background-color: %6;
+        QComboBox:focus, QComboBox:on {
+            background-color: %16;
+            border: 1px solid %20;
         }
         QComboBox::drop-down {
-            subcontrol-origin: padding;
+            subcontrol-origin: border;
             subcontrol-position: top right;
-            width: 26px;
-            margin-right: 2px;
-            border-left: 2px solid %9;
-            border-top-right-radius: 4px;
-            border-bottom-right-radius: 4px;
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %3, stop:1 %5);
+            width: 30px;
+            border-left: 1px solid %19;
+            border-top-right-radius: 5px;
+            border-bottom-right-radius: 5px;
+            background-color: transparent;
         }
         QComboBox::drop-down:hover {
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %11, stop:1 %12);
+            background-color: %17;
         }
-        QComboBox::drop-down:pressed {
-            background-color: %11;
+        QComboBox::drop-down:pressed, QComboBox:on::drop-down {
+            background-color: %18;
+            border-left: 1px solid %20;
+        }
+        QComboBox::down-arrow {
+            width: 9px;
+            height: 9px;
         }
         QComboBox QAbstractItemView {
-            background-color: %6;
-            color: %7;
+            background-color: %16;
+            color: %2;
             selection-background-color: %12;
             selection-color: %13;
-            border: 2px solid %11;
-            border-radius: 4px;
-            padding: 4px 8px;
+            border: 1px solid %20;
+            border-radius: 6px;
+            padding: 5px 0px;
             outline: 0px;
         }
         QComboBox QAbstractItemView::item {
-            min-height: 28px;
-            padding: 6px 10px;
-            border-radius: 3px;
+            min-height: 24px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin: 1px 4px;
         }
-        QComboBox QAbstractItemView::item:selected {
+        QComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover {
             background-color: %12;
             color: %13;
         }
-        QComboBox QAbstractItemView::item:hover {
-            background-color: %11;
-            color: %13;
+        QComboBox:disabled {
+            background-color: %3;
+            color: %21;
+            border: 1px solid %9;
         }
 
         /* Spin boxes */
         QSpinBox {
-            background-color: %6;
-            color: %7;
-            border: 1px solid %9;
-            border-radius: 4px;
-            padding: 4px;
+            background-color: %16;
+            color: %2;
+            border: 1px solid %19;
+            border-radius: 5px;
+            padding: 6px 34px 6px 10px;
             min-height: 24px;
         }
         QSpinBox:hover {
-            border: 2px solid %11;
+            background-color: %17;
+            border: 1px solid %20;
+        }
+        QSpinBox:focus {
+            background-color: %16;
+            border: 1px solid %20;
         }
         QSpinBox::up-button, QSpinBox::down-button {
-            background-color: %3;
-            border: 1px solid %9;
-            border-radius: 2px;
-            width: 16px;
+            subcontrol-origin: border;
+            width: 30px;
+            background-color: transparent;
+            border-left: 1px solid %19;
+        }
+        QSpinBox::up-button {
+            subcontrol-position: top right;
+            border-top-right-radius: 5px;
+            border-bottom: 1px solid %19;
+        }
+        QSpinBox::down-button {
+            subcontrol-position: bottom right;
+            border-bottom-right-radius: 5px;
         }
         QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-            background-color: %5;
+            background-color: %17;
+        }
+        QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
+            background-color: %18;
+            border-left: 1px solid %20;
+        }
+        QSpinBox::up-arrow, QSpinBox::down-arrow {
+            width: 8px;
+            height: 8px;
+        }
+        QSpinBox:disabled {
+            background-color: %3;
+            color: %21;
+            border: 1px solid %9;
         }
 
         /* Labels */
@@ -375,6 +424,8 @@ QString ThemeManager::generateStyleSheet() const {
         }
 
         /* ===== END UNIVERSAL STYLES ===== */
+        /* Safety net to prevent QString::arg() shifting bugs if a marker is removed:
+           %1 %2 %3 %4 %5 %6 %7 %8 %9 %10 %11 %12 %13 %14 %15 %16 %17 %18 %19 %20 %21 */
     )QSS")
     .arg(c.windowBackground)           // %1
     .arg(c.windowText)                 // %2
@@ -390,7 +441,13 @@ QString ThemeManager::generateStyleSheet() const {
     .arg(c.selectionBackground)        // %12
     .arg(c.selectionText)              // %13
     .arg(c.progressBarBackground)      // %14
-    .arg(c.progressBarChunk);          // %15
+    .arg(c.progressBarChunk)           // %15
+    .arg(c.controlBackground)          // %16
+    .arg(c.controlHoverBackground)     // %17
+    .arg(c.controlPressedBackground)   // %18
+    .arg(c.controlBorder)              // %19
+    .arg(c.controlFocusBorder)         // %20
+    .arg(c.controlMutedText);          // %21
 
     return qss;
 }
@@ -429,4 +486,4 @@ bool isSystemDarkMode() {
 #endif
 }
 
-} // namespace aa
+} // namespace cta

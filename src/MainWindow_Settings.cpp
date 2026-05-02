@@ -17,7 +17,7 @@
 #include <QPushButton>
 #include <QListWidgetItem>
 
-namespace aa {
+namespace cta {
 
 ProcessingSettings MainWindow::gatherSettings() const {
     ProcessingSettings s;
@@ -90,4 +90,4 @@ ProcessingSettings MainWindow::gatherSettings() const {
     return s;
 }
 
-} // namespace aa
+} // namespace cta

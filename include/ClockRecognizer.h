@@ -3,7 +3,7 @@
 #include <opencv2/core/mat.hpp>
 #include <string>
 
-namespace aa {
+namespace cta {
 
 struct BoardGeometry;
 
@@ -39,4 +39,4 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
                           const BoardGeometry& geo,
                           ClockCache* cache = nullptr);
 
-} // namespace aa
+} // namespace cta

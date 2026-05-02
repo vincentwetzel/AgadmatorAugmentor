@@ -7,7 +7,7 @@
 #include <windows.h>
 #endif
 
-namespace aa {
+namespace cta {
 namespace utils {
 
 std::string ts(double elapsed) {
@@ -87,4 +87,4 @@ std::string get_safe_path(const std::string& utf8_path) {
 }
 
 } // namespace utils
-} // namespace aa
+} // namespace cta

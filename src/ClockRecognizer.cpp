@@ -10,7 +10,7 @@
 #include <tuple>
 #include <vector>
 
-namespace aa {
+namespace cta {
 
 // ── Hu Moments Digit Recognizer ──────────────────────────────────────────────
 // Zero-dependency OCR for chess clock digits (0-9, ":").
@@ -486,4 +486,4 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
     return state;
 }
 
-} // namespace aa
+} // namespace cta

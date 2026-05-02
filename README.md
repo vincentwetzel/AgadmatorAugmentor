@@ -13,9 +13,9 @@ This tool processes chess video files, identifies board states, and reconstructs
 - **UI Detection**: Automatic detection of yellow highlights, arrows, clocks, and hover boxes
 - **Clock Recognition**: Hu Moments-based OCR for clock time extraction
 - **PGN Export**: Generate PGN files with extracted moves, clock information, and analysis variations.
-- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search depth, and engine variation length. The application can auto-find your Stockfish executable or you can specify a path.
+- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search limits (depth, time per move, nodes), and engine variation length. The application can auto-find your Stockfish executable or you can specify a path.
 - **Custom Output**: Save analysis alongside the source video or in a custom directory (defaults to your Documents folder).
-- **Channel-Specific Templates**: Auto-detect and apply custom visual overlay layouts tailored for different chess YouTube channels via a built-in screenshot-based template editor.
+- **Channel-Specific Templates**: Auto-detect and apply custom visual overlay layouts tailored for different chess YouTube channels. Templates are copied to `%APPDATA%\ChessTubeAnalyzer\templates` on first run, can be overridden per queued video, and are edited in a built-in screenshot-based WYSIWYG editor with 8-way resize handles and independent X/Y eval-bar scaling.
 - **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, dynamic best move arrows (scaled by evaluation strength), and engine evaluation lines.
 - **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
 
@@ -26,11 +26,13 @@ Download and run the latest NSIS installer from the Releases page. The applicati
 
 ### Developer Build
 ```cmd
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static
-cmake --build build --config Release
+cmake --preset vs2022-dev
+cmake --build --preset gui-release
 ```
 
-> **Note:** Use `x64-windows-static` (not `x64-windows`) to enable static linking and LTO, which eliminates DLL dispatch overhead and allows Whole Program Optimization.
+> **Note:** On Windows, the project now defaults to the documented `E:/vcpkg` toolchain and auto-selects a matching triplet based on the installed OpenCV package, preferring `x64-windows-static` when it exists. You can still override either value explicitly if your environment differs.
+
+For day-to-day iteration, the `vs2022-dev` preset keeps expensive packaging steps off: Release IPO/LTO is disabled, vcpkg app-local copying is disabled, and Qt runtime deployment is disabled. Use `vs2022-release-package` when you want the slower packaging-oriented build.
 
 #### Optional GPU Acceleration
 
@@ -58,9 +60,21 @@ cd build\Release
 "ChessTube Analyzer.exe" "path\to\video1.mp4;path\to\video2.mp4" --board-asset "path\to\board.png"
 ```
 
+### Queue And Template Workflow
+
+- Add one or more videos to the queue by browsing or drag-and-drop.
+- Each queued item is auto-matched against the template's Name (or alternative keywords) using the video filename; if nothing matches, the built-in `generic` template is used.
+- You can override the template per queue item from its inline dropdown before processing starts.
+- The selected template is snapshotted onto the queue item right before launch, so a batch can safely mix channels and still keep the intended overlay layout for each video.
+- Use **Manage Templates** to load a reference screenshot, drag and resize the Analysis Board, Eval Bar, and PV Text overlays, and choose whether engine arrows render on the analysis board, the main board, both, or neither.
+
+Template JSON files and reference screenshots live in `%APPDATA%\ChessTubeAnalyzer\templates`. Bundled defaults are copied there automatically on first run so they can be customized without touching the installed files.
+
 ### Test
 ```cmd
-cd cpp\build\Release
+cmake -B build -DBUILD_TESTS=ON
+cmake --build build --config Release
+cd build\Release
 test_extract_moves.exe
 ```
 
@@ -166,8 +180,8 @@ The extractor treats the chess.com UI as a deterministic state machine:
 7. **4-Layer Validation** — Yellow highlights, hover-box rejection, clock turn check, revert detection
 8. **Conditional Clock OCR** — Cached clock ROIs; Hu Moments digit recognizer runs in microseconds when pixels change
 9. **Move Settling** — Adaptive 0.2s peek-ahead, skipped when confidence >90%
-10. **Output** — A PGN file (`<video_name>.pgn`) containing moves, timestamps, and clock data. If Stockfish analysis is enabled, the PGN will also include engine variations and evaluations.
-11. **Overlay Templates** — Each queued video carries a selected overlay template. Templates are auto-matched from filename keywords, can be overridden per queue item, and provide independent enable/position/scale settings for the board, eval bar, and PV text.
+10. **Output** — A PGN file (`<video_name>.pgn`) containing moves, timestamps, and clock data. If Stockfish analysis is enabled, the PGN will also include engine variations and evaluations bounded by the configured depth, time, or node limits.
+11. **Overlay Templates** - Each queued video carries a selected overlay template. Templates are auto-matched from filename keywords, can be overridden per queue item, and persist an item-specific snapshot of enable/position/scale settings for the board, eval bar, PV text, and engine-arrow target.
 12. **Video Compositing** — Generates static overlay BMPs combined using FFmpeg `concat` demuxer scripts, dropping overlay render time from minutes to under a second while keeping overlays synchronized with the source video.
 
 Progress is shown as an inline `[XX.X%]` ticker during scanning.

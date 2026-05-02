@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace aa {
+namespace cta {
 
 struct BoardGeometry;
 
@@ -18,4 +18,4 @@ std::vector<std::string> find_yellow_arrows(const cv::Mat& img_bgr,
                                             const cv::Mat& board_template,
                                             const BoardGeometry& geo);
 
-} // namespace aa
+} // namespace cta

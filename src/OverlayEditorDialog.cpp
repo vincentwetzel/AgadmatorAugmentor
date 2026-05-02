@@ -13,10 +13,13 @@
 #include <QGraphicsSceneHoverEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QStyleOptionGraphicsItem>
 #include <QResizeEvent>
+#include <QSettings>
+#include <QStringList>
 
-namespace aa {
+namespace cta {
 
 // ─── DraggableOverlay Implementation ─────────────────────────────────────────
 
@@ -28,13 +31,30 @@ DraggableOverlay::DraggableOverlay(const QPixmap& pixmap, const QString& id, QGr
 }
 
 DraggableOverlay::ResizeHandle DraggableOverlay::getHandleAt(const QPointF& pos) const {
-    qreal hs = 20.0 / currentScale_; // Visually constant handle size
-    hs = std::min({hs, boundingRect().width() / 3.0, boundingRect().height() / 3.0});
+    qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
+    qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+    if (sx == 0.0) sx = 1.0;
+    if (sy == 0.0) sy = 1.0;
+
+    qreal hsX = 20.0 / sx;
+    qreal hsY = 20.0 / sy;
+    hsX = std::min({hsX, boundingRect().width() / 3.0});
+    hsY = std::min({hsY, boundingRect().height() / 3.0});
     QRectF r = boundingRect();
-    if (QRectF(r.left(), r.top(), hs, hs).contains(pos)) return TopLeft;
-    if (QRectF(r.right() - hs, r.top(), hs, hs).contains(pos)) return TopRight;
-    if (QRectF(r.left(), r.bottom() - hs, hs, hs).contains(pos)) return BottomLeft;
-    if (QRectF(r.right() - hs, r.bottom() - hs, hs, hs).contains(pos)) return BottomRight;
+    
+    qreal midX = r.center().x() - hsX / 2.0;
+    qreal midY = r.center().y() - hsY / 2.0;
+
+    if (QRectF(r.left(), r.top(), hsX, hsY).contains(pos)) return TopLeft;
+    if (QRectF(r.right() - hsX, r.top(), hsX, hsY).contains(pos)) return TopRight;
+    if (QRectF(r.left(), r.bottom() - hsY, hsX, hsY).contains(pos)) return BottomLeft;
+    if (QRectF(r.right() - hsX, r.bottom() - hsY, hsX, hsY).contains(pos)) return BottomRight;
+    
+    if (QRectF(midX, r.top(), hsX, hsY).contains(pos)) return Top;
+    if (QRectF(midX, r.bottom() - hsY, hsX, hsY).contains(pos)) return Bottom;
+    if (QRectF(r.left(), midY, hsX, hsY).contains(pos)) return Left;
+    if (QRectF(r.right() - hsX, midY, hsX, hsY).contains(pos)) return Right;
+
     return None;
 }
 
@@ -44,6 +64,10 @@ void DraggableOverlay::hoverMoveEvent(QGraphicsSceneHoverEvent* event) {
         setCursor(Qt::SizeFDiagCursor);
     } else if (h == TopRight || h == BottomLeft) {
         setCursor(Qt::SizeBDiagCursor);
+    } else if (h == Top || h == Bottom) {
+        setCursor(Qt::SizeVerCursor);
+    } else if (h == Left || h == Right) {
+        setCursor(Qt::SizeHorCursor);
     } else {
         setCursor(Qt::OpenHandCursor);
     }
@@ -68,39 +92,79 @@ void DraggableOverlay::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         qreal origH = boundingRect().height();
         
         QPointF currentPos = pos();
-        qreal rightEdge = currentPos.x() + origW * currentScale_;
-        qreal bottomEdge = currentPos.y() + origH * currentScale_;
+        qreal scaleX = (id_ == "EvalBar") ? transform().m11() : currentScale_;
+        qreal scaleY = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+        if (scaleX == 0.0) scaleX = 1.0;
+        if (scaleY == 0.0) scaleY = 1.0;
+
+        qreal rightEdge = currentPos.x() + origW * scaleX;
+        qreal bottomEdge = currentPos.y() + origH * scaleY;
+        qreal centerX = currentPos.x() + origW * scaleX / 2.0;
+        qreal centerY = currentPos.y() + origH * scaleY / 2.0;
         
-        qreal newScale = currentScale_;
+        qreal newScaleX = scaleX;
+        qreal newScaleY = scaleY;
         QPointF newPos = currentPos;
         
         if (activeHandle_ == BottomRight) {
-            newScale = (sceneMouse.x() - currentPos.x()) / origW;
+            newScaleX = (sceneMouse.x() - currentPos.x()) / origW;
+            newScaleY = (sceneMouse.y() - currentPos.y()) / origH;
         } else if (activeHandle_ == BottomLeft) {
-            newScale = (rightEdge - sceneMouse.x()) / origW;
-            newPos.setX(rightEdge - origW * newScale);
+            newScaleX = (rightEdge - sceneMouse.x()) / origW;
+            newScaleY = (sceneMouse.y() - currentPos.y()) / origH;
         } else if (activeHandle_ == TopRight) {
-            newScale = (sceneMouse.x() - currentPos.x()) / origW;
-            newPos.setY(bottomEdge - origH * newScale);
+            newScaleX = (sceneMouse.x() - currentPos.x()) / origW;
+            newScaleY = (bottomEdge - sceneMouse.y()) / origH;
         } else if (activeHandle_ == TopLeft) {
-            newScale = (rightEdge - sceneMouse.x()) / origW;
-            newPos.setX(rightEdge - origW * newScale);
-            newPos.setY(bottomEdge - origH * newScale);
+            newScaleX = (rightEdge - sceneMouse.x()) / origW;
+            newScaleY = (bottomEdge - sceneMouse.y()) / origH;
+        } else if (activeHandle_ == Right) {
+            newScaleX = (sceneMouse.x() - currentPos.x()) / origW;
+        } else if (activeHandle_ == Left) {
+            newScaleX = (rightEdge - sceneMouse.x()) / origW;
+        } else if (activeHandle_ == Bottom) {
+            newScaleY = (sceneMouse.y() - currentPos.y()) / origH;
+        } else if (activeHandle_ == Top) {
+            newScaleY = (bottomEdge - sceneMouse.y()) / origH;
         }
         
-        newScale = std::clamp(newScale, 0.05, 5.0); // Clamp scale down to 5% or 500%
+        newScaleX = std::clamp(newScaleX, 0.01, 10.0);
+        newScaleY = std::clamp(newScaleY, 0.01, 10.0);
+        
+        if (id_ != "EvalBar") {
+            if (activeHandle_ == Left || activeHandle_ == Right) {
+                newScaleY = newScaleX;
+            } else if (activeHandle_ == Top || activeHandle_ == Bottom) {
+                newScaleX = newScaleY;
+            } else {
+                newScaleX = newScaleY = std::max(newScaleX, newScaleY);
+            }
+        }
         
         // Re-apply pos based on the mathematically clamped scale to lock anchors safely
-        if (activeHandle_ == BottomLeft || activeHandle_ == TopLeft) {
-             newPos.setX(rightEdge - origW * newScale);
+        if (activeHandle_ == BottomLeft || activeHandle_ == TopLeft || activeHandle_ == Left) {
+             newPos.setX(rightEdge - origW * newScaleX);
         }
-        if (activeHandle_ == TopRight || activeHandle_ == TopLeft) {
-             newPos.setY(bottomEdge - origH * newScale);
+        if (activeHandle_ == TopRight || activeHandle_ == TopLeft || activeHandle_ == Top) {
+             newPos.setY(bottomEdge - origH * newScaleY);
+        }
+        
+        // Enforce stationary axis centers for edge handles to prevent mouse run-away
+        if (id_ != "EvalBar") {
+            if (activeHandle_ == Right || activeHandle_ == Left) {
+                newPos.setY(centerY - origH * newScaleY / 2.0);
+            } else if (activeHandle_ == Bottom || activeHandle_ == Top) {
+                newPos.setX(centerX - origW * newScaleX / 2.0);
+            }
         }
 
-        setScale(newScale);
+        if (id_ == "EvalBar") {
+            setTransform(QTransform::fromScale(newScaleX, newScaleY));
+        } else {
+            currentScale_ = newScaleX;
+            setScale(newScaleX);
+        }
         setPos(newPos);
-        currentScale_ = newScale;
     } else {
         QGraphicsPixmapItem::mouseMoveEvent(event);
     }
@@ -122,12 +186,19 @@ void DraggableOverlay::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
 void DraggableOverlay::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         currentScale_ = 1.0;
-        setScale(currentScale_);
+        if (id_ == "EvalBar") {
+            qreal visualSy = videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0;
+            setTransform(QTransform::fromScale(1.0, visualSy));
+        } else {
+            setScale(currentScale_);
+        }
         
         // Snap back into bounds if resetting the scale pushed it outside the video area
         if (videoBounds_.isValid()) {
-            qreal maxX = std::max(0.0, videoBounds_.width() - boundingRect().width() * currentScale_);
-            qreal maxY = std::max(0.0, videoBounds_.height() - boundingRect().height() * currentScale_);
+            qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
+            qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+            qreal maxX = std::max(0.0, videoBounds_.width() - boundingRect().width() * sx);
+            qreal maxY = std::max(0.0, videoBounds_.height() - boundingRect().height() * sy);
             setPos(std::clamp(pos().x(), 0.0, maxX), std::clamp(pos().y(), 0.0, maxY));
         }
         event->accept();
@@ -141,24 +212,51 @@ void DraggableOverlay::setVideoBounds(const QSizeF& bounds) {
 }
 
 void DraggableOverlay::updateFromConfig(const OverlayElement& elem) {
-    currentScale_ = elem.scale;
-    setScale(currentScale_);
     setVisible(elem.enabled);
+    
+    qreal scaleY = 1.0;
+    if (id_ == "EvalBar") {
+        double encoded = elem.scale;
+        double sx = std::round(encoded * 100.0) / 100.0;
+        double sy = std::round((encoded - sx) * 10000.0 * 100.0) / 100.0;
+        if (sy <= 0.0) sy = 1.0;
+        
+        currentScale_ = sx;
+        qreal visualSy = sy * (videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0);
+        scaleY = visualSy;
+        setTransform(QTransform::fromScale(sx, visualSy));
+    } else {
+        currentScale_ = elem.scale;
+        setScale(currentScale_);
+        scaleY = currentScale_;
+    }
     
     if (videoBounds_.isValid()) {
         qreal availW = videoBounds_.width() - boundingRect().width() * currentScale_;
-        qreal availH = videoBounds_.height() - boundingRect().height() * currentScale_;
+        qreal availH = videoBounds_.height() - boundingRect().height() * scaleY;
         setPos(elem.x_percent * std::max(0.0, availW), elem.y_percent * std::max(0.0, availH));
     }
 }
 
 void DraggableOverlay::populateConfig(OverlayElement& elem) const {
-    elem.scale = currentScale_;
     elem.enabled = isVisible();
     
+    qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
+    qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+    
+    if (id_ == "EvalBar") {
+        double logicalSy = sy / (videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0);
+        double dsx = std::round(sx * 100.0) / 100.0;
+        double dsy = std::round(logicalSy * 100.0) / 100.0;
+        // Encode both X and Y into the single scale double (X.XXYYYY)
+        elem.scale = dsx + (dsy / 10000.0);
+    } else {
+        elem.scale = currentScale_;
+    }
+    
     if (videoBounds_.isValid()) {
-        qreal availW = videoBounds_.width() - boundingRect().width() * currentScale_;
-        qreal availH = videoBounds_.height() - boundingRect().height() * currentScale_;
+        qreal availW = videoBounds_.width() - boundingRect().width() * sx;
+        qreal availH = videoBounds_.height() - boundingRect().height() * sy;
         elem.x_percent = (availW > 0) ? std::clamp(x() / availW, 0.0, 1.0) : 0.0;
         elem.y_percent = (availH > 0) ? std::clamp(y() / availH, 0.0, 1.0) : 0.0;
     }
@@ -168,8 +266,12 @@ QVariant DraggableOverlay::itemChange(GraphicsItemChange change, const QVariant&
     if (change == ItemPositionChange && scene()) {
         QPointF newPos = value.toPointF();
         if (videoBounds_.isValid()) {
-            qreal maxX = std::max(0.0, videoBounds_.width() - boundingRect().width() * scale());
-            qreal maxY = std::max(0.0, videoBounds_.height() - boundingRect().height() * scale());
+            qreal sx = (id_ == "EvalBar") ? transform().m11() : scale();
+            qreal sy = (id_ == "EvalBar") ? transform().m22() : scale();
+            if (sx == 0.0) sx = 1.0;
+            if (sy == 0.0) sy = 1.0;
+            qreal maxX = std::max(0.0, videoBounds_.width() - boundingRect().width() * sx);
+            qreal maxY = std::max(0.0, videoBounds_.height() - boundingRect().height() * sy);
             newPos.setX(std::clamp(newPos.x(), 0.0, maxX));
             newPos.setY(std::clamp(newPos.y(), 0.0, maxY));
             return newPos;
@@ -182,19 +284,34 @@ void DraggableOverlay::paint(QPainter* painter, const QStyleOptionGraphicsItem* 
     QGraphicsPixmapItem::paint(painter, option, widget);
     
     if (isSelected()) {
-        qreal hs = 20.0 / currentScale_;
-        hs = std::min({hs, boundingRect().width() / 3.0, boundingRect().height() / 3.0});
+        qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
+        qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+        if (sx == 0.0) sx = 1.0;
+        if (sy == 0.0) sy = 1.0;
+
+        qreal hsX = 20.0 / sx;
+        qreal hsY = 20.0 / sy;
+        hsX = std::min({hsX, boundingRect().width() / 3.0});
+        hsY = std::min({hsY, boundingRect().height() / 3.0});
         QRectF r = boundingRect();
         
+        qreal midX = r.center().x() - hsX / 2.0;
+        qreal midY = r.center().y() - hsY / 2.0;
+        
         painter->setBrush(Qt::white);
-        painter->setPen(QPen(Qt::black, 1.0 / currentScale_));
+        painter->setPen(QPen(Qt::black, 1.0 / std::max(sx, sy)));
         
-        painter->drawRect(QRectF(r.left(), r.top(), hs, hs));
-        painter->drawRect(QRectF(r.right() - hs, r.top(), hs, hs));
-        painter->drawRect(QRectF(r.left(), r.bottom() - hs, hs, hs));
-        painter->drawRect(QRectF(r.right() - hs, r.bottom() - hs, hs, hs));
+        painter->drawRect(QRectF(r.left(), r.top(), hsX, hsY));
+        painter->drawRect(QRectF(r.right() - hsX, r.top(), hsX, hsY));
+        painter->drawRect(QRectF(r.left(), r.bottom() - hsY, hsX, hsY));
+        painter->drawRect(QRectF(r.right() - hsX, r.bottom() - hsY, hsX, hsY));
         
-        QPen borderPen(Qt::white, 2.0 / currentScale_, Qt::DashLine);
+        painter->drawRect(QRectF(midX, r.top(), hsX, hsY));
+        painter->drawRect(QRectF(midX, r.bottom() - hsY, hsX, hsY));
+        painter->drawRect(QRectF(r.left(), midY, hsX, hsY));
+        painter->drawRect(QRectF(r.right() - hsX, midY, hsX, hsY));
+        
+        QPen borderPen(Qt::white, 2.0 / std::max(sx, sy), Qt::DashLine);
         painter->setPen(borderPen);
         painter->setBrush(Qt::NoBrush);
         painter->drawRect(r);
@@ -210,7 +327,7 @@ OverlayEditorDialog::OverlayEditorDialog(QWidget* parent)
     resize(1280, 720);
     setWindowState(windowState() | Qt::WindowMaximized);
 
-    templates_ = aa::TemplateManager::instance().getAllTemplates();
+    templates_ = cta::TemplateManager::instance().getAllTemplates();
     setupUi();
     setupOverlays();
     
@@ -269,7 +386,23 @@ void OverlayEditorDialog::setupUi() {
     deleteTemplateBtn_ = new QPushButton("Delete");
     connect(deleteTemplateBtn_, &QPushButton::clicked, this, &OverlayEditorDialog::onDeleteTemplate);
     row1->addWidget(deleteTemplateBtn_);
+    
+    auto* reloadBtn = new QPushButton("Reload");
+    reloadBtn->setToolTip("Discard unsaved changes and reload templates from disk.");
+    connect(reloadBtn, &QPushButton::clicked, this, [this]() {
+        cta::TemplateManager::instance().reloadTemplates();
+        templates_ = cta::TemplateManager::instance().getAllTemplates();
+        refreshTemplateCombo();
+        if (!templates_.empty()) templateCombo_->setCurrentIndex(0);
+    });
+    row1->addWidget(reloadBtn);
     row1->addStretch();
+    
+    auto* btnBox = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+    btnBox->setToolTip("Save or discard the new overlay configuration.");
+    connect(btnBox, &QDialogButtonBox::accepted, this, &OverlayEditorDialog::onAccept);
+    connect(btnBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    row1->addWidget(btnBox);
     
     auto* row2 = new QHBoxLayout();
     row2->addWidget(new QLabel("Name:"));
@@ -278,7 +411,7 @@ void OverlayEditorDialog::setupUi() {
     
     row2->addWidget(new QLabel("Keywords:"));
     templateKeywordsEdit_ = new QLineEdit();
-    templateKeywordsEdit_->setToolTip("Comma-separated keywords used to automatically detect this channel from video filenames.");
+    templateKeywordsEdit_->setToolTip("Optional. The app automatically checks if the video filename contains the template's Name.\nUse this field to add alternative abbreviations or comma-separated keywords if the filename doesn't exactly match the Name.");
     row2->addWidget(templateKeywordsEdit_);
     
     changeScreenshotBtn_ = new QPushButton("Load Reference Screenshot...");
@@ -292,8 +425,8 @@ void OverlayEditorDialog::setupUi() {
 
     // Toggles
     auto* togglesLayout = new QHBoxLayout();
-    boardCheck_ = new QCheckBox("Board Overlay");
-    boardCheck_->setToolTip("Toggle the visibility of the simulated chess board.");
+    boardCheck_ = new QCheckBox("Analysis Board");
+    boardCheck_->setToolTip("Toggle the visibility of the generated analysis board.");
     evalCheck_ = new QCheckBox("Eval Bar Overlay");
     evalCheck_->setToolTip("Toggle the visibility of the evaluation bar.");
     pvCheck_ = new QCheckBox("PV Text Overlay");
@@ -302,12 +435,22 @@ void OverlayEditorDialog::setupUi() {
     togglesLayout->addWidget(boardCheck_);
     togglesLayout->addWidget(evalCheck_);
     togglesLayout->addWidget(pvCheck_);
+
+    auto* arrowsLabel = new QLabel("Engine Arrows:");
+    auto* arrowsCombo = new QComboBox();
+    arrowsCombo->setObjectName("arrowsCombo");
+    arrowsCombo->addItems({"Analysis Board", "Main Board", "Both", "None"});
+    arrowsCombo->setToolTip("Select where the engine evaluation arrows should be drawn.");
+    togglesLayout->addWidget(arrowsLabel);
+    togglesLayout->addWidget(arrowsCombo);
+
     togglesLayout->addStretch();
     mainLayout->addLayout(togglesLayout);
 
     connect(boardCheck_, &QCheckBox::toggled, [this](bool checked){ boardItem_->setVisible(checked); if(!checked) boardItem_->setSelected(false); onTogglesChanged(); });
     connect(evalCheck_, &QCheckBox::toggled, [this](bool checked){ evalBarItem_->setVisible(checked); if(!checked) evalBarItem_->setSelected(false); onTogglesChanged(); });
     connect(pvCheck_, &QCheckBox::toggled, [this](bool checked){ pvTextItem_->setVisible(checked); if(!checked) pvTextItem_->setSelected(false); onTogglesChanged(); });
+    connect(arrowsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OverlayEditorDialog::onTogglesChanged);
     
     connect(templateNameEdit_, &QLineEdit::textChanged, this, [this](const QString& text){
         if (currentIndex_ >= 0 && currentIndex_ < templates_.size()) {
@@ -327,13 +470,6 @@ void OverlayEditorDialog::setupUi() {
 
     backgroundItem_ = new QGraphicsPixmapItem();
     scene_->addItem(backgroundItem_);
-
-    // Dialog Buttons
-    auto* btnBox = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
-    btnBox->setToolTip("Save or discard the new overlay configuration.");
-    connect(btnBox, &QDialogButtonBox::accepted, this, &OverlayEditorDialog::onAccept);
-    connect(btnBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    mainLayout->addWidget(btnBox);
 }
 
 void OverlayEditorDialog::setupOverlays() {
@@ -354,12 +490,22 @@ void OverlayEditorDialog::setupOverlays() {
     ep.drawRect(0, 300, 40, 300); // 50% advantage
     ep.end();
 
-    QPixmap pvMock(800, 40);
+    QSettings settings;
+    int linesPerPosition = settings.value("multiPv", 3).toInt();
+    
+    QStringList previewLines;
+    previewLines << "1. e4 e5 2. Nf3 Nc6 (+0.45)";
+    if (linesPerPosition >= 2) previewLines << "1. d4 d5 2. c4 e6 (+0.30)";
+    if (linesPerPosition >= 3) previewLines << "1. Nf3 Nf6 2. g3 g6 (+0.15)";
+    if (linesPerPosition >= 4) previewLines << "1. c4 c5 2. Nc3 Nc6 (0.00)";
+    QString previewString = previewLines.join("\n");
+
+    QPixmap pvMock(800, 40 * std::max(1, linesPerPosition));
     pvMock.fill(QColor(0, 0, 0, 200));
     QPainter pp(&pvMock);
     pp.setPen(Qt::white);
     pp.setFont(QFont("Arial", 16, QFont::Bold));
-    pp.drawText(pvMock.rect(), Qt::AlignCenter, "1. e4 e5 2. Nf3 Nc6 (Best Move)");
+    pp.drawText(pvMock.rect(), Qt::AlignCenter, previewString);
     pp.end();
 
     boardItem_ = new DraggableOverlay(boardMock, "Board");
@@ -384,6 +530,15 @@ void OverlayEditorDialog::refreshTemplateCombo() {
 void OverlayEditorDialog::loadTemplateToUi(int index) {
     if (index < 0 || index >= templates_.size()) return;
     
+    // Block signals to prevent onTogglesChanged from corrupting the new config
+    templateNameEdit_->blockSignals(true);
+    boardCheck_->blockSignals(true);
+    evalCheck_->blockSignals(true);
+    pvCheck_->blockSignals(true);
+    if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
+        arrowsCombo->blockSignals(true);
+    }
+
     const auto& tpl = templates_[index];
     templateNameEdit_->setText(tpl.name);
     templateKeywordsEdit_->setText(tpl.keywords.join(", "));
@@ -394,7 +549,7 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
     evalCheck_->setChecked(tpl.config.evalBar.enabled);
     pvCheck_->setChecked(tpl.config.pvText.enabled);
     
-    QString screenshotPath = aa::TemplateManager::instance().getScreenshotPath(tpl.screenshotFilename);
+    QString screenshotPath = cta::TemplateManager::instance().getScreenshotPath(tpl.screenshotFilename);
     QPixmap bg(screenshotPath);
     if (bg.isNull()) {
         bg = QPixmap(1920, 1080);
@@ -410,8 +565,24 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
     pvTextItem_->setVideoBounds(bounds);
 
     boardItem_->updateFromConfig(tpl.config.board);
+    if (!tpl.config.board.enabled) boardItem_->setSelected(false);
+
     evalBarItem_->updateFromConfig(tpl.config.evalBar);
+    if (!tpl.config.evalBar.enabled) evalBarItem_->setSelected(false);
+
     pvTextItem_->updateFromConfig(tpl.config.pvText);
+    if (!tpl.config.pvText.enabled) pvTextItem_->setSelected(false);
+
+    if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
+        int aIdx = arrowsCombo->findText(QString::fromStdString(tpl.config.arrowsTarget));
+        arrowsCombo->setCurrentIndex(aIdx >= 0 ? aIdx : 0);
+        arrowsCombo->blockSignals(false);
+    }
+    
+    templateNameEdit_->blockSignals(false);
+    boardCheck_->blockSignals(false);
+    evalCheck_->blockSignals(false);
+    pvCheck_->blockSignals(false);
 }
 
 void OverlayEditorDialog::saveUiToTemplate(int index) {
@@ -426,6 +597,10 @@ void OverlayEditorDialog::saveUiToTemplate(int index) {
     boardItem_->populateConfig(tpl.config.board);
     evalBarItem_->populateConfig(tpl.config.evalBar);
     pvTextItem_->populateConfig(tpl.config.pvText);
+
+    if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
+        tpl.config.arrowsTarget = arrowsCombo->currentText().toStdString();
+    }
 }
 
 void OverlayEditorDialog::updateOverlayBounds() {
@@ -453,7 +628,7 @@ void OverlayEditorDialog::onNewTemplate() {
     newTpl.id = "custom_" + QString::number(QDateTime::currentMSecsSinceEpoch());
     newTpl.name = "New Custom Template";
     newTpl.isBuiltIn = false;
-    newTpl.config = aa::TemplateManager::instance().getFallbackTemplate().config;
+    newTpl.config = cta::TemplateManager::instance().getFallbackTemplate().config;
     
     templates_.push_back(newTpl);
     refreshTemplateCombo();
@@ -484,7 +659,7 @@ void OverlayEditorDialog::onChangeScreenshot() {
     QString path = QFileDialog::getOpenFileName(this, "Select Reference Screenshot", QStandardPaths::writableLocation(QStandardPaths::PicturesLocation), "Images (*.png *.jpg *.jpeg)");
     if (!path.isEmpty()) {
         QString newFileName = templates_[currentIndex_].id + "_ref.png";
-        QString destPath = aa::TemplateManager::instance().getScreenshotPath(newFileName);
+        QString destPath = cta::TemplateManager::instance().getScreenshotPath(newFileName);
         if (QFile::exists(destPath)) QFile::remove(destPath);
         QFile::copy(path, destPath);
         
@@ -498,6 +673,9 @@ void OverlayEditorDialog::onTogglesChanged() {
         templates_[currentIndex_].config.board.enabled = boardItem_ && boardItem_->isVisible();
         templates_[currentIndex_].config.evalBar.enabled = evalBarItem_ && evalBarItem_->isVisible();
         templates_[currentIndex_].config.pvText.enabled = pvTextItem_ && pvTextItem_->isVisible();
+        if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
+            templates_[currentIndex_].config.arrowsTarget = arrowsCombo->currentText().toStdString();
+        }
     }
 }
 
@@ -507,13 +685,13 @@ void OverlayEditorDialog::onAccept() {
     }
     
     for (const QString& id : deletedTemplateIds_) {
-        aa::TemplateManager::instance().deleteTemplate(id);
+        cta::TemplateManager::instance().deleteTemplate(id);
     }
     for (const auto& tpl : templates_) {
-        aa::TemplateManager::instance().saveTemplate(tpl);
+        cta::TemplateManager::instance().saveTemplate(tpl);
     }
     
     accept();
 }
 
-} // namespace aa
+} // namespace cta

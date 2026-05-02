@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace aa {
+namespace cta {
 
 struct BoardGeometry;
 
@@ -58,4 +58,4 @@ std::string find_misaligned_piece(const cv::Mat& img_bgr,
 /// Generates an empty board image highlighting the 4 corners tested for yellowness.
 void generate_corner_debug_image(const cv::Mat& board_template, const std::string& output_dir);
 
-} // namespace aa
+} // namespace cta

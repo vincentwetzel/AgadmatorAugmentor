@@ -8,7 +8,7 @@
 #include <queue>
 #include "BoardLocalizer.h"
 
-namespace aa {
+namespace cta {
 
 /// Pre-decodes video frames in a background thread, pre-computing grayscale
 /// and board crop so the main extraction loop never blocks on FFmpeg I/O.
@@ -79,4 +79,4 @@ private:
     bool stop_requested_ = false;
 };
 
-} // namespace aa
+} // namespace cta

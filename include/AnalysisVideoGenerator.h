@@ -11,7 +11,10 @@
 #include "BoardLocalizer.h"
 #include "VideoOverlayConfig.h"
 
-namespace aa {
+namespace cta {
+
+constexpr int kPvTextBaseWidth = 800;
+constexpr int kPvTextLineHeight = 40;
 
 class AnalysisVideoGenerator {
 public:
@@ -65,4 +68,4 @@ private:
     void overlay_image(cv::Mat& background, const cv::Mat& foreground, cv::Point location);
 };
 
-} // namespace aa
+} // namespace cta

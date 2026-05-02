@@ -1,6 +1,6 @@
 #include "FFmpegFilterGraph.h"
 
-namespace aa {
+namespace cta {
 
 FFmpegFilterGraph::FFmpegFilterGraph() {}
 
@@ -23,4 +23,4 @@ std::string FFmpegFilterGraph::build() const {
     return ss.str();
 }
 
-} // namespace aa
+} // namespace cta

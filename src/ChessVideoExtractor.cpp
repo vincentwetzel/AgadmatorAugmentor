@@ -32,7 +32,7 @@
 #include <windows.h>
 #endif
 
-namespace aa {
+namespace cta {
 
 struct ChessVideoExtractor::MoveScore {
     int from_sq = -1;
@@ -707,4 +707,4 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     return data;
 }
 
-} // namespace aa
+} // namespace cta

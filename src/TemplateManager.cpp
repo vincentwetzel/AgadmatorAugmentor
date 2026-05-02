@@ -8,13 +8,58 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 
-namespace aa {
+namespace cta {
 
 TemplateManager& TemplateManager::instance() {
     static TemplateManager instance;
     return instance;
 }
+
+namespace {
+std::string normalizeArrowsTarget(const std::string& arrowsTarget) {
+    if (arrowsTarget == "Debug Board" || arrowsTarget == "Board Overlay") {
+        return "Analysis Board";
+    }
+    return arrowsTarget;
+}
+
+OverlayTemplate parseTemplateJson(const nlohmann::json& j, const QString& defaultId) {
+    OverlayTemplate tpl;
+    tpl.id = QString::fromStdString(j.value("id", defaultId.toStdString()));
+    tpl.name = QString::fromStdString(j.value("name", "Unknown Template"));
+    tpl.screenshotFilename = QString::fromStdString(j.value("screenshotFilename", ""));
+    tpl.isBuiltIn = j.value("isBuiltIn", false);
+    
+    if (j.contains("keywords") && j["keywords"].is_array()) {
+        for (const auto& kw : j["keywords"]) {
+            tpl.keywords.append(QString::fromStdString(kw.get<std::string>()));
+        }
+    }
+
+    if (j.contains("config")) {
+        auto& cfg = j["config"];
+        tpl.config.board.enabled = cfg.value("boardEnabled", true);
+        tpl.config.board.x_percent = cfg.value("boardX", 1.0);
+        tpl.config.board.y_percent = cfg.value("boardY", 0.0);
+        tpl.config.board.scale = cfg.value("boardScale", 0.3);
+        
+        tpl.config.evalBar.enabled = cfg.value("evalBarEnabled", true);
+        tpl.config.evalBar.x_percent = cfg.value("evalBarX", 0.0);
+        tpl.config.evalBar.y_percent = cfg.value("evalBarY", 0.0);
+        tpl.config.evalBar.scale = cfg.value("evalBarScale", 1.0);
+        
+        tpl.config.pvText.enabled = cfg.value("pvTextEnabled", true);
+        tpl.config.pvText.x_percent = cfg.value("pvTextX", 0.5);
+        tpl.config.pvText.y_percent = cfg.value("pvTextY", 0.95);
+        tpl.config.pvText.scale = cfg.value("pvTextScale", 1.0);
+
+        tpl.config.arrowsTarget = normalizeArrowsTarget(cfg.value("arrowsTarget", "Analysis Board"));
+    }
+    return tpl;
+}
+} // namespace
 
 void TemplateManager::initialize() {
     // Define the AppData templates directory: %APPDATA%/ChessTubeAnalyzer/templates
@@ -55,48 +100,23 @@ void TemplateManager::initialize() {
         }
     }
 
-    // Now load all templates from the AppData directory
+    reloadTemplates();
+}
+
+void TemplateManager::reloadTemplates() {
+    QDir templateDir(appDataTemplateDir_);
     templates_.clear();
     QFileInfoList jsonFiles = templateDir.entryInfoList({"*.json"}, QDir::Files);
     
     for (const QFileInfo& fileInfo : jsonFiles) {
-        std::ifstream f(fileInfo.absoluteFilePath().toStdString());
-        if (!f.is_open()) continue;
+        QFile file(fileInfo.absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
 
         try {
-            nlohmann::json j = nlohmann::json::parse(f);
-            OverlayTemplate tpl;
-            tpl.id = QString::fromStdString(j.value("id", fileInfo.baseName().toStdString()));
-            tpl.name = QString::fromStdString(j.value("name", "Unknown Template"));
-            tpl.screenshotFilename = QString::fromStdString(j.value("screenshotFilename", ""));
-            tpl.isBuiltIn = j.value("isBuiltIn", false);
-            
-            if (j.contains("keywords") && j["keywords"].is_array()) {
-                for (const auto& kw : j["keywords"]) {
-                    tpl.keywords.append(QString::fromStdString(kw.get<std::string>()));
-                }
-            }
-
-            // Parse layout config (adjust based on your actual VideoOverlayConfig structure)
-            if (j.contains("config")) {
-                auto& cfg = j["config"];
-                tpl.config.board.enabled = cfg.value("boardEnabled", true);
-                tpl.config.board.x_percent = cfg.value("boardX", 1.0);
-                tpl.config.board.y_percent = cfg.value("boardY", 0.0);
-                tpl.config.board.scale = cfg.value("boardScale", 0.3);
-                
-                tpl.config.evalBar.enabled = cfg.value("evalBarEnabled", true);
-                tpl.config.evalBar.x_percent = cfg.value("evalBarX", 0.0);
-                tpl.config.evalBar.y_percent = cfg.value("evalBarY", 0.0);
-                tpl.config.evalBar.scale = cfg.value("evalBarScale", 1.0);
-                
-                tpl.config.pvText.enabled = cfg.value("pvTextEnabled", true);
-                tpl.config.pvText.x_percent = cfg.value("pvTextX", 0.5);
-                tpl.config.pvText.y_percent = cfg.value("pvTextY", 0.95);
-                tpl.config.pvText.scale = cfg.value("pvTextScale", 1.0);
-            }
-
-            templates_.push_back(tpl);
+            QByteArray data = file.readAll();
+            nlohmann::json j = nlohmann::json::parse(data.toStdString());
+            file.close();
+            templates_.push_back(parseTemplateJson(j, fileInfo.baseName()));
         } catch (const std::exception& e) {
             std::cerr << "Failed to parse template JSON: " << fileInfo.fileName().toStdString() << " - " << e.what() << "\n";
         }
@@ -127,6 +147,7 @@ OverlayTemplate TemplateManager::getFallbackTemplate() const {
     safe.config.board.x_percent = 1.0;
     safe.config.board.y_percent = 0.0;
     safe.config.board.scale = 0.3;
+    safe.config.arrowsTarget = "Analysis Board";
     return safe;
 }
 
@@ -134,8 +155,17 @@ OverlayTemplate TemplateManager::matchTemplate(const QString& videoFilename) con
     // Case-insensitive match against keywords
     QString lowerFilename = videoFilename.toLower();
     for (const auto& tpl : templates_) {
+        // Primary check: Does the filename contain the template's exact name or ID?
+        if (!tpl.name.trimmed().isEmpty() && lowerFilename.contains(tpl.name.trimmed().toLower())) {
+            return tpl;
+        }
+        if (!tpl.id.trimmed().isEmpty() && lowerFilename.contains(tpl.id.trimmed().toLower())) {
+            return tpl;
+        }
+        
+        // Fallback check: Check custom user-provided keywords/abbreviations
         for (const QString& kw : tpl.keywords) {
-            if (lowerFilename.contains(kw.toLower())) {
+            if (!kw.trimmed().isEmpty() && lowerFilename.contains(kw.trimmed().toLower())) {
                 return tpl;
             }
         }
@@ -143,11 +173,40 @@ OverlayTemplate TemplateManager::matchTemplate(const QString& videoFilename) con
     return getFallbackTemplate();
 }
 
+bool TemplateManager::loadTemplate(const QString& id, QString* errorMessage) {
+    QString filePath = QDir(appDataTemplateDir_).absoluteFilePath(id + ".json");
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (errorMessage) *errorMessage = "Could not open template file: " + filePath;
+        return false;
+    }
+
+    try {
+        QByteArray data = file.readAll();
+        nlohmann::json j = nlohmann::json::parse(data.toStdString());
+        file.close();
+
+        OverlayTemplate tpl = parseTemplateJson(j, id);
+        auto it = std::find_if(templates_.begin(), templates_.end(), [&](const OverlayTemplate& t) { return t.id == tpl.id; });
+        if (it != templates_.end()) *it = tpl;
+        else templates_.push_back(tpl);
+
+        return true;
+    } catch (const std::exception& e) {
+        if (errorMessage) *errorMessage = QString("Failed to parse template JSON: ") + e.what();
+        return false;
+    }
+}
+
 QString TemplateManager::getScreenshotPath(const QString& screenshotFilename) const {
     return QDir(appDataTemplateDir_).absoluteFilePath(screenshotFilename);
 }
 
-bool TemplateManager::saveTemplate(const OverlayTemplate& tpl) {
+bool TemplateManager::saveTemplate(const OverlayTemplate& tpl, QString* errorMessage) {
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+
     nlohmann::json j;
     j["id"] = tpl.id.toStdString();
     j["name"] = tpl.name.toStdString();
@@ -175,12 +234,20 @@ bool TemplateManager::saveTemplate(const OverlayTemplate& tpl) {
     cfg["pvTextX"] = tpl.config.pvText.x_percent;
     cfg["pvTextY"] = tpl.config.pvText.y_percent;
     cfg["pvTextScale"] = tpl.config.pvText.scale;
+    cfg["arrowsTarget"] = tpl.config.arrowsTarget;
+
     j["config"] = cfg;
 
     QString filePath = QDir(appDataTemplateDir_).absoluteFilePath(tpl.id + ".json");
-    std::ofstream f(filePath.toStdString());
-    if (!f.is_open()) return false;
-    f << j.dump(4);
+    QFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (errorMessage) {
+            *errorMessage = QString("Failed to open template file for writing: %1").arg(filePath);
+        }
+        return false;
+    }
+    std::string dumpStr = j.dump(4);
+    f.write(dumpStr.data(), dumpStr.size());
     f.close();
 
     // Update in-memory vector
@@ -191,14 +258,45 @@ bool TemplateManager::saveTemplate(const OverlayTemplate& tpl) {
     return true;
 }
 
-bool TemplateManager::deleteTemplate(const QString& id) {
-    auto it = std::find_if(templates_.begin(), templates_.end(), [&](const OverlayTemplate& t) { return t.id == id; });
-    if (it == templates_.end() || it->isBuiltIn) return false;
+bool TemplateManager::deleteTemplate(const QString& id, QString* errorMessage) {
+    if (errorMessage) {
+        errorMessage->clear();
+    }
 
-    QFile::remove(QDir(appDataTemplateDir_).absoluteFilePath(id + ".json"));
-    if (!it->screenshotFilename.isEmpty()) QFile::remove(getScreenshotPath(it->screenshotFilename));
+    auto it = std::find_if(templates_.begin(), templates_.end(), [&](const OverlayTemplate& t) { return t.id == id; });
+    if (it == templates_.end()) {
+        if (errorMessage) {
+            *errorMessage = QString("Template not found: %1").arg(id);
+        }
+        return false;
+    }
+    if (it->isBuiltIn) {
+        if (errorMessage) {
+            *errorMessage = QString("Built-in template cannot be deleted: %1").arg(id);
+        }
+        return false;
+    }
+
+    const QString templatePath = QDir(appDataTemplateDir_).absoluteFilePath(id + ".json");
+    if (QFile::exists(templatePath) && !QFile::remove(templatePath)) {
+        if (errorMessage) {
+            *errorMessage = QString("Failed to delete template file: %1").arg(templatePath);
+        }
+        return false;
+    }
+
+    if (!it->screenshotFilename.isEmpty()) {
+        const QString screenshotPath = getScreenshotPath(it->screenshotFilename);
+        if (QFile::exists(screenshotPath) && !QFile::remove(screenshotPath)) {
+            if (errorMessage) {
+                *errorMessage = QString("Failed to delete screenshot file: %1").arg(screenshotPath);
+            }
+            return false;
+        }
+    }
+
     templates_.erase(it);
     return true;
 }
 
-} // namespace aa
+} // namespace cta

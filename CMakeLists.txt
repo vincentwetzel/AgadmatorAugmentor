@@ -1,9 +1,61 @@
 # Extracted from cpp directory
 cmake_minimum_required(VERSION 3.20)
-project(ChessTubeAnalyzer LANGUAGES CXX)
 
-set(X_VCPKG_APPLOCAL_DEPS_INSTALL ON)
-set(CMAKE_X_VCPKG_APPLOCAL_DEPS ON)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
+set(CHESSTUBE_DEFAULT_VCPKG_ROOT "")
+if(DEFINED ENV{VCPKG_ROOT} AND NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
+    set(CHESSTUBE_DEFAULT_VCPKG_ROOT "$ENV{VCPKG_ROOT}")
+elseif(WIN32)
+    set(CHESSTUBE_DEFAULT_VCPKG_ROOT "E:/vcpkg")
+endif()
+set(CHESSTUBE_VCPKG_ROOT "${CHESSTUBE_DEFAULT_VCPKG_ROOT}" CACHE PATH
+    "Optional vcpkg root used for local default detection")
+
+if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE AND CHESSTUBE_VCPKG_ROOT AND
+   EXISTS "${CHESSTUBE_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "${CHESSTUBE_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE FILEPATH "Path to the vcpkg toolchain file")
+endif()
+
+if(WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
+    if(CHESSTUBE_VCPKG_ROOT AND
+       EXISTS "${CHESSTUBE_VCPKG_ROOT}/installed/x64-windows-static/share/opencv4/OpenCVConfig.cmake")
+        set(_default_vcpkg_triplet "x64-windows-static")
+    elseif(CHESSTUBE_VCPKG_ROOT AND
+           EXISTS "${CHESSTUBE_VCPKG_ROOT}/installed/x64-windows/share/opencv4/OpenCVConfig.cmake")
+        set(_default_vcpkg_triplet "x64-windows")
+    else()
+        set(_default_vcpkg_triplet "x64-windows-static")
+    endif()
+
+    set(VCPKG_TARGET_TRIPLET "${_default_vcpkg_triplet}"
+        CACHE STRING "Default vcpkg triplet for ChessTubeAnalyzer")
+endif()
+
+if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET)
+    if(VCPKG_TARGET_TRIPLET MATCHES "(^|-)static($|-)")
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    else()
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
+endif()
+
+set(ENABLE_VCPKG_APPLOCAL_DEPS OFF CACHE BOOL
+    "Let vcpkg copy runtime DLLs beside executables after builds")
+set(ENABLE_CMAKE_AUTO_REGEN OFF CACHE BOOL
+    "Let generated IDE projects automatically rerun CMake when build inputs change")
+set(VCPKG_APPLOCAL_DEPS ${ENABLE_VCPKG_APPLOCAL_DEPS})
+set(X_VCPKG_APPLOCAL_DEPS_INSTALL ${ENABLE_VCPKG_APPLOCAL_DEPS})
+set(CMAKE_X_VCPKG_APPLOCAL_DEPS ${ENABLE_VCPKG_APPLOCAL_DEPS})
+
+if(NOT ENABLE_CMAKE_AUTO_REGEN)
+    set(CMAKE_SUPPRESS_REGENERATION ON)
+endif()
+
+project(ChessTubeAnalyzer LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,18 +63,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ENABLE_PCH "Use precompiled headers to speed up rebuilds" ON)
 option(ENABLE_UNITY_BUILD "Use CMake unity builds for faster full builds" OFF)
 option(BUILD_GUI "Build the Qt GUI target" ON)
-option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" ON)
+option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" OFF)
+option(ENABLE_SYSTEM_CUDA "Enable direct system CUDA/NPP integration when available" ON)
+option(ENABLE_IPO "Enable interprocedural optimization in Release when supported" OFF)
 
 if(ENABLE_UNITY_BUILD)
     set(CMAKE_UNITY_BUILD ON)
 endif()
 
-# Force static runtime to avoid api-ms-win-crt-* dependency issues
-# This must be set BEFORE project() to take effect
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT /FS")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd /FS /Z7")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /MT /FS")
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /MTd /FS /Z7")
+if(MSVC)
+    # Keep parallel PDB writes enabled while letting the runtime library match the active vcpkg triplet.
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /FS")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /FS /Z7")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /FS")
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /FS /Z7")
+endif()
 
 function(enable_msvc_parallel_pdb_safety target_name)
     if(MSVC)
@@ -33,6 +88,13 @@ endfunction()
 function(enable_msvc_compile_speedups target_name)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /MP)
+    endif()
+endfunction()
+
+function(enforce_project_msvc_runtime target_name)
+    if(MSVC AND DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+        set_property(TARGET ${target_name} PROPERTY
+            MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
     endif()
 endfunction()
 
@@ -104,14 +166,39 @@ function(enable_project_pch target_name pch_profile)
     endif()
 endfunction()
 
+function(configure_project_stack_size target_name)
+    if(MSVC)
+        set_target_properties(${target_name} PROPERTIES
+            LINK_FLAGS "/STACK:8388608")
+    endif()
+endfunction()
+
+function(configure_cuda_target target_name)
+    if(NOT HAVE_SYSTEM_CUDA)
+        return()
+    endif()
+
+    target_compile_definitions(${target_name} PRIVATE HAVE_SYSTEM_CUDA)
+    target_include_directories(${target_name} PRIVATE "${SYSTEM_CUDA_PATH}/include")
+
+    if(WIN32)
+        target_link_directories(${target_name} PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
+        target_link_options(${target_name} PRIVATE ${CUDA_DELAY_LOADS_LIST})
+        target_link_libraries(${target_name} PRIVATE delayimp.lib
+            cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
+    endif()
+endfunction()
+
 # Enable Link-Time Optimization (LTO) for Release builds
-include(CheckIPOSupported)
-check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
-if(ipo_supported)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-    message(STATUS "LTO/IPO enabled for Release builds")
-else()
-    message(STATUS "LTO/IPO not supported: ${ipo_error}")
+if(ENABLE_IPO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+    if(ipo_supported)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+        message(STATUS "LTO/IPO enabled for Release builds")
+    else()
+        message(STATUS "LTO/IPO not supported: ${ipo_error}")
+    endif()
 endif()
 
 # ── Dependencies from system vcpkg ───────────────────────────────────────────
@@ -119,47 +206,84 @@ find_package(OpenCV REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
-if(Qt6_FOUND AND BUILD_GUI)
+if(BUILD_GUI)
+    find_package(Qt6 REQUIRED COMPONENTS Widgets)
     message(STATUS "Qt6 found, GUI will be built")
-elseif(Qt6_FOUND)
-    message(STATUS "Qt6 found, GUI build disabled by BUILD_GUI=OFF")
-else()
-    message(STATUS "Qt6 not found. Install Qt to build the GUI")
 endif()
 
-if(Qt6_FOUND AND BUILD_GUI AND ENABLE_QT_RUNTIME_DEPLOYMENT)
+if(BUILD_GUI AND ENABLE_QT_RUNTIME_DEPLOYMENT AND WIN32 AND
+   DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "[Paths]\nPlugins = Qt6/plugins\n")
     function(add_runtime_deployment target_name)
+        set(_qt_runtime_triplet "${VCPKG_TARGET_TRIPLET}")
+        if(_qt_runtime_triplet MATCHES "-static")
+            message(STATUS "Skipping Qt runtime deployment for ${target_name}: static vcpkg triplet '${VCPKG_TARGET_TRIPLET}' does not need copied Qt runtime DLLs")
+            return()
+        endif()
+
+        set(_qt_runtime_root "${VCPKG_INSTALLED_DIR}/${_qt_runtime_triplet}")
+        if(NOT EXISTS "${_qt_runtime_root}/bin")
+            message(STATUS "Skipping Qt runtime deployment for ${target_name}: '${_qt_runtime_root}' does not contain runtime binaries")
+            return()
+        endif()
+
         add_custom_command(TARGET ${target_name} POST_BUILD
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/bin" "$<TARGET_FILE_DIR:${target_name}>"
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/debug/bin" "$<TARGET_FILE_DIR:${target_name}>"
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/Qt6/plugins" "$<TARGET_FILE_DIR:${target_name}>/Qt6/plugins"
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VCPKG_INSTALLED_DIR}/x64-windows/debug/Qt6/plugins" "$<TARGET_FILE_DIR:${target_name}>/Qt6/plugins"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_qt_runtime_root}/bin" "$<TARGET_FILE_DIR:${target_name}>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_qt_runtime_root}/debug/bin" "$<TARGET_FILE_DIR:${target_name}>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_qt_runtime_root}/Qt6/plugins" "$<TARGET_FILE_DIR:${target_name}>/Qt6/plugins"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_qt_runtime_root}/debug/Qt6/plugins" "$<TARGET_FILE_DIR:${target_name}>/Qt6/plugins"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "$<TARGET_FILE_DIR:${target_name}>/qt.conf"
             VERBATIM)
     endfunction()
 endif()
 # ── Optional CUDA/NPP support (system CUDA SDK, NOT vcpkg) ────────────────────
-# Detects system CUDA 13.2 at:
-#   C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2
-# Links cudart.lib + npp*.lib directly — no need to rebuild OpenCV.
-# When found, HAVE_SYSTEM_CUDA is defined and GPU ops use NPP directly.
-set(SYSTEM_CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2")
+set(CHESSTUBE_DEFAULT_CUDA_PATH "")
+if(DEFINED ENV{CUDA_PATH} AND NOT "$ENV{CUDA_PATH}" STREQUAL "")
+    set(CHESSTUBE_DEFAULT_CUDA_PATH "$ENV{CUDA_PATH}")
+elseif(WIN32)
+    set(CHESSTUBE_DEFAULT_CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2")
+endif()
+set(SYSTEM_CUDA_PATH "${CHESSTUBE_DEFAULT_CUDA_PATH}" CACHE PATH
+    "Optional system CUDA toolkit root for direct NPP integration")
 set(HAVE_SYSTEM_CUDA FALSE)
 
-if(EXISTS "${SYSTEM_CUDA_PATH}/include/cuda_runtime.h" AND
+if(ENABLE_SYSTEM_CUDA AND WIN32 AND SYSTEM_CUDA_PATH AND
+   EXISTS "${SYSTEM_CUDA_PATH}/include/cuda_runtime.h" AND
    EXISTS "${SYSTEM_CUDA_PATH}/lib/x64/cudart.lib" AND
    EXISTS "${SYSTEM_CUDA_PATH}/lib/x64/nppial.lib")
     set(HAVE_SYSTEM_CUDA TRUE)
-    message(STATUS "GPU Acceleration: System CUDA 13.2 found — NPP ops enabled")
+    message(STATUS "GPU Acceleration: system CUDA toolkit found - NPP ops enabled")
     message(STATUS "  CUDA path: ${SYSTEM_CUDA_PATH}")
 else()
-    message(STATUS "GPU Acceleration: System CUDA not found — CPU fallback mode")
+    message(STATUS "GPU Acceleration: system CUDA not found or disabled - CPU fallback mode")
 endif()
 
 # ── Build libchess from source (ensures matching runtime library) ─────────────
-set(LIBCHESS_SRC_DIR "E:/libchess/src")
+set(CHESSTUBE_DEFAULT_LIBCHESS_ROOT "")
+if(DEFINED ENV{LIBCHESS_ROOT} AND NOT "$ENV{LIBCHESS_ROOT}" STREQUAL "")
+    set(CHESSTUBE_DEFAULT_LIBCHESS_ROOT "$ENV{LIBCHESS_ROOT}")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libchess/src")
+    set(CHESSTUBE_DEFAULT_LIBCHESS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libchess")
+elseif(WIN32)
+    set(CHESSTUBE_DEFAULT_LIBCHESS_ROOT "E:/libchess")
+endif()
+
+set(LIBCHESS_ROOT "${CHESSTUBE_DEFAULT_LIBCHESS_ROOT}" CACHE PATH
+    "Path to the libchess source tree root")
+set(LIBCHESS_SRC_DIR "${LIBCHESS_ROOT}/src" CACHE PATH
+    "Path to libchess source files")
+set(LIBCHESS_INCLUDE_DIR "${LIBCHESS_ROOT}/dist/include" CACHE PATH
+    "Path to libchess public headers")
+
+if(NOT EXISTS "${LIBCHESS_SRC_DIR}/set_fen.cpp")
+    message(FATAL_ERROR
+        "libchess sources were not found. Set LIBCHESS_ROOT or LIBCHESS_SRC_DIR to a valid libchess checkout.")
+endif()
+
+if(NOT EXISTS "${LIBCHESS_INCLUDE_DIR}")
+    message(FATAL_ERROR
+        "libchess headers were not found. Set LIBCHESS_INCLUDE_DIR to the libchess include directory.")
+endif()
 
 add_library(chess STATIC
     ${LIBCHESS_SRC_DIR}/set_fen.cpp
@@ -186,9 +310,11 @@ add_library(chess STATIC
 )
 
 target_include_directories(chess PUBLIC
-    E:/libchess/dist/include # Restore original path for libchess headers
+    ${LIBCHESS_INCLUDE_DIR}
     ${LIBCHESS_SRC_DIR}
 )
+
+enforce_project_msvc_runtime(chess)
 
 # ── Extraction Core (video decoding, CV, move verification) ─────────────────
 add_library(chess_extraction_core
@@ -213,20 +339,21 @@ target_link_libraries(chess_extraction_core PUBLIC
     chess
 )
 
+enforce_project_msvc_runtime(chess_extraction_core)
 enable_msvc_parallel_pdb_safety(chess_extraction_core)
 enable_msvc_compile_speedups(chess_extraction_core)
 enable_project_pch(chess_extraction_core core)
 
-if(HAVE_SYSTEM_CUDA)
-    target_compile_definitions(chess_extraction_core PRIVATE HAVE_SYSTEM_CUDA)
-    target_include_directories(chess_extraction_core PRIVATE "${SYSTEM_CUDA_PATH}/include")
-endif()
+configure_cuda_target(chess_extraction_core)
 
 # ── Analysis/Postprocess Core (PGN, Stockfish, overlay video) ───────────────
 add_library(chess_analysis_core
     src/StockfishAnalyzer.cpp
     src/AnalysisVideoGenerator.cpp
     src/PgnWriter.cpp
+    src/ChessFenUtils.cpp
+    src/ImageWriteUtils.cpp
+    src/AnalysisVideoRenderUtils.cpp
     include/FFmpegFilterGraph.cpp
 )
 
@@ -238,14 +365,12 @@ target_link_libraries(chess_analysis_core PUBLIC
     chess_extraction_core
 )
 
+enforce_project_msvc_runtime(chess_analysis_core)
 enable_msvc_parallel_pdb_safety(chess_analysis_core)
 enable_msvc_compile_speedups(chess_analysis_core)
 enable_project_pch(chess_analysis_core core)
 
-if(HAVE_SYSTEM_CUDA)
-    target_compile_definitions(chess_analysis_core PRIVATE HAVE_SYSTEM_CUDA)
-    target_include_directories(chess_analysis_core PRIVATE "${SYSTEM_CUDA_PATH}/include")
-endif()
+configure_cuda_target(chess_analysis_core)
 
 # ── Main executable (CLI) ────────────────────────────────────────────────────
 add_executable(extract_moves
@@ -256,7 +381,7 @@ target_include_directories(extract_moves PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-if(HAVE_SYSTEM_CUDA)
+if(HAVE_SYSTEM_CUDA AND WIN32)
     target_link_directories(extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
     
     # Dynamically find the exact names of the CUDA runtime DLLs to delay-load.
@@ -295,10 +420,9 @@ if(HAVE_SYSTEM_CUDA)
     # Suppress LNK4199 warning when a DLL is delay-loaded but no symbols are imported from it
     list(APPEND CUDA_DELAY_LOADS_LIST "/IGNORE:4199")
 
-    target_link_options(extract_moves PRIVATE ${CUDA_DELAY_LOADS_LIST})
-    target_link_libraries(extract_moves PRIVATE delayimp.lib
-        cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
 endif()
+
+configure_cuda_target(extract_moves)
 
 target_link_libraries(extract_moves PRIVATE
     chess_extraction_core
@@ -306,18 +430,24 @@ target_link_libraries(extract_moves PRIVATE
     CLI11::CLI11
 )
 
+enforce_project_msvc_runtime(extract_moves)
 enable_msvc_parallel_pdb_safety(extract_moves)
 enable_msvc_compile_speedups(extract_moves)
 enable_project_pch(extract_moves core)
 
-# Set stack size to 8MB (default is 1MB)
-set_target_properties(extract_moves PROPERTIES
-    LINK_FLAGS "/STACK:8388608"
-)
+configure_project_stack_size(extract_moves)
 
 # ── GUI Executable ───────────────────────────────────────────────────────────
 if(Qt6_FOUND AND BUILD_GUI)
-    add_executable(chesstube_gui WIN32
+    set(CHESSTUBE_GUI_MOC_HEADERS
+        include/MainWindow.h
+        include/SettingsDialog.h
+        include/VideoProcessorWorker.h
+        include/ToggleSwitch.h
+        include/OverlayEditorDialog.h
+    )
+
+    add_executable(augmentor_gui
         src/main_gui.cpp
         src/MainWindow.cpp
         src/MainWindow_UI.cpp
@@ -337,45 +467,44 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/TemplateManager.h
     )
 
-    target_include_directories(chesstube_gui PRIVATE
+    qt6_wrap_cpp(augmentor_gui_moc_sources TARGET augmentor_gui ${CHESSTUBE_GUI_MOC_HEADERS})
+    target_sources(augmentor_gui PRIVATE ${augmentor_gui_moc_sources})
+
+    target_include_directories(augmentor_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
 
-    target_link_libraries(chesstube_gui PRIVATE
+    target_link_libraries(augmentor_gui PRIVATE
         chess_extraction_core
         chess_analysis_core
         Qt6::Widgets
-        CLI11::CLI11
     )
 
-    enable_msvc_parallel_pdb_safety(chesstube_gui)
-    enable_msvc_compile_speedups(chesstube_gui)
-    enable_project_pch(chesstube_gui gui)
+    enforce_project_msvc_runtime(augmentor_gui)
+    enable_msvc_parallel_pdb_safety(augmentor_gui)
+    enable_msvc_compile_speedups(augmentor_gui)
+    enable_project_pch(augmentor_gui gui)
 
-    if(HAVE_SYSTEM_CUDA)
-        target_compile_definitions(chesstube_gui PRIVATE HAVE_SYSTEM_CUDA)
-        target_include_directories(chesstube_gui PRIVATE "${SYSTEM_CUDA_PATH}/include")
-        target_link_directories(chesstube_gui PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(chesstube_gui PRIVATE ${CUDA_DELAY_LOADS_LIST})
-        target_link_libraries(chesstube_gui PRIVATE delayimp.lib
-            cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
-    endif()
+    configure_cuda_target(augmentor_gui)
 
-    set_target_properties(chesstube_gui PROPERTIES
+    set_target_properties(augmentor_gui PROPERTIES
         OUTPUT_NAME "ChessTube Analyzer"
-        LINK_FLAGS "/STACK:8388608"
-        AUTOMOC ON
-        AUTORCC ON
-        AUTOUIC ON
+        AUTOMOC OFF
+        AUTORCC OFF
+        AUTOUIC OFF
     )
+    if(WIN32)
+        set_target_properties(augmentor_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+    endif()
+    configure_project_stack_size(augmentor_gui)
 
     if(ENABLE_QT_RUNTIME_DEPLOYMENT)
-        add_runtime_deployment(chesstube_gui)
+        add_runtime_deployment(augmentor_gui)
     endif()
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────
-option(BUILD_TESTS "Build Google Test unit tests" ON)
+option(BUILD_TESTS "Build Google Test unit tests" OFF)
 
 if(BUILD_TESTS)
     # FetchContent sub-builds cache the generator they were created with.
@@ -412,14 +541,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
 
-    if(HAVE_SYSTEM_CUDA)
-        target_compile_definitions(test_extract_moves PRIVATE HAVE_SYSTEM_CUDA)
-        target_include_directories(test_extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/include")
-        target_link_directories(test_extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-        target_link_options(test_extract_moves PRIVATE ${CUDA_DELAY_LOADS_LIST})
-        target_link_libraries(test_extract_moves PRIVATE delayimp.lib
-            cudart nppc nppial nppicc nppidei nppif nppig nppim nppist nppitc)
-    endif()
+    configure_cuda_target(test_extract_moves)
 
     target_link_libraries(test_extract_moves PRIVATE
         chess_extraction_core
@@ -427,13 +549,12 @@ if(BUILD_TESTS)
         GTest::gmock_main
     )
 
+    enforce_project_msvc_runtime(test_extract_moves)
     enable_msvc_parallel_pdb_safety(test_extract_moves)
     enable_msvc_compile_speedups(test_extract_moves)
     enable_project_pch(test_extract_moves test)
 
-    set_target_properties(test_extract_moves PROPERTIES
-        LINK_FLAGS "/STACK:8388608"
-    )
+    configure_project_stack_size(test_extract_moves)
 
     include(GoogleTest)
     gtest_discover_tests(test_extract_moves)

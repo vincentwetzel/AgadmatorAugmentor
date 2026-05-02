@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace aa {
+namespace cta {
 
 std::vector<std::string> find_yellow_arrows(const cv::Mat& img_bgr,
                                             const cv::Mat& board_template,
@@ -139,4 +139,4 @@ std::vector<std::string> find_yellow_arrows(const cv::Mat& img_bgr,
     return arrows;
 }
 
-} // namespace aa
+} // namespace cta

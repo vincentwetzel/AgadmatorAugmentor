@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <iostream> // For debug output, can be replaced with a proper logger
 
-namespace aa {
+namespace cta {
 
 RevertDetector::RevertDetector() {
     history_.reserve(MAX_HISTORY_SIZE); // Pre-allocate memory
@@ -118,4 +118,4 @@ void RevertDetector::clear_history() {
     history_.reserve(MAX_HISTORY_SIZE);
 }
 
-} // namespace aa
+} // namespace cta

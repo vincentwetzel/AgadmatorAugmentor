@@ -38,50 +38,6 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 - [ ] **Detection Tuning** — Tune detection thresholds for higher recall.
 - [ ] **OCR Improvements** — Improve OCR reliability with better preprocessing.
 
-## Feature Roadmap: WYSIWYG Overlay Editor
-
-This plan outlines the steps to replace hardcoded overlay positions with a drag-and-drop visual editor.
-
-### Phase 1: Configuration Data Model
-- [x] Define `OverlayElement` struct (`enabled`, `x_percent`, `y_percent`, `scale`).
-- [x] Define `VideoOverlayConfig` struct containing elements for `board`, `evalBar`, and `pvText`.
-- [x] Route overlay layout through `ProcessingSettings::overlayConfig` instead of the old global position/size enums.
-
-### Phase 2: Interactive Editor UI (Qt6 Graphics View)
-- [x] Create `DraggableOverlay` class (inheriting `QGraphicsPixmapItem`) for movable elements.
-- [x] Create `OverlayEditorDialog` with a `QGraphicsScene` and `QGraphicsView`.
-- [x] Use a static reference screenshot as the positioning canvas.
-- [x] Add controls to load a reference screenshot, toggle elements on/off, and save configurations.
-
-### Phase 3: Settings UI Integration
-- [x] Remove the old position/size UI controls from `SettingsDialog`.
-- [x] Move template editing into a dedicated "Manage Templates" workflow from the main window.
-- [x] Ensure the selected queue-item template passes its `VideoOverlayConfig` into processing.
-
-### Phase 4: FFmpeg Compositing Updates
-- [x] Update `AnalysisVideoGenerator` to read `VideoOverlayConfig`.
-- [x] Modify the FFmpeg filter graph string generation to map `x_percent` and `y_percent` to absolute video coordinates (e.g., `x=0.75*(W-w):y=0.05*(H-h)`).
-
-## Feature Roadmap: Channel-Specific Overlay Templates
-This plan outlines the overhaul of the overlay system to support per-channel templates with reference screenshots and auto-detection.
-
-### Phase 1: Template Data Model & Storage
-- [x] Define `OverlayTemplate` struct (Name, Regex/Keywords, Screenshot Path, `VideoOverlayConfig`).
-- [x] Create a `TemplateManager` to handle saving/loading templates to `%APPDATA%\ChessTubeAnalyzer\templates`.
-- [x] Bundle default templates (agadmator, etc.) and their reference screenshots with the application (e.g., via Qt Resources or installer) to be copied to AppData on first run.
-
-### Phase 2: Queue UI & Auto-Detection
-- [x] Upgrade the `MainWindow` queue row UI with a custom item widget to support per-item controls.
-- [x] Add a per-video "Template" dropdown to the queue.
-- [x] Implement filename parsing (e.g., `[agadmator's Chess Channel]`) to auto-select the correct template when a video is added to the queue.
-- [x] Ensure the selected template configuration is passed correctly to the `VideoProcessorWorker`.
-
-### Phase 3: Overlay Editor Revamp
-- [x] Remove the heavy video playback components (`QMediaPlayer`, `QGraphicsVideoItem`) from `OverlayEditorDialog` and remove QtMultimedia from CMake.
-- [x] Replace the background with a static `QGraphicsPixmapItem` displaying the template's reference screenshot.
-- [x] Add UI controls to the editor to switch between templates, create new templates, load custom screenshots, and save overrides.
-- [x] Update `SettingsDialog` and `MainWindow` to reflect the new "Manage Templates" workflow.
-
 ## Long Term / Future Scope
 
 - [x] **Parallel Agent Architecture** — Asynchronous processing agents for extraction and verification.
@@ -89,6 +45,10 @@ This plan outlines the overhaul of the overlay system to support per-channel tem
 
 ## Recently Completed
 
+- **WYSIWYG Overlay Editor** — Replaced hardcoded overlay configurations with an interactive drag-and-drop `QGraphicsView` canvas.
+- **Channel-Specific Overlay Templates** — Implemented `TemplateManager` for per-channel layouts with auto-selection via filename keywords, storing templates in `%APPDATA%`.
+- **Lightweight Editor Backgrounds** — Removed `QtMultimedia` in favor of static reference screenshots for overlay positioning.
+- [x] **WYSIWYG Editor Enhancements** — Added 8-way sizing handles (corners and edges) for all overlays and unlocked independent X/Y scaling for the Evaluation Bar, smoothly encoding both values into the existing configuration format.
 - [x] **GUI Development (Qt)** — Build a graphical interface for the application.
   - [x] **Project Setup:** Update `CMakeLists.txt` to find and link `Qt6::Widgets`.
   - [x] **Main Window UI:** Implement `MainWindow` with a file browser (`QFileDialog`), process button, and log output text area.
@@ -118,7 +78,7 @@ This plan outlines the overhaul of the overlay system to support per-channel tem
 "ChessTube Analyzer.exe" path/to/video.mp4
 
 # Full control with CLI flags
-"ChessTube Analyzer.exe" video.mp4 --stockfish --multi-pv 3 --threads 8 --pgn
+"ChessTube Analyzer.exe" video.mp4 --stockfish --multi-pv 3 --threads 8 --pgn --time 1000 --nodes 500000
 
 # Show version
 "ChessTube Analyzer.exe" --version

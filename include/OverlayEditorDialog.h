@@ -14,7 +14,7 @@
 #include "VideoOverlayConfig.h"
 #include "TemplateManager.h"
 
-namespace aa {
+namespace cta {
 
 /**
  * @class DraggableOverlay
@@ -39,7 +39,7 @@ protected:
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override;
 
 private:
-    enum ResizeHandle { None, TopLeft, TopRight, BottomLeft, BottomRight };
+    enum ResizeHandle { None, TopLeft, TopRight, BottomLeft, BottomRight, Top, Bottom, Left, Right };
     ResizeHandle getHandleAt(const QPointF& pos) const;
 
     QString id_;
@@ -103,4 +103,4 @@ private:
     QCheckBox* pvCheck_;
 };
 
-} // namespace aa
+} // namespace cta

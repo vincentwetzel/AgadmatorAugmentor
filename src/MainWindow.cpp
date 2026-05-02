@@ -45,6 +45,8 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QDesktopServices>
+#include <QVariantMap>
+#include <QDebug>
 #include <QtMath>
 #include <algorithm>
 
@@ -59,18 +61,64 @@ constexpr int kQueueStatusRole = Qt::UserRole + 1;
 constexpr int kQueueProgressRole = Qt::UserRole + 2;
 constexpr int kQueueOutputDirRole = Qt::UserRole + 3;
 constexpr int kQueueTemplateRole = Qt::UserRole + 4;
+constexpr int kQueueTemplateNameRole = Qt::UserRole + 5;
+constexpr int kQueueTemplateConfigRole = Qt::UserRole + 6;
 
-QString queueStatusText(aa::MainWindow::QueueItemStatus status) {
+QVariantMap overlayConfigToVariantMap(const cta::VideoOverlayConfig& config) {
+    QVariantMap map;
+    map.insert("boardEnabled", config.board.enabled);
+    map.insert("boardX", config.board.x_percent);
+    map.insert("boardY", config.board.y_percent);
+    map.insert("boardScale", config.board.scale);
+    map.insert("evalEnabled", config.evalBar.enabled);
+    map.insert("evalX", config.evalBar.x_percent);
+    map.insert("evalY", config.evalBar.y_percent);
+    map.insert("evalScale", config.evalBar.scale);
+    map.insert("pvEnabled", config.pvText.enabled);
+    map.insert("pvX", config.pvText.x_percent);
+    map.insert("pvY", config.pvText.y_percent);
+    map.insert("pvScale", config.pvText.scale);
+    map.insert("arrowsTarget", QString::fromStdString(config.arrowsTarget));
+    return map;
+}
+
+cta::VideoOverlayConfig overlayConfigFromVariantMap(const QVariant& value) {
+    cta::VideoOverlayConfig config;
+    const QVariantMap map = value.toMap();
+    if (map.isEmpty()) {
+        return config;
+    }
+
+    config.board.enabled = map.value("boardEnabled", config.board.enabled).toBool();
+    config.board.x_percent = map.value("boardX", config.board.x_percent).toDouble();
+    config.board.y_percent = map.value("boardY", config.board.y_percent).toDouble();
+    config.board.scale = map.value("boardScale", config.board.scale).toDouble();
+
+    config.evalBar.enabled = map.value("evalEnabled", config.evalBar.enabled).toBool();
+    config.evalBar.x_percent = map.value("evalX", config.evalBar.x_percent).toDouble();
+    config.evalBar.y_percent = map.value("evalY", config.evalBar.y_percent).toDouble();
+    config.evalBar.scale = map.value("evalScale", config.evalBar.scale).toDouble();
+
+    config.pvText.enabled = map.value("pvEnabled", config.pvText.enabled).toBool();
+    config.pvText.x_percent = map.value("pvX", config.pvText.x_percent).toDouble();
+    config.pvText.y_percent = map.value("pvY", config.pvText.y_percent).toDouble();
+    config.pvText.scale = map.value("pvScale", config.pvText.scale).toDouble();
+
+    config.arrowsTarget = map.value("arrowsTarget", QString::fromStdString(config.arrowsTarget)).toString().toStdString();
+    return config;
+}
+
+QString queueStatusText(cta::MainWindow::QueueItemStatus status) {
     switch (status) {
-    case aa::MainWindow::QueueItemStatus::Queued:
+    case cta::MainWindow::QueueItemStatus::Queued:
         return "Queued";
-    case aa::MainWindow::QueueItemStatus::Processing:
+    case cta::MainWindow::QueueItemStatus::Processing:
         return "Processing";
-    case aa::MainWindow::QueueItemStatus::Completed:
+    case cta::MainWindow::QueueItemStatus::Completed:
         return "Completed";
-    case aa::MainWindow::QueueItemStatus::Failed:
+    case cta::MainWindow::QueueItemStatus::Failed:
         return "Failed";
-    case aa::MainWindow::QueueItemStatus::Cancelled:
+    case cta::MainWindow::QueueItemStatus::Cancelled:
         return "Cancelled";
     }
 
@@ -88,7 +136,7 @@ static void set_ffmpeg_threads(int threads) {
 #endif
 }
 
-namespace aa {
+namespace cta {
 
 const char* MainWindow::SETTINGS_ORG = "ChessTubeAnalyzer";
 const char* MainWindow::SETTINGS_APP = "ChessTubeAnalyzer";
@@ -148,6 +196,57 @@ void MainWindow::setItemProgress(QListWidgetItem* item, int percentage) {
     refreshQueueItem(item);
 }
 
+void MainWindow::applyTemplateToItem(QListWidgetItem* item, const QString& templateId) const {
+    if (!item) {
+        return;
+    }
+
+    auto optTpl = cta::TemplateManager::instance().getTemplate(templateId);
+    const auto tpl = optTpl.has_value() ? optTpl.value() : cta::TemplateManager::instance().getFallbackTemplate();
+
+    item->setData(kQueueTemplateRole, tpl.id);
+    item->setData(kQueueTemplateNameRole, tpl.name);
+    item->setData(kQueueTemplateConfigRole, overlayConfigToVariantMap(tpl.config));
+}
+
+VideoOverlayConfig MainWindow::overlayConfigForItem(const QListWidgetItem* item) const {
+    if (!item) {
+        return cta::TemplateManager::instance().getFallbackTemplate().config;
+    }
+
+    const QVariant storedConfig = item->data(kQueueTemplateConfigRole);
+    if (storedConfig.isValid()) {
+        return overlayConfigFromVariantMap(storedConfig);
+    }
+
+    const QString templateId = item->data(kQueueTemplateRole).toString();
+    auto optTpl = cta::TemplateManager::instance().getTemplate(templateId);
+    if (optTpl.has_value()) {
+        return optTpl->config;
+    }
+
+    return cta::TemplateManager::instance().getFallbackTemplate().config;
+}
+
+QString MainWindow::templateNameForItem(const QListWidgetItem* item) const {
+    if (!item) {
+        return cta::TemplateManager::instance().getFallbackTemplate().name;
+    }
+
+    const QString storedName = item->data(kQueueTemplateNameRole).toString();
+    if (!storedName.isEmpty()) {
+        return storedName;
+    }
+
+    const QString templateId = item->data(kQueueTemplateRole).toString();
+    auto optTpl = cta::TemplateManager::instance().getTemplate(templateId);
+    if (optTpl.has_value()) {
+        return optTpl->name;
+    }
+
+    return cta::TemplateManager::instance().getFallbackTemplate().name;
+}
+
 QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     const QString path = item->data(kQueuePathRole).toString();
     const QString fileName = QFileInfo(path).fileName();
@@ -157,6 +256,7 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     const QString templateId = item->data(kQueueTemplateRole).toString();
 
     auto* container = new QFrame();
+    container->setObjectName("queueItemContainer");
     container->setToolTip(path + "\nStatus: " + queueStatusText(status));
     container->setFrameShape(QFrame::NoFrame);
 
@@ -169,6 +269,7 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     topRow->setSpacing(8);
 
     auto* nameLabel = new QLabel(fileName);
+    nameLabel->setObjectName("nameLabel");
     nameLabel->setToolTip(path);
     QFont nameFont = nameLabel->font();
     nameFont.setBold(status == QueueItemStatus::Processing);
@@ -176,11 +277,13 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     topRow->addWidget(nameLabel, 1);
 
     auto* statusLabel = new QLabel(queueStatusText(status));
+    statusLabel->setObjectName("statusLabel");
     statusLabel->setToolTip("Current processing status for this queued video.");
     topRow->addWidget(statusLabel, 0, Qt::AlignRight);
     layout->addLayout(topRow);
 
     auto* pathLabel = new QLabel(path);
+    pathLabel->setObjectName("pathLabel");
     pathLabel->setToolTip(path);
     pathLabel->setWordWrap(true);
     layout->addWidget(pathLabel);
@@ -194,23 +297,41 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     templateRow->addWidget(tplLabel);
     
     auto* tplCombo = new QComboBox();
+    tplCombo->setObjectName("queueTemplateCombo");
     tplCombo->setToolTip("Select the analysis overlay layout tailored for this video.");
-    const auto templates = aa::TemplateManager::instance().getAllTemplates();
+    const auto templates = cta::TemplateManager::instance().getAllTemplates();
     for (const auto& t : templates) {
         tplCombo->addItem(t.name, t.id);
     }
-    int idx = tplCombo->findData(templateId);
-    if (idx >= 0) tplCombo->setCurrentIndex(idx);
+    
+    int idx = -1;
+    for (int i = 0; i < tplCombo->count(); ++i) {
+        if (tplCombo->itemData(i).toString() == templateId) {
+            idx = i;
+            break;
+        }
+    }
+    
+    if (idx >= 0) {
+        applyTemplateToItem(item, templateId);
+        tplCombo->setCurrentIndex(idx);
+    } else if (tplCombo->count() > 0) {
+        tplCombo->setCurrentIndex(0);
+        applyTemplateToItem(item, tplCombo->itemData(0).toString());
+    }
     tplCombo->setEnabled(status == QueueItemStatus::Queued);
-    QObject::connect(tplCombo, &QComboBox::currentIndexChanged, container, [item, tplCombo, this]() {
-        QString newId = tplCombo->currentData().toString();
-        item->setData(kQueueTemplateRole, newId);
-        lastUsedTemplateId_ = newId; // Update memory for subsequent drops
+    connect(tplCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), container, [item, tplCombo, this](int index) {
+        if (index >= 0) {
+            QString newId = tplCombo->itemData(index).toString();
+            applyTemplateToItem(item, newId);
+            lastUsedTemplateId_ = newId; // Update memory for subsequent drops
+        }
     });
     templateRow->addWidget(tplCombo, 1);
     layout->addLayout(templateRow);
 
     auto* progressBar = new QProgressBar();
+    progressBar->setObjectName("progressBar");
     progressBar->setRange(0, 100);
     progressBar->setValue(progress);
     progressBar->setFormat(QString::number(progress) + "%");
@@ -223,11 +344,12 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     progressRow->addWidget(progressBar, 1);
 
     auto* openFolderBtn = new QPushButton("Open Folder");
+    openFolderBtn->setObjectName("openFolderBtn");
     openFolderBtn->setToolTip("Open the output folder for this processed video.");
     openFolderBtn->setVisible(status == QueueItemStatus::Completed && !outputDir.isEmpty());
     openFolderBtn->setEnabled(status == QueueItemStatus::Completed && !outputDir.isEmpty());
-    QObject::connect(openFolderBtn, &QPushButton::clicked, container, [outputDir]() {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(outputDir));
+    QObject::connect(openFolderBtn, &QPushButton::clicked, container, [item]() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(item->data(kQueueOutputDirRole).toString()));
     });
     progressRow->addWidget(openFolderBtn);
 
@@ -257,11 +379,49 @@ void MainWindow::refreshQueueItem(QListWidgetItem* item) {
     // Increase height to accommodate the new Template dropdown row
     item->setSizeHint(QSize(0, 128));
 
-    if (auto* oldWidget = queueList_->itemWidget(item)) {
-        queueList_->removeItemWidget(item);
-        oldWidget->deleteLater();
+    if (auto* existingWidget = queueList_->itemWidget(item)) {
+        existingWidget->setToolTip(path + "\nStatus: " + queueStatusText(status));
+
+        if (auto* statusLabel = existingWidget->findChild<QLabel*>("statusLabel")) {
+            statusLabel->setText(queueStatusText(status));
+        }
+        if (auto* nameLabel = existingWidget->findChild<QLabel*>("nameLabel")) {
+            QFont nameFont = nameLabel->font();
+            nameFont.setBold(status == QueueItemStatus::Processing);
+            nameLabel->setFont(nameFont);
+        }
+        if (auto* progressBar = existingWidget->findChild<QProgressBar*>("progressBar")) {
+            progressBar->setValue(progress);
+            progressBar->setFormat(QString::number(progress) + "%");
+            progressBar->setEnabled(status != QueueItemStatus::Queued);
+        }
+        if (auto* openFolderBtn = existingWidget->findChild<QPushButton*>("openFolderBtn")) {
+            const QString outputDir = item->data(kQueueOutputDirRole).toString();
+            openFolderBtn->setVisible(status == QueueItemStatus::Completed && !outputDir.isEmpty());
+            openFolderBtn->setEnabled(status == QueueItemStatus::Completed && !outputDir.isEmpty());
+        }
+        if (auto* tplCombo = existingWidget->findChild<QComboBox*>("queueTemplateCombo")) {
+            const QString templateId = item->data(kQueueTemplateRole).toString();
+            tplCombo->blockSignals(true);
+            tplCombo->clear();
+            const auto templates = cta::TemplateManager::instance().getAllTemplates();
+            int idx = 0;
+            for (int i = 0; i < static_cast<int>(templates.size()); ++i) {
+                tplCombo->addItem(templates[i].name, templates[i].id);
+                if (templates[i].id == templateId) {
+                    idx = i;
+                }
+            }
+            if (tplCombo->count() > 0) {
+                applyTemplateToItem(item, tplCombo->itemData(idx).toString());
+                tplCombo->setCurrentIndex(idx);
+            }
+            tplCombo->setEnabled(status == QueueItemStatus::Queued);
+            tplCombo->blockSignals(false);
+        }
+    } else {
+        queueList_->setItemWidget(item, createQueueItemWidget(item));
     }
-    queueList_->setItemWidget(item, createQueueItemWidget(item));
 }
 
 QListWidgetItem* MainWindow::findQueueItemByPath(const QString& path) const {
@@ -354,17 +514,30 @@ void MainWindow::startProcessingItem(QListWidgetItem* item) {
     queueList_->scrollToItem(item);
     setItemProgress(item, 0);
 
+    // Treat the visible queue dropdown as the final source of truth right before launch.
+    if (auto* itemWidget = queueList_->itemWidget(item)) {
+        if (auto* tplCombo = itemWidget->findChild<QComboBox*>("queueTemplateCombo")) {
+            const QString visibleTemplateId = tplCombo->currentData().toString();
+            if (!visibleTemplateId.isEmpty()) {
+                applyTemplateToItem(item, visibleTemplateId);
+            }
+        }
+    }
+
     auto settings = gatherSettings();
     
     // Inject the layout configuration from the selected template
-    QString tplId = item->data(kQueueTemplateRole).toString();
-    auto optTpl = aa::TemplateManager::instance().getTemplate(tplId);
-    if (optTpl.has_value()) {
-        settings.overlayConfig = optTpl->config;
-    }
+    settings.overlayConfig = overlayConfigForItem(item);
+    appendLog("Using template \"" + templateNameForItem(item) + "\" for: " + QFileInfo(path).fileName());
 
     item->setData(kQueueOutputDirRole, QFileInfo(settings.outputPath).absolutePath());
-    QMetaObject::invokeMethod(worker_, "process", Q_ARG(ProcessingSettings, settings), Q_ARG(std::atomic<bool>*, &cancelRequested_));
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, settings, cancelFlag = &cancelRequested_]() {
+            worker->process(settings, cancelFlag);
+        },
+        Qt::QueuedConnection
+    );
 }
 
 void MainWindow::startNextQueuedItem() {
@@ -441,15 +614,12 @@ void MainWindow::addVideosToQueue(const QStringList& paths) {
         item->setData(kQueueStatusRole, static_cast<int>(QueueItemStatus::Queued));
         item->setData(kQueueProgressRole, 0);
         
-        auto matchedTpl = aa::TemplateManager::instance().matchTemplate(info.fileName());
-        QString assignId = matchedTpl.id;
-        if (assignId == "generic" && !lastUsedTemplateId_.isEmpty()) {
-            assignId = lastUsedTemplateId_; // Fallback to last used memory
-        }
-        item->setData(kQueueTemplateRole, assignId);
+        auto matchedTpl = cta::TemplateManager::instance().matchTemplate(info.fileName());
+        applyTemplateToItem(item, matchedTpl.id);
 
         queueList_->addItem(item);
         refreshQueueItem(item);
+        appendLog("Queued \"" + info.fileName() + "\" with template \"" + templateNameForItem(item) + "\".");
         addedNames << info.fileName();
     }
 
@@ -464,11 +634,11 @@ void MainWindow::addVideosToQueue(const QStringList& paths) {
     refreshQueueUi();
 }
 
-int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int analysisDepth, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride, int memoryLimit) {
+int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride, int memoryLimit) {
     addVideosToQueue(videoPath.split(";", Qt::SkipEmptyParts));
     
     settingsDialog_->loadSettings();
-    settingsDialog_->applyHeadlessOverrides(pgnOverride, stockfishOverride, multiPv, threads, depth, analysisDepth, debugLevelStr, memoryLimit);
+    settingsDialog_->applyHeadlessOverrides(pgnOverride, stockfishOverride, multiPv, threads, depth, time, nodes, analysisDepth, debugLevelStr, memoryLimit);
 
     // Set FFmpeg threads
     set_ffmpeg_threads(gatherSettings().ffmpegThreads);
@@ -723,7 +893,10 @@ void MainWindow::onStartCancelClicked() {
     }
 }
 
-void MainWindow::appendLog(const QString& message) { logOutput_->append(message); }
+void MainWindow::appendLog(const QString& message) {
+    logOutput_->append(message);
+    qInfo().noquote() << message;
+}
 void MainWindow::updateProgress(int percentage) {
     auto* currentItem = findQueueItemByPath(property("currentVideo").toString());
     setItemProgress(currentItem, percentage);
@@ -774,4 +947,4 @@ void MainWindow::processingError(const QString& errorMessage) {
     finishProcessingSession();
 }
 
-} // namespace aa
+} // namespace cta

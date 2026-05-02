@@ -95,7 +95,7 @@ QIcon createSettingsCogIcon(const QColor& color) {
 
 } // namespace
 
-namespace aa {
+namespace cta {
 
 void MainWindow::setupUi() {
     auto* centralWidget = new QWidget(this);
@@ -202,7 +202,9 @@ void MainWindow::setupUi() {
     connect(templatesBtn_, &QPushButton::clicked, this, [this]() {
         OverlayEditorDialog dlg(this);
         if (dlg.exec() == QDialog::Accepted) {
-            refreshQueueItem(queueList_->currentItem()); // Refresh UI incase active template was modified
+            for (int i = 0; i < queueList_->count(); ++i) {
+                refreshQueueItem(queueList_->item(i));
+            }
         }
     });
     connect(settingsBtn_, &QPushButton::clicked, settingsDialog_, &QDialog::exec);
@@ -235,4 +237,4 @@ void MainWindow::updateSettingsButtonIcon() {
     settingsBtn_->setIcon(createSettingsCogIcon(QColor(colors.buttonText)));
 }
 
-} // namespace aa
+} // namespace cta

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WYSIWYG Overlay Editor:** Added an interactive drag-and-drop editor (`OverlayEditorDialog`) to visually customize the positions and sizes of analysis video elements (board, eval bar, PV text).
+- **Channel-Specific Templates:** Introduced `TemplateManager` to handle multiple layout profiles. Templates auto-select based on video filename keywords and use static reference screenshots for accurate visual positioning.
+- **Stockfish Search Limits:** Users can now bound Stockfish engine analysis by specifying maximum time per move (ms) or total nodes searched, in addition to search depth.
 - **GUI Application:** Fully featured Qt6-based interface with settings persistence, theme manager (Light/Dark/System), and headless CLI execution mode.
 - **Analysis Video Generation:** Added `AnalysisVideoGenerator` class to generate a copy of the source video with a synchronized analysis board overlay in the top-right corner. This feature can be toggled in the GUI.
 - Comprehensive `spec.md` documenting all functional and non-functional requirements
@@ -22,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Lightweight Editor Backend:** Replaced heavy `QtMultimedia` video playback with static reference screenshots for the overlay editor, eliminating the Qt multimedia dependency and improving stability.
 - **UI Clarity:** Renamed the ambiguous "Video Quality" setting to "Video Compression (CRF)" and updated the dropdown options to clearly explain the trade-off between file size and visual artifacts.
 
 ### Performance

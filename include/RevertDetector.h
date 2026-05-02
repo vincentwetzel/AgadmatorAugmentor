@@ -9,7 +9,7 @@
 #include <queue> // For history of moves/clocks
 #include <numeric> // For std::accumulate
 
-namespace aa {
+namespace cta {
 
 // Forward declaration for ClockRecognizer::ClockDetectionResult if not fully included
 // struct ClockRecognizer::ClockDetectionResult;
@@ -54,4 +54,4 @@ private:
     double calculate_mean_abs_diff(const cv::Mat& img1, const cv::Mat& img2) const;
 };
 
-} // namespace aa
+} // namespace cta

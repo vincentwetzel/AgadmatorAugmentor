@@ -21,7 +21,7 @@
 #include <sys/wait.h>
 #endif
 
-namespace aa {
+namespace cta {
 
 namespace { // Anonymous namespace for helper
 
@@ -232,7 +232,7 @@ void StockfishAnalyzer::set_multi_pv(int multi_pv) {
     impl_->send_command("setoption name MultiPV value " + std::to_string(multi_pv_));
 }
 
-StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int depth, std::atomic<bool>* cancel_flag) {
+StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int depth, int time_ms, int nodes, std::atomic<bool>* cancel_flag) {
     StockfishResult result;
     result.fen = fen;
 
@@ -242,7 +242,10 @@ StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int 
     if (cancel_flag && *cancel_flag) return result;
 
     // Start analysis
-    impl_->send_command("go depth " + std::to_string(depth));
+    std::string go_cmd = "go depth " + std::to_string(depth);
+    if (time_ms > 0) go_cmd += " movetime " + std::to_string(time_ms);
+    if (nodes > 0) go_cmd += " nodes " + std::to_string(nodes);
+    impl_->send_command(go_cmd);
     
     // Read analysis output
     std::string response = impl_->wait_for_response("bestmove", cancel_flag);
@@ -307,7 +310,7 @@ StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int 
     return result;
 }
 
-std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vector<std::string>& fens, int depth, std::atomic<bool>* cancel_flag) {
+std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vector<std::string>& fens, int depth, int time_ms, int nodes, std::atomic<bool>* cancel_flag) {
     std::vector<StockfishResult> results;
     results.reserve(fens.size());
 
@@ -318,10 +321,10 @@ std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vec
         if (progress_callback_) {
             progress_callback_(static_cast<int>(i + 1), static_cast<int>(fens.size()));
         }
-        results.push_back(analyze_position(fens[i], depth, cancel_flag));
+        results.push_back(analyze_position(fens[i], depth, time_ms, nodes, cancel_flag));
     }
 
     return results;
 }
 
-} // namespace aa
+} // namespace cta

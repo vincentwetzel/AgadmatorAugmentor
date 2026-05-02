@@ -6,7 +6,7 @@
 #include <vector>
 #include <list>
 
-namespace aa {
+namespace cta {
 
 struct PgnPly {
     std::string san;
@@ -42,4 +42,4 @@ private:
     std::vector<libchess::Position> pos_stack_;
 };
 
-} // namespace aa
+} // namespace cta

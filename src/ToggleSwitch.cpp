@@ -43,7 +43,7 @@ void ToggleSwitch::paintEvent(QPaintEvent* event) {
     painter.setRenderHint(QPainter::Antialiasing);
 
     // Get theme colors from ThemeManager
-    auto colors = aa::ThemeManager::instance().colors();
+    auto colors = cta::ThemeManager::instance().colors();
 
     // Draw track background
     QRectF trackRect(2, 5, 56, 20);

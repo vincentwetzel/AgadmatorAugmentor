@@ -3,7 +3,7 @@
 #include "GPUAccelerator.h"
 #include <iostream>
 
-namespace aa {
+namespace cta {
 
 FramePrefetcher::FramePrefetcher(const std::string& video_path, int memory_limit_mb)
     : video_path_(video_path), memory_limit_mb_(memory_limit_mb) {}
@@ -164,4 +164,4 @@ void FramePrefetcher::worker_loop() {
     }
 }
 
-} // namespace aa
+} // namespace cta

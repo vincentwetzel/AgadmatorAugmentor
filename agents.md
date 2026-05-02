@@ -75,7 +75,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
 
 - Consumes FEN positions from the Verification Agent.
 - Feeds each FEN position to Stockfish via UCI protocol.
-- Collects configured number of best lines (MultiPV), evaluations (Centipawns or Mate), and principal variations.
+- Collects configured number of best lines (MultiPV), evaluations (Centipawns or Mate), and principal variations, bounded by depth, time, or node search limits.
 - Handles edge cases (checkmate, stalemate) gracefully.
 - Outputs engine analysis directly into the generated PGN file as standard chess variations and inline evaluations.
 
@@ -210,7 +210,7 @@ void MyCustomWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     
     // ✅ CORRECT: Fetch theme colors
-    auto colors = aa::ThemeManager::instance().colors();
+    auto colors = cta::ThemeManager::instance().colors();
     painter.setBrush(QColor(colors.myCustomColor));
     
     // ❌ WRONG: Hardcoded colors

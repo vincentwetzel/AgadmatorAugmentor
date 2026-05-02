@@ -1,47 +1,59 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.env
-.venv
-venv/
-env/
-
-# C/C++ build (all nested build dirs)
-**/build/
-dist/
+# Compiled Object files, Static and Dynamic libs
 *.o
+*.ko
+*.obj
+*.elf
 *.a
-*.so
-*.dll
-*.exe
+*.la
+*.lo
 *.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.pdb
+*.exp
+
+# Executables
+*.exe
 *.out
+*.app
 
-# vcpkg installed deps (reference system vcpkg on E: drive instead)
-vcpkg_installed/
+# CMake
+build/
+build-*/
+build_*/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
 
-# Debug / temp output
-debug_screenshots/
-output/
-*.log
-*.tmp
-sf_test.txt
-sf_test_out.txt
-vcpkg_output.txt
-test_pgn_parser.*
-settings.ini
+# Qt
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
 
-# IDE
-.vscode/
+# IDEs & OS
 .idea/
-*.swp
-*.swo
-*~
+.vscode/
+.vs/
 .qwen/
 .VSCodeCounter/
-
-# OS
+*.suo
+*.sln
 .DS_Store
 Thumbs.db
 
+# Project specific generated files & media
+output/
+debug_screenshots/
+temp/
+vcpkg_installed/
+*.pgn
+*.mp4
+*.mkv
+*.avi
+*.webm

@@ -42,6 +42,12 @@ int main(int argc, char* argv[]) {
     int memory_limit = 0;
     app.add_option("--memory-limit", memory_limit, "Memory limit in MB (0 = Unlimited)")->check(CLI::Range(0, 65536));
 
+    int time = 0;
+    app.add_option("--time", time, "Stockfish max time per move in seconds (0 = no limit)")->check(CLI::Range(0, 600));
+
+    int nodes = 0;
+    app.add_option("--nodes", nodes, "Stockfish max nodes per move (0 = no limit)")->check(CLI::Range(0, 1000000000));
+
     CLI11_PARSE(app, argc, argv);
 
     if (threads > 0) {
@@ -70,17 +76,17 @@ int main(int argc, char* argv[]) {
         output = "output/" + base_name + ".pgn";
     }
 
-    aa::DebugLevel debug_level = aa::DebugLevel::Moves;
-    if (debug_level_str == "NONE") debug_level = aa::DebugLevel::None;
-    else if (debug_level_str == "FULL") debug_level = aa::DebugLevel::Full;
+    cta::DebugLevel debug_level = cta::DebugLevel::Moves;
+    if (debug_level_str == "NONE") debug_level = cta::DebugLevel::None;
+    else if (debug_level_str == "FULL") debug_level = cta::DebugLevel::Full;
 
     std::cout << "Starting C++ Extraction on: " << video_path << "\n\n";
 
     try {
-        aa::ChessVideoExtractor extractor(board_asset, "", debug_level, memory_limit);
-        aa::GameData data = extractor.extract_moves_from_video(video_path, "");
+        cta::ChessVideoExtractor extractor(board_asset, "", debug_level, memory_limit);
+        cta::GameData data = extractor.extract_moves_from_video(video_path, "");
 
-        aa::PgnWriter pgn;
+        cta::PgnWriter pgn;
         pgn.add_header("Event", "ChessTube Analysis");
         pgn.add_header("Site", "Unknown");
         pgn.add_header("Date", "Unknown");

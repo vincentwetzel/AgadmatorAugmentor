@@ -10,7 +10,7 @@
 #include <string>
 #include <array>
 
-namespace aa {
+namespace cta {
 
 // ── Batch 64-square mean via integral image ──────────────────────────────────
 
@@ -354,4 +354,4 @@ void generate_corner_debug_image(const cv::Mat& board_template, const std::strin
     cv::imwrite(output_dir + "/00_corner_debug_regions.png", debug);
 }
 
-} // namespace aa
+} // namespace cta

@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <array>
 
-namespace aa {
+namespace cta {
 namespace utils {
 
 // Format elapsed seconds as [H:MM:SS.mmm]
@@ -22,4 +22,4 @@ std::filesystem::path utf8_to_path(const std::string& utf8_str);
 std::string get_safe_path(const std::string& utf8_path);
 
 } // namespace utils
-} // namespace aa
+} // namespace cta

@@ -17,7 +17,7 @@ class QWidget;
 class QDragEnterEvent;
 class QDropEvent;
 
-namespace aa {
+namespace cta {
 
 class SettingsDialog;
 
@@ -61,7 +61,7 @@ public:
      * 
      * @return int 0 on success, non-zero on failure.
      */
-    int processHeadless(const QString& videoPath, int pgnOverride = -1, int stockfishOverride = -1, int multiPv = 0, int threads = 0, int depth = 0, int analysisDepth = 0, const QString& debugLevelStr = "", const QString& outputOverride = "", const QString& boardAssetOverride = "", int memoryLimit = -1);
+    int processHeadless(const QString& videoPath, int pgnOverride = -1, int stockfishOverride = -1, int multiPv = 0, int threads = 0, int depth = 0, int time = 0, int nodes = 0, int analysisDepth = 0, const QString& debugLevelStr = "", const QString& outputOverride = "", const QString& boardAssetOverride = "", int memoryLimit = -1);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
@@ -100,6 +100,9 @@ private:
     QueueItemStatus itemStatus(const QListWidgetItem* item) const;
     void setItemStatus(QListWidgetItem* item, QueueItemStatus status);
     void setItemProgress(QListWidgetItem* item, int percentage);
+    void applyTemplateToItem(QListWidgetItem* item, const QString& templateId) const;
+    VideoOverlayConfig overlayConfigForItem(const QListWidgetItem* item) const;
+    QString templateNameForItem(const QListWidgetItem* item) const;
     
     // Settings Management
     ProcessingSettings gatherSettings() const;
@@ -138,4 +141,4 @@ private:
     static const char* SETTINGS_APP;
 };
 
-} // namespace aa
+} // namespace cta

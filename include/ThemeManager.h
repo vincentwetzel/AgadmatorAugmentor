@@ -3,7 +3,7 @@
 #include <QString>
 #include <QSettings>
 
-namespace aa {
+namespace cta {
 
 enum class ThemeMode {
     System,
@@ -30,6 +30,12 @@ public:
         QString selectionText;
         QString progressBarBackground;
         QString progressBarChunk;
+        QString controlBackground;
+        QString controlHoverBackground;
+        QString controlPressedBackground;
+        QString controlBorder;
+        QString controlFocusBorder;
+        QString controlMutedText;
         QString toggleCheckedBackground;
         QString toggleUncheckedBackground;
         QString toggleThumb;
@@ -63,4 +69,4 @@ private:
 
 bool isSystemDarkMode();
 
-} // namespace aa
+} // namespace cta

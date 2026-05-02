@@ -8,7 +8,7 @@
 #include <cctype>
 #include <cmath>
 
-namespace aa {
+namespace cta {
 
 namespace {
     std::array<char, 64> expand_fen_to_board(const std::string& fen) {
@@ -318,4 +318,4 @@ void PgnWriter::build_line(std::ostringstream& oss, const std::vector<PgnPly>& l
     }
 }
 
-} // namespace aa
+} // namespace cta

@@ -1,9 +1,7 @@
 #include "AnalysisVideoGenerator.h"
-#include "StockfishAnalyzer.h"
 #include "BoardLocalizer.h"
 #include "FFmpegFilterGraph.h"
 #include "libchess/position.hpp"
-#include "libchess/move.hpp"
 #include <filesystem>
 #include <iostream>
 #include <cctype>
@@ -21,6 +19,12 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
+#include <opencv2/imgcodecs.hpp>
+
+// Include the new ChessFenUtils header
+#include "ChessFenUtils.h"
+#include "ImageWriteUtils.h"
+#include "AnalysisVideoRenderUtils.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -29,473 +33,7 @@
 #include <windows.h>
 #endif
 
-namespace aa {
-
-namespace { // Anonymous namespace for helper functions
-
-std::array<char, 64> expand_fen_to_board(const std::string& fen) {
-    std::array<char, 64> board;
-    board.fill(' ');
-    int sq = 56;
-    for (char c : fen) {
-        if (c == ' ') break;
-        if (c == '/') sq -= 16;
-        else if (c >= '1' && c <= '8') sq += (c - '0');
-        else board[sq++] = c;
-    }
-    return board;
-}
-
-std::string build_san(const libchess::Position& pos, const libchess::Move& move, const std::string& uci_str) {
-    auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
-    auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
-    
-    std::array<char, 64> board = expand_fen_to_board(pos.get_fen());
-    char piece = board[from_sq];
-    char target_piece = board[to_sq];
-    
-    bool is_pawn = (piece == 'P' || piece == 'p');
-    bool is_capture = (target_piece != ' ') || (is_pawn && (from_sq % 8) != (to_sq % 8) && target_piece == ' ');
-    
-    if (move.type() == libchess::MoveType::ksc) return "O-O";
-    if (move.type() == libchess::MoveType::qsc) return "O-O-O";
-
-    if ((piece == 'K' || piece == 'k') && std::abs((from_sq % 8) - (to_sq % 8)) == 2) {
-        if (to_sq % 8 == 6) return "O-O";
-        if (to_sq % 8 == 2) return "O-O-O";
-    }
-
-    std::string san;
-    if (!is_pawn) {
-        san += static_cast<char>(std::toupper(piece));
-        bool file_conflict = false;
-        bool rank_conflict = false;
-        bool need_disambiguation = false;
-        
-        for (const auto& alt_move : pos.legal_moves()) {
-            auto alt_from = static_cast<int>(static_cast<unsigned int>(alt_move.from()));
-            auto alt_to = static_cast<int>(static_cast<unsigned int>(alt_move.to()));
-            
-            if (alt_from != from_sq && alt_to == to_sq && board[alt_from] == piece) {
-                need_disambiguation = true;
-                if (alt_from % 8 == from_sq % 8) file_conflict = true;
-                if (alt_from / 8 == from_sq / 8) rank_conflict = true;
-            }
-        }
-        
-        if (need_disambiguation) {
-            if (!file_conflict) san += static_cast<char>('a' + (from_sq % 8));
-            else if (!rank_conflict) san += static_cast<char>('1' + (from_sq / 8));
-            else {
-                san += static_cast<char>('a' + (from_sq % 8));
-                san += static_cast<char>('1' + (from_sq / 8));
-            }
-        }
-    } else {
-        if (is_capture) san += static_cast<char>('a' + (from_sq % 8));
-    }
-    
-    if (is_capture) san += "x";
-    san += static_cast<char>('a' + (to_sq % 8));
-    san += static_cast<char>('1' + (to_sq / 8));
-    
-    if (uci_str.length() >= 5) {
-        san += "=";
-        san += static_cast<char>(std::toupper(uci_str[4]));
-    }
-    
-    libchess::Position temp_pos = pos;
-    temp_pos.makemove(move);
-    if (temp_pos.is_checkmate()) san += "#";
-    else if (temp_pos.in_check()) san += "+";
-
-    return san;
-}
-
-std::string uci_to_san_line(const std::string& uci_line, const std::string& start_fen) {
-    std::istringstream iss(uci_line);
-    std::string uci_move;
-    std::string san_line;
-    try {
-        libchess::Position pos(start_fen);
-        while (iss >> uci_move) {
-            if (!san_line.empty()) san_line += " ";
-            libchess::Move m = pos.parse_move(uci_move);
-            san_line += build_san(pos, m, uci_move);
-            pos.makemove(m);
-        }
-    } catch (...) {
-        return uci_line; // fallback to original string on parsing error
-    }
-    return san_line.empty() ? uci_line : san_line;
-}
-
-void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scalar color, double squareSize, int thicknessPct) {
-    double dx = end.x - start.x;
-    double dy = end.y - start.y;
-    double length = std::sqrt(dx*dx + dy*dy);
-    if (length == 0) return;
-
-    double angle = std::atan2(dy, dx);
-    double thickness = squareSize * (thicknessPct / 100.0);
-
-    // 1. Circular base on start square
-    cv::circle(overlay, start, thickness * 0.8, color, cv::FILLED, cv::LINE_AA);
-    
-    // 2. Arrowhead Dimensions (Triangle)
-    double headLength = thickness * 3.0;
-    double headWidth = thickness * 2.5;
-    
-    // Shorten the shaft so it doesn't peek through the arrowhead sides
-    double shaftLength = std::max(0.0, length - headLength * 0.8);
-    cv::Point2f shaftEnd(start.x + shaftLength * std::cos(angle), start.y + shaftLength * std::sin(angle));
-    
-    // 3. Rectangular shaft
-    std::vector<cv::Point> shaftPts;
-    double pAngle = angle + CV_PI / 2.0; // Perpendicular angle
-    
-    shaftPts.push_back(cv::Point(static_cast<int>(start.x + (thickness/2) * std::cos(pAngle)), static_cast<int>(start.y + (thickness/2) * std::sin(pAngle))));
-    shaftPts.push_back(cv::Point(static_cast<int>(start.x - (thickness/2) * std::cos(pAngle)), static_cast<int>(start.y - (thickness/2) * std::sin(pAngle))));
-    shaftPts.push_back(cv::Point(static_cast<int>(shaftEnd.x - (thickness/2) * std::cos(pAngle)), static_cast<int>(shaftEnd.y - (thickness/2) * std::sin(pAngle))));
-    shaftPts.push_back(cv::Point(static_cast<int>(shaftEnd.x + (thickness/2) * std::cos(pAngle)), static_cast<int>(shaftEnd.y + (thickness/2) * std::sin(pAngle))));
-    cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{shaftPts}, color, cv::LINE_AA);
-    
-    // 4. Triangular arrowhead targeting the destination square center
-    std::vector<cv::Point> headPts;
-    cv::Point2f tip(static_cast<float>(end.x), static_cast<float>(end.y));
-    cv::Point2f backCenter(end.x - headLength * std::cos(angle), end.y - headLength * std::sin(angle));
-    
-    headPts.push_back(cv::Point(static_cast<int>(backCenter.x + (headWidth/2) * std::cos(pAngle)), static_cast<int>(backCenter.y + (headWidth/2) * std::sin(pAngle))));
-    headPts.push_back(cv::Point(static_cast<int>(backCenter.x - (headWidth/2) * std::cos(pAngle)), static_cast<int>(backCenter.y - (headWidth/2) * std::sin(pAngle))));
-    headPts.push_back(cv::Point(static_cast<int>(tip.x), static_cast<int>(tip.y)));
-    cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{headPts}, color, cv::LINE_AA);
-}
-
-void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::string& sym, double sq_w, double sq_h) {
-    if (uci.length() < 4) return;
-    std::string clean_sym = sym;
-    clean_sym.erase(0, clean_sym.find_first_not_of(" "));
-    clean_sym.erase(clean_sym.find_last_not_of(" ") + 1);
-    if (clean_sym.empty()) return;
-
-    int to_col = uci[2] - 'a';
-    int to_row = 7 - (uci[3] - '1');
-    
-    if (to_col < 0 || to_col > 7 || to_row < 0 || to_row > 7) return;
-
-    double cx = (to_col + 0.5) * sq_w;
-    double cy = (to_row + 0.5) * sq_h;
-
-    int ax = static_cast<int>(cx + sq_w * 0.35);
-    int ay = static_cast<int>(cy - sq_h * 0.35);
-    int radius = static_cast<int>(sq_w * 0.18);
-
-    cv::Scalar bgColor;
-    bool drawStar = false;
-    bool drawBook = false;
-    bool drawThumbsUp = false;
-    
-    if (clean_sym == "!!") bgColor = cv::Scalar(80, 175, 75);      // Green (OpenCV uses BGR)
-    else if (clean_sym == "!") bgColor = cv::Scalar(215, 130, 40); // Blue
-    else if (clean_sym == "*") { bgColor = cv::Scalar(80, 175, 75); drawStar = true; } // Green Star
-    else if (clean_sym == "(Good)") { bgColor = cv::Scalar(80, 175, 75); drawThumbsUp = true; } // Green Thumbs Up
-    else if (clean_sym == "?") bgColor = cv::Scalar(50, 200, 240); // Yellow
-    else if (clean_sym == "X") bgColor = cv::Scalar(100, 100, 255); // Light red
-    else if (clean_sym == "??") bgColor = cv::Scalar(40, 40, 200);  // Darker red
-    else if (clean_sym == "(Book)") { bgColor = cv::Scalar(150, 180, 200); drawBook = true; } // Tan Book
-    else return; 
-
-    cv::circle(img, cv::Point(ax, ay), radius, bgColor, cv::FILLED, cv::LINE_AA);
-    cv::circle(img, cv::Point(ax, ay), radius, cv::Scalar(20, 20, 20), 1, cv::LINE_AA); // Dark outline
-
-    if (drawStar) {
-        std::vector<cv::Point> star_pts;
-        double out_r = radius * 0.65;
-        double in_r = out_r * 0.382; // Magic ratio for standard 5-pointed star
-        for (int i = 0; i < 10; ++i) {
-            double angle = i * CV_PI / 5.0 - CV_PI / 2.0;
-            double r = (i % 2 == 0) ? out_r : in_r;
-            star_pts.push_back(cv::Point(static_cast<int>(ax + r * std::cos(angle)), static_cast<int>(ay + r * std::sin(angle))));
-        }
-        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{star_pts}, cv::Scalar(255, 255, 255), cv::LINE_AA);
-    } else if (drawBook) {
-        std::vector<cv::Point> left_page = {
-            cv::Point(ax - radius*0.5, ay - radius*0.25),
-            cv::Point(ax - radius*0.05, ay - radius*0.1),
-            cv::Point(ax - radius*0.05, ay + radius*0.4),
-            cv::Point(ax - radius*0.5, ay + radius*0.25)
-        };
-        std::vector<cv::Point> right_page = {
-            cv::Point(ax + radius*0.5, ay - radius*0.25),
-            cv::Point(ax + radius*0.05, ay - radius*0.1),
-            cv::Point(ax + radius*0.05, ay + radius*0.4),
-            cv::Point(ax + radius*0.5, ay + radius*0.25)
-        };
-        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{left_page, right_page}, cv::Scalar(255, 255, 255), cv::LINE_AA);
-        cv::line(img, cv::Point(ax, ay - radius*0.1), cv::Point(ax, ay + radius*0.4), cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
-    } else if (drawThumbsUp) {
-        // Rounded silhouette styled to read closer to the chess.com "Good" badge
-        // at very small sizes: chunky palm, upright thumb, and soft finger bumps.
-        std::vector<cv::Point> palm = {
-            cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.32)),
-            cv::Point(static_cast<int>(ax - radius * 0.02), static_cast<int>(ay + radius * 0.32)),
-            cv::Point(static_cast<int>(ax + radius * 0.18), static_cast<int>(ay + radius * 0.24)),
-            cv::Point(static_cast<int>(ax + radius * 0.30), static_cast<int>(ay + radius * 0.08)),
-            cv::Point(static_cast<int>(ax + radius * 0.30), static_cast<int>(ay - radius * 0.18)),
-            cv::Point(static_cast<int>(ax + radius * 0.15), static_cast<int>(ay - radius * 0.28)),
-            cv::Point(static_cast<int>(ax - radius * 0.08), static_cast<int>(ay - radius * 0.28)),
-            cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.10)),
-            cv::Point(static_cast<int>(ax - radius * 0.28), static_cast<int>(ay + radius * 0.02)),
-            cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.18))
-        };
-        cv::fillConvexPoly(img, palm, cv::Scalar(255, 255, 255), cv::LINE_AA);
-
-        std::vector<cv::Point> thumb = {
-            cv::Point(static_cast<int>(ax - radius * 0.24), static_cast<int>(ay - radius * 0.05)),
-            cv::Point(static_cast<int>(ax - radius * 0.12), static_cast<int>(ay - radius * 0.12)),
-            cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.56)),
-            cv::Point(static_cast<int>(ax - radius * 0.20), static_cast<int>(ay - radius * 0.64)),
-            cv::Point(static_cast<int>(ax - radius * 0.32), static_cast<int>(ay - radius * 0.56)),
-            cv::Point(static_cast<int>(ax - radius * 0.35), static_cast<int>(ay - radius * 0.18))
-        };
-        cv::fillConvexPoly(img, thumb, cv::Scalar(255, 255, 255), cv::LINE_AA);
-
-        cv::circle(img, cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.60)),
-                   std::max(1, static_cast<int>(radius * 0.11)), cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
-
-        const int fingerRadius = std::max(1, static_cast<int>(radius * 0.12));
-        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.23), static_cast<int>(ay - radius * 0.14)),
-                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
-        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.16), static_cast<int>(ay + radius * 0.03)),
-                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
-        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.07), static_cast<int>(ay + radius * 0.17)),
-                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
-
-        cv::line(img,
-                 cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.02)),
-                 cv::Point(static_cast<int>(ax + radius * 0.18), static_cast<int>(ay - radius * 0.06)),
-                 bgColor, 1, cv::LINE_AA);
-        cv::line(img,
-                 cv::Point(static_cast<int>(ax - radius * 0.03), static_cast<int>(ay + radius * 0.12)),
-                 cv::Point(static_cast<int>(ax + radius * 0.14), static_cast<int>(ay + radius * 0.10)),
-                 bgColor, 1, cv::LINE_AA);
-    } else {
-        std::string txt = clean_sym;
-        int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-        double fontScale = (txt.length() > 1) ? radius * 0.045 : radius * 0.055;
-        int thickness = (txt.length() > 1) ? 1 : 2;
-        int baseline = 0;
-        cv::Size textSize = cv::getTextSize(txt, fontFace, fontScale, thickness, &baseline);
-        
-        cv::Point textOrg(ax - textSize.width / 2, ay + textSize.height / 2 - 1);
-        cv::putText(img, txt, textOrg, fontFace, fontScale, cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
-    }
-}
-
-void drawAnalysisBar(cv::Mat& img, cv::Rect rect, double cpScore) {
-    // Base dark background (advantage to Black)
-    cv::rectangle(img, rect, cv::Scalar(40, 40, 40), cv::FILLED);
-    
-    // Simplified logistic sigmoid matching standard engine win probability scaling
-    double winProb = 1.0 / (1.0 + std::exp(-0.00368208 * cpScore));
-    
-    // Calculate the height of the light/white portion (advantage to White)
-    int whiteHeight = static_cast<int>(rect.height * winProb);
-    
-    // Draw white portion rising from the bottom up
-    cv::Rect whiteRect(rect.x, rect.y + rect.height - whiteHeight, rect.width, whiteHeight);
-    cv::rectangle(img, whiteRect, cv::Scalar(240, 240, 240), cv::FILLED);
-    
-    // Draw a prominent indicator line precisely at the current evaluation point
-    int indicatorY = rect.y + rect.height - whiteHeight;
-    cv::line(img, cv::Point(rect.x, indicatorY), cv::Point(rect.x + rect.width, indicatorY), cv::Scalar(100, 100, 255), 2, cv::LINE_AA);
-
-    // Overlay a border
-    cv::rectangle(img, rect, cv::Scalar(100, 100, 100), 2);
-}
-
-std::string format_eval_string(const StockfishLine& line, const std::string& fen) {
-    bool is_black_to_move = (fen.find(" b ") != std::string::npos);
-
-    if (line.is_mate) {
-        int mate_in = line.mate_in;
-        if (is_black_to_move) mate_in = -mate_in;
-        
-        if (mate_in > 0) {
-            return "+M" + std::to_string(mate_in);
-        } else {
-            return "-M" + std::to_string(-mate_in);
-        }
-    }
-
-    std::ostringstream ss;
-    ss << std::fixed << std::setprecision(2);
-    double eval_cp = line.centipawns / 100.0;
-    if (is_black_to_move) eval_cp = -eval_cp;
-    
-    if (eval_cp >= 0.0) {
-        ss << "+";
-    }
-    ss << eval_cp;
-    return ss.str();
-}
-
-double get_line_score_cp(const StockfishLine& line) {
-    if (line.is_mate) {
-        return (line.mate_in > 0) ? (10000.0 - line.mate_in) : (-10000.0 - line.mate_in);
-    }
-    return static_cast<double>(line.centipawns);
-}
-
-double score_from_analysis(const std::optional<StockfishResult>& analysis, const std::string& fen) {
-    if (!analysis.has_value() || analysis->lines.empty()) {
-        return 0.0;
-    }
-
-    const auto& best_line = analysis->lines[0];
-    double score = 0.0;
-    if (best_line.is_mate) {
-        score = (best_line.mate_in > 0) ? 15000.0 : -15000.0;
-    } else {
-        score = static_cast<double>(best_line.centipawns);
-    }
-    
-    if (fen.find(" b ") != std::string::npos) {
-        score = -score;
-    }
-
-    return score;
-}
-
-#pragma pack(push, 1)
-struct BitmapFileHeader {
-    std::uint16_t type = 0x4D42;
-    std::uint32_t size = 0;
-    std::uint16_t reserved1 = 0;
-    std::uint16_t reserved2 = 0;
-    std::uint32_t offBits = 54;
-};
-
-struct BitmapInfoHeader {
-    std::uint32_t size = 40;
-    std::int32_t width = 0;
-    std::int32_t height = 0;
-    std::uint16_t planes = 1;
-    std::uint16_t bitCount = 24;
-    std::uint32_t compression = 0;
-    std::uint32_t sizeImage = 0;
-    std::int32_t xPelsPerMeter = 0;
-    std::int32_t yPelsPerMeter = 0;
-    std::uint32_t clrUsed = 0;
-    std::uint32_t clrImportant = 0;
-};
-#pragma pack(pop)
-
-bool write_bmp_fast(const std::filesystem::path& path, const cv::Mat& image) {
-    if (image.empty() || image.type() != CV_8UC3 || !image.isContinuous()) {
-        return false;
-    }
-
-    const std::uint32_t row_stride = static_cast<std::uint32_t>(image.cols * 3);
-    const std::uint32_t padded_stride = (row_stride + 3u) & ~3u;
-    const std::uint32_t image_size = padded_stride * static_cast<std::uint32_t>(image.rows);
-
-    BitmapFileHeader file_header;
-    BitmapInfoHeader info_header;
-    info_header.width = image.cols;
-    info_header.height = image.rows;
-    info_header.sizeImage = image_size;
-    file_header.size = file_header.offBits + image_size;
-
-    std::ofstream out(path, std::ios::binary);
-    if (!out.is_open()) {
-        return false;
-    }
-
-    out.write(reinterpret_cast<const char*>(&file_header), sizeof(file_header));
-    out.write(reinterpret_cast<const char*>(&info_header), sizeof(info_header));
-
-    const std::array<char, 3> padding = {0, 0, 0};
-    for (int y = image.rows - 1; y >= 0; --y) {
-        const char* row_ptr = reinterpret_cast<const char*>(image.ptr<uchar>(y));
-        out.write(row_ptr, row_stride);
-        if (padded_stride > row_stride) {
-            out.write(padding.data(), padded_stride - row_stride);
-        }
-    }
-
-    return out.good();
-}
-
-void render_main_board_arrows(cv::Mat& image,
-                              const std::optional<StockfishResult>& analysis,
-                              const std::string& fen,
-                              int width, int height,
-                              int arrow_thickness_pct) {
-    image = cv::Mat::zeros(cv::Size(width, height), CV_8UC3);
-    if (!analysis.has_value() || analysis->lines.empty()) return;
-
-    double sq_w = static_cast<double>(width) / 8.0;
-    double sq_h = static_cast<double>(height) / 8.0;
-
-    try {
-        libchess::Position pos(fen);
-        double best_score = get_line_score_cp(analysis->lines.front());
-
-        // Draw worse lines first so best lines render on top
-        for (int i = static_cast<int>(analysis->lines.size()) - 1; i >= 0; --i) {
-            const auto& line = analysis->lines[i];
-            if (line.move_uci.empty() || line.move_uci == "ANNOTATION") continue;
-            
-            double line_score = get_line_score_cp(line);
-            double diff_cp = std::max(0.0, best_score - line_score);
-            
-            // Weight drops from 1.0 (best) to 0.2 (blunder: 300+ cp worse)
-            double weight = std::max(0.2, 1.0 - (diff_cp / 300.0));
-            int current_thickness_pct = static_cast<int>(arrow_thickness_pct * weight);
-
-            libchess::Move move = pos.parse_move(line.move_uci);
-            auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
-            auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
-
-            int from_row = 7 - (from_sq / 8);
-            int from_col = from_sq % 8;
-            int to_row = 7 - (to_sq / 8);
-            int to_col = to_sq % 8;
-
-            cv::Point start(static_cast<int>((from_col + 0.5) * sq_w), static_cast<int>((from_row + 0.5) * sq_h));
-            cv::Point end(static_cast<int>((to_col + 0.5) * sq_w), static_cast<int>((to_row + 0.5) * sq_h));
-
-            cv::Scalar color;
-            if (i == 0 || diff_cp <= 10.0) { 
-                color = cv::Scalar(122, 153, 122); 
-            } else {
-                double color_scale = std::max(0.5, weight);
-                color = cv::Scalar(112 * color_scale, 128 * color_scale, 144 * color_scale);
-            }
-            
-            drawEngineArrow(image, start, end, color, sq_w, current_thickness_pct);
-        }
-        
-        // Draw graphical move quality annotations on top of the main board
-        for (const auto& line : analysis->lines) {
-            if (line.move_uci == "ANNOTATION") {
-                std::string uci, sym;
-                size_t uci_len = 0;
-                while (uci_len < line.pv_line.length()) {
-                    char c = line.pv_line[uci_len];
-                    if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') uci_len++;
-                    else break;
-                }
-                uci = line.pv_line.substr(0, uci_len);
-                sym = line.pv_line.substr(uci_len);
-                drawMoveAnnotationOnBoard(image, uci, sym, sq_w, sq_h);
-            }
-        }
-    } catch(...) {}
-}
-
-} // anonymous namespace
+namespace cta {
 
 AnalysisVideoGenerator::AnalysisVideoGenerator(const std::string& assets_dir) {
     std::string board_path = assets_dir + "/board/board.png";
@@ -610,22 +148,19 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
     // Draw engine arrows on the debug board
     if (analysis.has_value() && !analysis->lines.empty()) {
         try {
-            cv::Mat arrow_overlay = cv::Mat::zeros(board.size(), board.type());
             libchess::Position pos(fen);
             
-            double best_score = get_line_score_cp(analysis->lines.front());
+            double best_score = ChessFenUtils::get_line_score_cp(analysis->lines.front());
 
             // Draw worse lines first so best lines render on top
             for (int i = static_cast<int>(analysis->lines.size()) - 1; i >= 0; --i) {
                 const auto& line = analysis->lines[i];
                 if (line.move_uci.empty() || line.move_uci == "ANNOTATION") continue;
                 
-                double line_score = get_line_score_cp(line);
+                double line_score = ChessFenUtils::get_line_score_cp(line);
                 double diff_cp = std::max(0.0, best_score - line_score);
                 
-                // Weight drops from 1.0 (best) to 0.2 (blunder: 300+ cp worse)
-                double weight = std::max(0.2, 1.0 - (diff_cp / 300.0));
-                int current_thickness_pct = static_cast<int>(arrow_thickness_pct * weight);
+                AnalysisVideoRenderUtils::EngineArrowStyle style = AnalysisVideoRenderUtils::compute_engine_arrow_style(i, diff_cp, arrow_thickness_pct);
 
                 libchess::Move move = pos.parse_move(line.move_uci);
                 auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
@@ -639,17 +174,8 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
                 cv::Point start(static_cast<int>((from_col + 0.5) * sq_w), static_cast<int>((from_row + 0.5) * sq_h));
                 cv::Point end(static_cast<int>((to_col + 0.5) * sq_w), static_cast<int>((to_row + 0.5) * sq_h));
 
-                cv::Scalar color;
-                if (i == 0 || diff_cp <= 10.0) { 
-                    color = cv::Scalar(122, 153, 122); 
-                } else {
-                    double color_scale = std::max(0.5, weight);
-                    color = cv::Scalar(112 * color_scale, 128 * color_scale, 144 * color_scale);
-                }
-
-                drawEngineArrow(arrow_overlay, start, end, color, sq_w, current_thickness_pct);
+                AnalysisVideoRenderUtils::blend_arrow_on_bgr(board, start, end, style, sq_w);
             }
-            cv::addWeighted(arrow_overlay, 0.5, board, 1.0, 0.0, board);
             
             // Draw graphical move quality annotations on top of the debug board
             for (const auto& line : analysis->lines) {
@@ -663,7 +189,7 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
                     }
                     uci = line.pv_line.substr(0, uci_len);
                     sym = line.pv_line.substr(uci_len);
-                    drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
+                    AnalysisVideoRenderUtils::drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
                 }
             }
         } catch(...) {
@@ -695,8 +221,8 @@ void AnalysisVideoGenerator::render_analysis_text(cv::Mat& image,
 
     bool first_line = true;
     for (const auto& line : lines) {
-        std::string eval_str = format_eval_string(line, fen);
-        std::string text = eval_str + " | " + uci_to_san_line(line.pv_line, fen);
+        std::string eval_str = ChessFenUtils::format_eval_string(line, fen);
+        std::string text = eval_str + " | " + ChessFenUtils::uci_to_san_line(line.pv_line, fen);
 
         cv::Scalar color = first_line ? cv::Scalar(144, 238, 144) : cv::Scalar(220, 220, 220);
         int thickness = first_line ? 2 : 1;
@@ -723,7 +249,7 @@ void AnalysisVideoGenerator::render_analysis_bar(cv::Mat& image,
                                                  int width,
                                                  int height) const {
     image = cv::Mat::zeros(cv::Size(width, height), CV_8UC3);
-    drawAnalysisBar(image, cv::Rect(0, 0, width, height), score_from_analysis(analysis, fen));
+    AnalysisVideoRenderUtils::drawAnalysisBar(image, cv::Rect(0, 0, width, height), ChessFenUtils::score_from_analysis(analysis, fen));
 }
 
 bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_video_path, 
@@ -757,7 +283,6 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::string aCodec = "copy";
     std::string resolution = "Source Resolution";
     std::string crf = "23";
-    std::string arrows_target = "Debug Board";
 
     // Dynamically unpack pipe-delimited parameters safely
     size_t pipe_pos = actual_output_path.find('|');
@@ -777,7 +302,6 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (tokens.size() > 1) aCodec = tokens[1];
         if (tokens.size() > 2) resolution = tokens[2];
         if (tokens.size() > 3) crf = tokens[3];
-        if (tokens.size() > 6) arrows_target = tokens[6];
     }
 
     // Clean up codec UI string (e.g., "libx264 (H.264)" -> "libx264")
@@ -788,7 +312,11 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     size_t a_space_idx = aCodec.find(' ');
     if (a_space_idx != std::string::npos) aCodec = aCodec.substr(0, a_space_idx);
 
-    bool draw_debug_arrows = (arrows_target == "Debug Board" || arrows_target == "Both");
+    std::string arrows_target = overlay_config.arrowsTarget;
+    if (arrows_target.empty()) arrows_target = "Analysis Board";
+    if (arrows_target == "Debug Board") arrows_target = "Analysis Board";
+
+    bool draw_debug_arrows = (arrows_target == "Analysis Board" || arrows_target == "Both");
     bool draw_main_arrows = (arrows_target == "Main Board" || arrows_target == "Both");
 
     // Define dynamic overlay dimensions based on user config scale
@@ -796,12 +324,34 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     debug_h += debug_h % 2; // Ensure even dimension
     int debug_w = (board_template_.cols * debug_h) / board_template_.rows;
     debug_w += debug_w % 2; // Ensure even dimension
-    int text_w = static_cast<int>(400 * overlay_config.pvText.scale);
+
+    int max_pv_lines = 1;
+    for (const auto& result : stockfish_results) {
+        int visible_lines = 0;
+        for (const auto& line : result.lines) {
+            if (line.move_uci != "ANNOTATION") {
+                ++visible_lines;
+            }
+        }
+        max_pv_lines = std::max(max_pv_lines, visible_lines);
+    }
+
+    int text_w = static_cast<int>(kPvTextBaseWidth * overlay_config.pvText.scale);
     text_w += text_w % 2;
-    int bar_w = static_cast<int>(30 * overlay_config.evalBar.scale);
+    int text_h = static_cast<int>(kPvTextLineHeight * max_pv_lines * overlay_config.pvText.scale);
+    text_h += text_h % 2;
+    text_h = std::max(text_h, 2);
+    
+    // Decode independent X and Y scales from the single unified float (X.XXYYYY)
+    double encoded_eval_scale = overlay_config.evalBar.scale;
+    double eval_sx = std::round(encoded_eval_scale * 100.0) / 100.0;
+    double eval_sy = std::round((encoded_eval_scale - eval_sx) * 10000.0 * 100.0) / 100.0;
+    if (eval_sy <= 0.0) eval_sy = 1.0;
+    
+    int bar_w = static_cast<int>(30 * eval_sx);
     bar_w += bar_w % 2;
     int safe_height = height + (height % 2); // Ensure even dimension
-    int bar_h = static_cast<int>(safe_height * overlay_config.evalBar.scale);
+    int bar_h = static_cast<int>(safe_height * eval_sy);
     bar_h += bar_h % 2;
 
     // Pre-scale assets to target resolution to avoid resizing inside the render loop
@@ -859,7 +409,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         std::string board_img = "board_" + std::to_string(i) + ".bmp";
         std::string text_img = "text_" + std::to_string(i) + ".bmp";
         std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
-        std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".bmp";
+        std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".png";
 
         if (overlay_config.board.enabled) {
             board_txt << "file '" << board_img << "'\n";
@@ -886,7 +436,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (overlay_config.pvText.enabled) text_txt << "file 'text_" << last_idx << ".bmp'\n";
         if (overlay_config.evalBar.enabled) bar_txt << "file 'bar_" << last_idx << ".bmp'\n";
         if (draw_main_arrows) {
-            main_arrows_txt << "file 'main_arrows_" << last_idx << ".bmp'\n";
+            main_arrows_txt << "file 'main_arrows_" << last_idx << ".png'\n";
         }
     }
 
@@ -930,7 +480,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     // --- Render Analysis Text ---
                     cv::Mat cached_text;
                     if (overlay_config.pvText.enabled) {
-                        render_analysis_text(cached_text, current_analysis, current_fen, text_w, debug_h);
+                        render_analysis_text(cached_text, current_analysis, current_fen, text_w, text_h);
                     }
 
                     // --- Render Debug Board ---
@@ -949,24 +499,24 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     // --- Render Main Arrows ---
                     cv::Mat cached_main_arrows;
                     if (draw_main_arrows) {
-                        render_main_board_arrows(cached_main_arrows, current_analysis, current_fen, main_arrow_w, main_arrow_h, arrow_thickness_pct);
+                        AnalysisVideoRenderUtils::render_main_board_arrows(cached_main_arrows, current_analysis, current_fen, main_arrow_w, main_arrow_h, arrow_thickness_pct);
                     }
 
                     std::string board_img = "board_" + std::to_string(i) + ".bmp";
                     std::string text_img = "text_" + std::to_string(i) + ".bmp";
                     std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
-                    std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".bmp";
+                    std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".png";
 
                     bool write_ok = true;
                     {
                         // Keep temp image writes efficient and predictable; too many concurrent large writes
                         // can become slower than the CPU rendering work itself.
                         std::lock_guard<std::mutex> lock(io_mutex);
-                        if (overlay_config.board.enabled) write_ok &= write_bmp_fast(temp_dir / board_img, cached_board);
-                        if (overlay_config.pvText.enabled) write_ok &= write_bmp_fast(temp_dir / text_img, cached_text);
-                        if (overlay_config.evalBar.enabled) write_ok &= write_bmp_fast(temp_dir / bar_img, cached_bar);
+                        if (overlay_config.board.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / board_img, cached_board);
+                        if (overlay_config.pvText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / text_img, cached_text);
+                        if (overlay_config.evalBar.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / bar_img, cached_bar);
                         if (write_ok && draw_main_arrows) {
-                            write_ok = write_bmp_fast(temp_dir / main_arrows_img, cached_main_arrows);
+                            write_ok = ImageWriteUtils::write_png_rgba(temp_dir / main_arrows_img, cached_main_arrows);
                         }
                     }
                     if (!write_ok) {
@@ -1011,7 +561,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     board_y_pos -= board_y_pos % 2;
 
     int text_x_pos = static_cast<int>(overlay_config.pvText.x_percent * std::max(0.0, static_cast<double>(width - text_w)));
-    int text_y_pos = static_cast<int>(overlay_config.pvText.y_percent * std::max(0.0, static_cast<double>(height - debug_h)));
+    int text_y_pos = static_cast<int>(overlay_config.pvText.y_percent * std::max(0.0, static_cast<double>(height - text_h)));
     text_x_pos -= text_x_pos % 2;
     text_y_pos -= text_y_pos % 2;
 
@@ -1025,22 +575,22 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
     int stream_idx = 1;
     std::string board_stream, bar_stream, text_stream, arrows_stream;
-    std::string input_args = "-y -i \"" + input_video_path + "\" ";
+    std::string input_args_str = "-y -i \"" + input_video_path + "\" ";
 
     if (overlay_config.board.enabled) {
-        input_args += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
+        input_args_str += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
         board_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
     if (overlay_config.evalBar.enabled) {
-        input_args += "-f concat -safe 0 -i \"" + bar_txt_path + "\" ";
+        input_args_str += "-f concat -safe 0 -i \"" + bar_txt_path + "\" ";
         bar_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
     if (overlay_config.pvText.enabled) {
-        input_args += "-f concat -safe 0 -i \"" + text_txt_path + "\" ";
+        input_args_str += "-f concat -safe 0 -i \"" + text_txt_path + "\" ";
         text_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
     if (draw_main_arrows) {
-        input_args += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
+        input_args_str += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
         arrows_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
 
@@ -1049,13 +599,13 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::string current_bg = "[0:v]";
     
     if (draw_main_arrows) {
-        graph.add_filter(arrows_stream, "colorkey=black:0.01:0.5", "[main_arrows_alpha]");
-        graph.add_filter(current_bg + "[main_arrows_alpha]", "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by), "[bg_arr]");
+        graph.add_filter(arrows_stream, "format=rgba", "[main_arrows_rgba]");
+        graph.add_filter(current_bg + "[main_arrows_rgba]", "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by) + ":format=auto", "[bg_arr]");
         current_bg = "[bg_arr]";
     }
 
     if (overlay_config.pvText.enabled) {
-        graph.add_filter(current_bg, "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(text_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(debug_h) + ":color=black@0.6:t=fill", "[bg_box]");
+        graph.add_filter(current_bg, "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(text_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(text_h) + ":color=black@0.6:t=fill", "[bg_box]");
         graph.add_filter(text_stream, "colorkey=black:0.01:0.5", "[txt_alpha]");
         graph.add_filter("[bg_box][txt_alpha]", "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]");
         current_bg = "[bg_txt]";
@@ -1101,7 +651,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Fallback to copy if codec isn't set
     if (aCodec.empty()) aCodec = "copy";
 
-    ffmpeg_cmd = "ffmpeg -threads 0 " + input_args + 
+    ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
                  "-filter_complex \"" + filter_complex + "\" "
                  "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " \"" + actual_output_path + "\"";
 
@@ -1225,4 +775,4 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     }
 }
 
-} // namespace aa
+} // namespace cta

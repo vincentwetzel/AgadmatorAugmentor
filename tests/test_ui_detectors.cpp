@@ -48,7 +48,7 @@ static std::vector<IntegrationTestResult> g_test_results;
 #define TEST_CONSTRUCTOR_THROWS   0
 // ─────────────────────────────────────────────────────────────────────────────
 
-namespace aa {
+namespace cta {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -621,4 +621,4 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 
 #endif // TEST_MEDIUM_GAME_REVERT
 
-} // namespace aa
+} // namespace cta
