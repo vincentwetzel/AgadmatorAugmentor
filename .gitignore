@@ -2,7 +2,7 @@
 *.o
 *.ko
 *.obj
-*.elf
+*.elfls
 *.a
 *.la
 *.lo

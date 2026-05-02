@@ -16,6 +16,15 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 - [x] Update documentation (`PROJECT_PLAN.md`, `docs/USAGE.md`) to remove outdated Python-era content and reflect the current C++ implementation.
 - [x] Update all file paths in documentation to reflect the new structure.
 
+## Performance Optimization
+
+### Completed
+
+- **GUI Target Naming:** Renamed the CMake/VS Code GUI target to `analyzer_gui` so build commands match the ChessTube Analyzer product name.
+- **Board Localization (Pass 3):** Optimized the final pass of `locate_board` to be fully GPU-resident, eliminating repeated host-device memory transfers.
+  - **Problem:** The third pass of `locate_board` (Exact Golden Section Search) took ~10.5 seconds due to repeated host-to-device and device-to-host memory transfers within `GPUAccelerator::resize` and `GPUAccelerator::matchTemplate` during each `eval_scale` call.
+  - **Solution:** Modified `locate_board` to upload the full-resolution grayscale image and template to `GPUMat` objects once before the search loop. Created and used new GPU-resident functions (`eval_scale_gpu`, `golden_section_scale_search_gpu`, `linear_scale_search_gpu`) that operate entirely on device memory, removing the performance bottleneck.
+
 ## Current Status
 
 | Component | Status |

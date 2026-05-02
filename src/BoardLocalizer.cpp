@@ -29,7 +29,7 @@ eval_scale(const cv::Mat& img, const cv::Mat& tpl, double scale) {
     GPUAccelerator::resize(tpl, resized, cv::Size(rw, rh), 0, 0, cv::INTER_AREA);
 
     cv::Mat result;
-    GPUAccelerator::matchTemplate(img, resized, result, cv::TM_CCOEFF_NORMED);
+    GPUAccelerator::matchTemplate(img, resized, result, cv::TM_CCOEFF_NORMED); 
     double max_val;
     cv::Point max_loc;
     cv::minMaxLoc(result, nullptr, &max_val, nullptr, &max_loc);

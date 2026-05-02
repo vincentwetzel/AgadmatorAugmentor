@@ -30,37 +30,37 @@ void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scala
     cv::Point2f dir = delta * (1.0f / length);
     cv::Point2f perp(-dir.y, dir.x);
 
-    const float baseThickness = static_cast<float>(std::max(squareSize * (thicknessPct / 100.0), squareSize * 0.11));
-    const float shaftThickness = baseThickness;
-    const float baseRadius = shaftThickness * 0.72f;
-    const float headLength = std::min(std::max(shaftThickness * 2.35f, static_cast<float>(squareSize * 0.34)), length * 0.52f);
-    const float headWidth = std::max(shaftThickness * 2.45f, static_cast<float>(squareSize * 0.40));
-    const float neckWidth = std::max(shaftThickness * 1.20f, headWidth * 0.52f);
-    const float tipInset = std::min(static_cast<float>(squareSize * 0.08), length * 0.12f);
-    const float startInset = std::min(baseRadius * 0.55f, length * 0.14f);
+    const float shaftThickness = static_cast<float>(std::clamp(squareSize * (thicknessPct / 100.0),
+                                                               squareSize * 0.105,
+                                                               squareSize * 0.18));
+    const float headLength = std::min(std::max(shaftThickness * 3.15f, static_cast<float>(squareSize * 0.42)),
+                                      length * 0.58f);
+    const float headWidth = std::max(shaftThickness * 3.55f, static_cast<float>(squareSize * 0.50));
+    const float tipInset = std::min(static_cast<float>(squareSize * 0.09), length * 0.12f);
+    const float startInset = std::min(static_cast<float>(squareSize * 0.08), length * 0.20f);
 
     cv::Point2f tip = endf - dir * tipInset;
     cv::Point2f headBase = tip - dir * headLength;
     cv::Point2f bodyStart = startf + dir * startInset;
-    cv::Point2f bodyEnd = headBase + dir * std::min(headLength * 0.18f, length * 0.08f);
 
     auto toPoint = [](const cv::Point2f& p) {
         return cv::Point(cvRound(p.x), cvRound(p.y));
     };
 
-    // Rounded shaft and base match the softer site-style analysis arrows better
-    cv::line(overlay, toPoint(bodyStart), toPoint(bodyEnd), color, std::max(1, cvRound(shaftThickness)), cv::LINE_AA);
-    cv::circle(overlay, toPoint(startf), cvRound(baseRadius), color, cv::FILLED, cv::LINE_AA);
-    cv::circle(overlay, toPoint(bodyEnd), std::max(1, cvRound(neckWidth * 0.32f)), color, cv::FILLED, cv::LINE_AA);
+    const float shaftHalf = shaftThickness * 0.5f;
+    const float headHalf = headWidth * 0.5f;
 
-    std::vector<cv::Point> headPts;
-    headPts.reserve(5);
-    headPts.push_back(toPoint(bodyEnd + perp * (neckWidth * 0.5f)));
-    headPts.push_back(toPoint(headBase + perp * (headWidth * 0.5f)));
-    headPts.push_back(toPoint(tip));
-    headPts.push_back(toPoint(headBase - perp * (headWidth * 0.5f)));
-    headPts.push_back(toPoint(bodyEnd - perp * (neckWidth * 0.5f)));
-    cv::fillConvexPoly(overlay, headPts, color, cv::LINE_AA);
+    std::vector<cv::Point> arrowPts;
+    arrowPts.reserve(7);
+    arrowPts.push_back(toPoint(bodyStart + perp * shaftHalf));
+    arrowPts.push_back(toPoint(headBase + perp * shaftHalf));
+    arrowPts.push_back(toPoint(headBase + perp * headHalf));
+    arrowPts.push_back(toPoint(tip));
+    arrowPts.push_back(toPoint(headBase - perp * headHalf));
+    arrowPts.push_back(toPoint(headBase - perp * shaftHalf));
+    arrowPts.push_back(toPoint(bodyStart - perp * shaftHalf));
+
+    cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{arrowPts}, color, cv::LINE_AA);
 }
 
 void blend_arrow_on_bgr(cv::Mat& image,
@@ -278,25 +278,26 @@ EngineArrowStyle compute_engine_arrow_style(int line_index, double diff_cp, int 
     const double similarity = std::clamp(1.0 - (diff_cp / 200.0), 0.0, 1.0);
 
     EngineArrowStyle style;
-    style.thickness_pct = std::max(4, static_cast<int>(std::round(arrow_thickness_pct * (0.72 + similarity * 0.28))));
-    style.tail_color = cv::Scalar(138, 152, 162);
-    style.head_color = cv::Scalar(236, 240, 242);
+    style.thickness_pct = std::max(8, static_cast<int>(std::round(arrow_thickness_pct * (0.78 + similarity * 0.22))));
 
     if (line_index == 0 || diff_cp <= 10.0) {
-        style.opacity = 0.46;
-        style.thickness_pct = std::max(style.thickness_pct, arrow_thickness_pct + 2);
+        style.opacity = 0.50;
+        style.thickness_pct = std::max(style.thickness_pct, arrow_thickness_pct + 1);
     } else if (diff_cp <= 25.0) {
-        style.opacity = 0.38;
+        style.opacity = 0.40;
     } else if (diff_cp <= 60.0) {
         style.opacity = 0.32;
     } else if (diff_cp <= 110.0) {
-        style.opacity = 0.28;
+        style.opacity = 0.25;
     } else {
-        const double far_ratio = std::clamp((diff_cp - 110.0) / 160.0, 0.0, 1.0);
-        style.opacity = 0.25 - far_ratio * 0.05;
+        const double far_ratio = std::clamp((diff_cp - 110.0) / 220.0, 0.0, 1.0);
+        style.opacity = 0.22 - far_ratio * 0.08;
     }
 
-    style.opacity = std::clamp(style.opacity, 0.20, 0.46);
+    const int channel = static_cast<int>(std::round(82.0 + (1.0 - similarity) * 42.0));
+    style.tail_color = cv::Scalar(channel, channel, channel);
+    style.head_color = style.tail_color;
+    style.opacity = std::clamp(style.opacity, 0.14, 0.50);
     return style;
 }
 

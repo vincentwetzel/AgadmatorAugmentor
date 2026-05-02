@@ -18,6 +18,8 @@ cmake --preset vs2022-dev
 cmake --build --preset gui-release
 ```
 
+The GUI build target is named `analyzer_gui`, while the generated executable remains `ChessTube Analyzer.exe`.
+
 This will produce two main executables in the `build/Release/` directory:
 - `extract_moves.exe`: A lightweight, command-line only tool for video processing.
 - `ChessTube Analyzer.exe`: The full GUI application, which also supports headless command-line operation.

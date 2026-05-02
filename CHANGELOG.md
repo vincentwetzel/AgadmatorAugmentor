@@ -25,11 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **GUI Target Rename:** Renamed the CMake GUI target from `augmentor_gui` to `analyzer_gui` while preserving the generated executable name, `ChessTube Analyzer.exe`.
 - **Lightweight Editor Backend:** Replaced heavy `QtMultimedia` video playback with static reference screenshots for the overlay editor, eliminating the Qt multimedia dependency and improving stability.
 - **UI Clarity:** Renamed the ambiguous "Video Quality" setting to "Video Compression (CRF)" and updated the dropdown options to clearly explain the trade-off between file size and visual artifacts.
 
 ### Performance
 
+- **GPU-Resident Board Localization:** The final, full-resolution pass of the board localization search is now fully GPU-resident. This eliminates repeated, expensive memory transfers between the CPU and GPU during the search iterations, resolving a significant startup delay.
 - **Golden Section Search for Board Localization** — Replaced linear 67-step scale sweep with O(log N) Golden Section Search (39 iterations: 15+12+12 vs 25+21+21). Linear fallback handles edge cases where both initial bracket points are out-of-bounds. **~42% fewer `matchTemplate` calls** per localization.
 - **Zero-Copy GPU Pipeline Framework** — `GPUPipeline` class with `GPUMat` RAII device memory wrapper. Keeps `prev_gray` and `curr_gray` on GPU, performs GPU absdiff + GPU integral for fast change detection. CPU integral used for accurate move scoring (64F precision). **~10% faster on GPU-accelerated systems** by eliminating per-frame H→D copies for frame diff input.
 - **Hu Moments Digit Recognizer (Replace Tesseract)** — Replaced Tesseract OCR with a Hu moments-based shape classifier. Pre-computed 7-segment display templates, vertical projection character segmentation, and nearest-neighbor classification. Runs in microseconds vs Tesseract's milliseconds. **Eliminates tesseract55.dll, tessdata files, and all Windows dynamic loading code.**

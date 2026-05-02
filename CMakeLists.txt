@@ -447,7 +447,7 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/OverlayEditorDialog.h
     )
 
-    add_executable(augmentor_gui
+    add_executable(analyzer_gui
         src/main_gui.cpp
         src/MainWindow.cpp
         src/MainWindow_UI.cpp
@@ -467,39 +467,39 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/TemplateManager.h
     )
 
-    qt6_wrap_cpp(augmentor_gui_moc_sources TARGET augmentor_gui ${CHESSTUBE_GUI_MOC_HEADERS})
-    target_sources(augmentor_gui PRIVATE ${augmentor_gui_moc_sources})
+    qt6_wrap_cpp(analyzer_gui_moc_sources TARGET analyzer_gui ${CHESSTUBE_GUI_MOC_HEADERS})
+    target_sources(analyzer_gui PRIVATE ${analyzer_gui_moc_sources})
 
-    target_include_directories(augmentor_gui PRIVATE
+    target_include_directories(analyzer_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
 
-    target_link_libraries(augmentor_gui PRIVATE
+    target_link_libraries(analyzer_gui PRIVATE
         chess_extraction_core
         chess_analysis_core
         Qt6::Widgets
     )
 
-    enforce_project_msvc_runtime(augmentor_gui)
-    enable_msvc_parallel_pdb_safety(augmentor_gui)
-    enable_msvc_compile_speedups(augmentor_gui)
-    enable_project_pch(augmentor_gui gui)
+    enforce_project_msvc_runtime(analyzer_gui)
+    enable_msvc_parallel_pdb_safety(analyzer_gui)
+    enable_msvc_compile_speedups(analyzer_gui)
+    enable_project_pch(analyzer_gui gui)
 
-    configure_cuda_target(augmentor_gui)
+    configure_cuda_target(analyzer_gui)
 
-    set_target_properties(augmentor_gui PROPERTIES
+    set_target_properties(analyzer_gui PROPERTIES
         OUTPUT_NAME "ChessTube Analyzer"
         AUTOMOC OFF
         AUTORCC OFF
         AUTOUIC OFF
     )
     if(WIN32)
-        set_target_properties(augmentor_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+        # set_target_properties(analyzer_gui PROPERTIES WIN32_EXECUTABLE TRUE) # Temporarily disabled to debug startup crashes
     endif()
-    configure_project_stack_size(augmentor_gui)
+    configure_project_stack_size(analyzer_gui)
 
     if(ENABLE_QT_RUNTIME_DEPLOYMENT)
-        add_runtime_deployment(augmentor_gui)
+        add_runtime_deployment(analyzer_gui)
     endif()
 endif()
 

@@ -178,6 +178,11 @@ public:
     static void threshold(const cv::Mat& src, cv::Mat& dst, double thresh,
                           double maxval, int type);
 
+    /// ── GPU-accelerated operations (GPUMat versions) ──
+
+    /// resize_gpu
+    static void resize_gpu(const GPUMat& src, GPUMat& dst, cv::Size dsize,
+                       int interp);
 private:
     static bool available_;
     static bool initialized_;

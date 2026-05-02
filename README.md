@@ -30,6 +30,8 @@ cmake --preset vs2022-dev
 cmake --build --preset gui-release
 ```
 
+The GUI CMake target is `analyzer_gui`; the preset still emits the application as `ChessTube Analyzer.exe`.
+
 > **Note:** On Windows, the project now defaults to the documented `E:/vcpkg` toolchain and auto-selects a matching triplet based on the installed OpenCV package, preferring `x64-windows-static` when it exists. You can still override either value explicitly if your environment differs.
 
 For day-to-day iteration, the `vs2022-dev` preset keeps expensive packaging steps off: Release IPO/LTO is disabled, vcpkg app-local copying is disabled, and Qt runtime deployment is disabled. Use `vs2022-release-package` when you want the slower packaging-oriented build.
@@ -45,6 +47,8 @@ To enable:
 3. Rebuild — NPP ops will be compiled in and used at runtime
 
 When CUDA runtime DLLs are not installed, the binary still runs — `GPUAccelerator::init()` checks for DLL existence before attempting GPU ops, falling back to CPU seamlessly.
+
+Recent GPU work focuses on keeping expensive board-localization operations device-resident where possible, including reusable `GPUMat` storage and a GPUMat-based resize path to reduce host/device transfers during startup.
 
 ### Run
 
