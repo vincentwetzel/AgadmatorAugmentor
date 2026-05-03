@@ -35,14 +35,6 @@ if(WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
         CACHE STRING "Default vcpkg triplet for ChessTubeAnalyzer")
 endif()
 
-if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET)
-    if(VCPKG_TARGET_TRIPLET MATCHES "(^|-)static($|-)")
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    else()
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    endif()
-endif()
-
 set(ENABLE_VCPKG_APPLOCAL_DEPS OFF CACHE BOOL
     "Let vcpkg copy runtime DLLs beside executables after builds")
 set(ENABLE_CMAKE_AUTO_REGEN OFF CACHE BOOL
@@ -56,6 +48,14 @@ if(NOT ENABLE_CMAKE_AUTO_REGEN)
 endif()
 
 project(ChessTubeAnalyzer LANGUAGES CXX)
+
+if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET)
+    if(VCPKG_TARGET_TRIPLET MATCHES "(^|-)static($|-)")
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    else()
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

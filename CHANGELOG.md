@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Analysis Video Generation:** Added `AnalysisVideoGenerator` class to generate a copy of the source video with a synchronized analysis board overlay in the top-right corner. This feature can be toggled in the GUI.
 - Comprehensive `spec.md` documenting all functional and non-functional requirements
 - **Streamlined GUI:** Removed the Red Board Template file picker from the GUI. The backend now relies entirely on its robust dynamic fallback threshold for detecting streamer red square highlights.
+- **Move Quality Annotations:** Added an optional feature to generate chess.com-style move quality symbols (`!!`, `!`, `?`, `??`, `(Book)`) based on Stockfish centipawn loss evaluations. These are dynamically injected into exported PGNs and Analysis Video overlays.
+- **WebM & VP9 Support:** Added export options for `libvpx-vp9` video and `libopus` audio codecs within WebM/MKV containers, optimized for web playback.
+- **Memory Limit Control:** Added an advanced setting to limit the RAM usage (MB) of the background frame prefetcher.
 - `changelog.md` for tracking project history
 - **File size soft limit** convention (~400 lines) documented in TODO.md
 - **Universal Tooltips:** Added comprehensive hover tooltips to all GUI elements to improve user experience.
@@ -28,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GUI Target Rename:** Renamed the CMake GUI target from `augmentor_gui` to `analyzer_gui` while preserving the generated executable name, `ChessTube Analyzer.exe`.
 - **Lightweight Editor Backend:** Replaced heavy `QtMultimedia` video playback with static reference screenshots for the overlay editor, eliminating the Qt multimedia dependency and improving stability.
 - **UI Clarity:** Renamed the ambiguous "Video Quality" setting to "Video Compression (CRF)" and updated the dropdown options to clearly explain the trade-off between file size and visual artifacts.
+- **Queue-Level Templates:** Users can now override the auto-selected layout template for individual videos directly via a dropdown in the processing queue.
 
 ### Performance
 

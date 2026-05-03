@@ -69,11 +69,14 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
   - [x] Add a Theme selector (System, Light, Dark) with centralized QSS styling and fix light mode contrast issues.
   - [x] Add a toggle switch to enable/disable PGN file generation.
   - [x] Add a toggle switch to enable/disable Stockfish analysis.
+  - [x] Add a toggle switch to enable/disable Move Quality Annotations (!!, ?, etc.).
   - [x] Add a dropdown for Stockfish "Best Lines" (MultiPV) with options: 1, 2, 3, or 4.
   - [x] Add a toggle switch to enable/disable Analysis Video generation.
   - [x] Add a control for Stockfish maximum analysis depth. Include an indicator for which setting is recommended based on the user's hardware.
   - [x] Clarify video export settings (e.g., renaming "Video Quality" to "Video Compression (CRF)" with detailed tooltips).
+  - [x] Expand video encoding formats to include VP9, Opus, and WebM.
 - [x] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
+- [x] **Configurable Memory Limit** — Add an advanced setting to limit the RAM usage (MB) of the background frame prefetcher.
 - [x] **CLI Mode / Headless Execution (GUI Executable)** — Allow users to process videos directly from the command line.
   - [x] Accept a video file path as a CLI argument (e.g., `"ChessTube Analyzer.exe" video_to_process.mp4`).
   - [x] Save and load user settings (PGN export, Stockfish analysis, MultiPV, threads) persistently via `QSettings`.

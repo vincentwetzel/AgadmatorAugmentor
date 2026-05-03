@@ -87,7 +87,8 @@ void TemplateManager::initialize() {
 
     // Copy bundled templates to AppData if they don't already exist there
     if (bundledDir.exists()) {
-        QFileInfoList fileList = bundledDir.entryInfoList(QDir::Files);
+        QStringList filters = {"*.json", "*.png", "*.jpg"};
+        QFileInfoList fileList = bundledDir.entryInfoList(filters, QDir::Files);
         for (const QFileInfo& fileInfo : fileList) {
             QString destFilePath = templateDir.absoluteFilePath(fileInfo.fileName());
             if (!QFile::exists(destFilePath)) {

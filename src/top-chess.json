@@ -1,0 +1,24 @@
+{
+    "id": "top-chess",
+    "name": "Top Chess",
+    "screenshotFilename": "top-chess_ref.png",
+    "isBuiltIn": true,
+    "keywords": [
+        "top chess",
+        "Top Chess"
+    ],
+    "config": {
+        "boardEnabled": true,
+        "boardScale": 0.31,
+        "boardX": 0.01,
+        "boardY": 0.02,
+        "evalBarEnabled": true,
+        "evalBarScale": 1.0,
+        "evalBarX": 0.32,
+        "evalBarY": 0.02,
+        "pvTextEnabled": true,
+        "pvTextScale": 0.9,
+        "pvTextX": 0.01,
+        "pvTextY": 0.95
+    }
+}

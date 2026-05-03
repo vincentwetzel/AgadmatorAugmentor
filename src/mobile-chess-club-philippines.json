@@ -1,0 +1,24 @@
+{
+    "id": "mobile-chess-club-philippines",
+    "name": "Mobile Chess Club Philippines",
+    "screenshotFilename": "mobile-chess-club-philippines_ref.png",
+    "isBuiltIn": true,
+    "keywords": [
+        "mobile chess club philippines",
+        "Mobile Chess Club Philippines"
+    ],
+    "config": {
+        "boardEnabled": true,
+        "boardScale": 0.31,
+        "boardX": 0.01,
+        "boardY": 0.02,
+        "evalBarEnabled": true,
+        "evalBarScale": 1.0,
+        "evalBarX": 0.32,
+        "evalBarY": 0.02,
+        "pvTextEnabled": true,
+        "pvTextScale": 0.9,
+        "pvTextX": 0.01,
+        "pvTextY": 0.95
+    }
+}

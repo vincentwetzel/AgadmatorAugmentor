@@ -1,0 +1,24 @@
+{
+    "id": "biyaherong-chess-coach",
+    "name": "Biyaherong Chess Coach",
+    "screenshotFilename": "biyaherong-chess-coach_ref.png",
+    "isBuiltIn": true,
+    "keywords": [
+        "biyaherong chess coach",
+        "Biyaherong Chess Coach"
+    ],
+    "config": {
+        "boardEnabled": true,
+        "boardScale": 0.31,
+        "boardX": 0.01,
+        "boardY": 0.02,
+        "evalBarEnabled": true,
+        "evalBarScale": 1.0,
+        "evalBarX": 0.32,
+        "evalBarY": 0.02,
+        "pvTextEnabled": true,
+        "pvTextScale": 0.9,
+        "pvTextX": 0.01,
+        "pvTextY": 0.95
+    }
+}

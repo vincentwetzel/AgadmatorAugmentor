@@ -77,6 +77,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Feeds each FEN position to Stockfish via UCI protocol.
 - Collects configured number of best lines (MultiPV), evaluations (Centipawns or Mate), and principal variations, bounded by depth, time, or node search limits.
 - Handles edge cases (checkmate, stalemate) gracefully.
+- Generates **move quality annotations** (e.g., `!!`, `?`, `(Book)`) by comparing played moves against engine best lines and calculating centipawn loss.
 - Outputs engine analysis directly into the generated PGN file as standard chess variations and inline evaluations.
 
 ## 5. The Analysis Video Agent (Overlay & Composition) — ✅ Implemented
