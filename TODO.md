@@ -1,36 +1,29 @@
-# TODO
+# TODO & Roadmap
 
-## Project Refactoring: Root C++ Project
+## Remaining (Roadmap to v1.0.0)
+- [ ] **Piece Type Classification** — Utilize contour matching or a small CNN to identify piece types. (Required for distinguishing underpromotions).
+- [ ] **Detection Tuning** — Tune detection thresholds for higher recall.
+- [ ] **OCR Improvements** — Improve OCR reliability with better preprocessing.
 
-This section outlines the plan to move the C++ source from the `/cpp` subdirectory to the project root, making it a standard C++ project structure.
+## Planned Optimizations (Performance)
+- [ ] **True Zero-Copy Decoding** — Use native FFmpeg C API (libavcodec) with CUDA to decode frames directly into `CUdeviceptr` to eliminate PCIe ping-pong.
+- [x] **Eliminate Integral Image Allocations** — Replaced `cv::integral` with direct `cv::mean` ROI passes, instantly avoiding 5.1MB of memory allocations per frame and obsoleting the custom CUDA kernel.
+- [x] **Asynchronous Motion Fast-Forwarding** — Main thread computes frame-to-frame `absdiff` on grayscale images and instantly skips completely still frames without doing GPU uploads, hashing, or 64-square integral math.
+- [x] **"Map-Reduce" Chunked Processing** — Thread pool maps 30-second video chunks concurrently (parallel decode + motion filter) and feeds candidate frames chronologically to the sequential `libchess` reducer, obsoleting `FramePrefetcher` and scaling to 100% CPU utilization.
+- [x] **Reuse GSS Localization** — Cache `BoardGeometry` results to bypass the 2.2-second Golden Section Search startup delay on repeated video runs.
+- [x] **Avoid FEN String Reallocations** — Cache the expanded board map per ply instead of regenerating it for every polling frame during `score_moves_for_board`.
 
-### Plan
-
-- [x] Move contents of `cpp/` to the project root (`/`).
-  - `cpp/CMakeLists.txt` → `CMakeLists.txt`
-  - `cpp/src/` → `src/`
-  - `cpp/include/` → `include/`
-  - `cpp/tests/` → `tests/`
-- [x] Update `README.md` build/run instructions and project structure diagram.
-- [x] Update `CMakeLists.txt` to handle new paths (no changes were needed, paths are relative).
-- [x] Update documentation (`PROJECT_PLAN.md`, `docs/USAGE.md`) to remove outdated Python-era content and reflect the current C++ implementation.
-- [x] Update all file paths in documentation to reflect the new structure.
-
-## Performance Optimization
-
-### Completed
-
-- **GUI Target Naming:** Renamed the CMake/VS Code GUI target to `analyzer_gui` so build commands match the ChessTube Analyzer product name.
-- **Board Localization (Pass 3):** Optimized the final pass of `locate_board` to be fully GPU-resident, eliminating repeated host-device memory transfers.
-  - **Problem:** The third pass of `locate_board` (Exact Golden Section Search) took ~10.5 seconds due to repeated host-to-device and device-to-host memory transfers within `GPUAccelerator::resize` and `GPUAccelerator::matchTemplate` during each `eval_scale` call.
-  - **Solution:** Modified `locate_board` to upload the full-resolution grayscale image and template to `GPUMat` objects once before the search loop. Created and used new GPU-resident functions (`eval_scale_gpu`, `golden_section_scale_search_gpu`, `linear_scale_search_gpu`) that operate entirely on device memory, removing the performance bottleneck.
+## Long Term / Future Scope
+- [ ] **Parallel Agent Architecture** — Asynchronous processing agents for extraction and verification.
+- [ ] **Commentary Agent** — Correlate streamer drawings with spoken words and sound event detection.
+- [ ] **Multi-Game Video Support** — Update architecture to detect multiple discrete games in a single video. Requires "New Game" detection (FEN reset + timestamp jump) to prevent history revert collisions, changing extraction to output `std::vector<GameData>`, and updating PGN/Video generation to support multiple game trees.
 
 ## Current Status
 
 | Component | Status |
 |-----------|--------|
-| Build | ✅ Release, LTO, static CRT |
-| GPU Pipeline | ✅ NPP absdiff + integral, CPU fallback |
+| Build | ✅ Release, LTO, dynamic CRT |
+| GPU Pipeline | ✅ Optional NPP absdiff, hardware decode requests, CPU scoring fallback |
 | Tests | ✅ 2/2 passing (smoke + integration) |
 | Integration: Medium Game | ✅ 17/17 plies, revert detection |
 | Performance | 9.9x real-time (2m37s video → 15s) |
@@ -39,52 +32,34 @@ This section outlines the plan to move the C++ source from the `/cpp` subdirecto
 | UI Tooltips | ✅ All elements have hover hints |
 | Overlay Templates | ✅ Built-in + custom templates with queue-level selection |
 
-## Remaining (Roadmap to v1.0.0)
+## Completed Milestones
 
-- [x] **NSIS Installer Architecture** — Move away from portable mode. Centralize configuration to `%APPDATA%`, generated outputs to `Documents`, and debug image dumps to `%TEMP%`.
-- [ ] **Promotion Detection** — Detect and handle pawn promotion dialogs in the UI.
-- [ ] **Piece Type Classification** — Utilize contour matching or a small CNN to identify piece types.
-- [ ] **Detection Tuning** — Tune detection thresholds for higher recall.
-- [ ] **OCR Improvements** — Improve OCR reliability with better preprocessing.
+### Application & UI Features
+- **GUI Development (Qt)** — Full graphical interface, async processing worker, and PGN exporter.
+- **WYSIWYG Overlay Editor** — Interactive drag-and-drop `QGraphicsView` canvas with 8-way sizing handles.
+- **Channel-Specific Overlay Templates** — Auto-selection via filename keywords, storing templates in `%APPDATA%`.
+- **Analysis Video Agent** — Advanced overlay rendering, dynamic engine evaluation arrows, and FFmpeg video compositing.
+- **Feature Toggles & Settings** — Controls for output directory, theming (Light/Dark/System), PGN export, Stockfish analysis (MultiPV, limits), CPU threads, and memory limits.
+- **CLI Mode / Headless Execution** — Allow users to process videos directly from the command line with persistent settings.
+- **NSIS Installer Architecture** — Centralize configuration to `%APPDATA%` and generated outputs to `Documents`.
+- **Promotion Detection** — Auto-Queen default heuristic to correctly parse and extract 5-character UCI strings.
 
-## Long Term / Future Scope
+### Performance Optimization
+- **Parallel Stockfish Analysis** — Spawned a pool of `StockfishAnalyzer` instances to evaluate unique FENs concurrently.
+- **Hardware Video Decoding** — Offloaded OpenCV frame decoding to NVDEC/QuickSync.
+- **Map-Reduce Visual Extraction** — Split video scanning into parallel candidate-frame chunks, then feed candidates chronologically into the sequential libchess reducer.
+- **Crop-first Pipeline** — Strict ROI cropping before color conversion to conserve memory bandwidth.
+- **AVX2 / SIMD OpenCV Build** — Maximized CPU vector math.
+- **Board Localization (Pass 3)** — Optimized the final exact pass with sparse sampled correlation.
+- **Micro-Optimizations** — Eliminated IPC sleep latency, zero-allocation ray casting, pre-allocated synchronized result arrays, fixed memory leaks.
 
-- [x] **Parallel Agent Architecture** — Asynchronous processing agents for extraction and verification.
-- [x] **Analysis Video Agent** — Advanced overlay rendering, dynamic engine evaluation arrows, and FFmpeg video compositing.
+### Project Refactoring
+- **Root C++ Project** — Moved contents of `cpp/` to the project root and updated build/run instructions.
+- **Documentation Update** — Removed outdated Python-era content and updated paths.
 
-## Recently Completed
-
-- **WYSIWYG Overlay Editor** — Replaced hardcoded overlay configurations with an interactive drag-and-drop `QGraphicsView` canvas.
-- **Channel-Specific Overlay Templates** — Implemented `TemplateManager` for per-channel layouts with auto-selection via filename keywords, storing templates in `%APPDATA%`.
-- **Lightweight Editor Backgrounds** — Removed `QtMultimedia` in favor of static reference screenshots for overlay positioning.
-- [x] **WYSIWYG Editor Enhancements** — Added 8-way sizing handles (corners and edges) for all overlays and unlocked independent X/Y scaling for the Evaluation Bar, smoothly encoding both values into the existing configuration format.
-- [x] **GUI Development (Qt)** — Build a graphical interface for the application.
-  - [x] **Project Setup:** Update `CMakeLists.txt` to find and link `Qt6::Widgets`.
-  - [x] **Main Window UI:** Implement `MainWindow` with a file browser (`QFileDialog`), process button, and log output text area.
-  - [x] **Async Processing:** Implement `VideoProcessorWorker` and move it to a `QThread` to prevent UI freezing during video processing. Wire up progress and log signals.
-  - [x] **PGN Exporter (`PgnWriter`):** Create a robust PGN string builder that strictly formats exactly 1 move (2 plies) per line, injects `[%clk ...]` tags, and properly indents analysis lines/variations.
-- [x] **Feature Toggles & Settings (GUI)** — Add controls for output generation.
-  - [x] Add Output Directory selection (Save to source folder vs Custom directory).
-  - [x] Remember the last browsed location for video files and custom output directories.
-  - [x] Add a Theme selector (System, Light, Dark) with centralized QSS styling and fix light mode contrast issues.
-  - [x] Add a toggle switch to enable/disable PGN file generation.
-  - [x] Add a toggle switch to enable/disable Stockfish analysis.
-  - [x] Add a toggle switch to enable/disable Move Quality Annotations (!!, ?, etc.).
-  - [x] Add a dropdown for Stockfish "Best Lines" (MultiPV) with options: 1, 2, 3, or 4.
-  - [x] Add a toggle switch to enable/disable Analysis Video generation.
-  - [x] Add a control for Stockfish maximum analysis depth. Include an indicator for which setting is recommended based on the user's hardware.
-  - [x] Clarify video export settings (e.g., renaming "Video Quality" to "Video Compression (CRF)" with detailed tooltips).
-  - [x] Expand video encoding formats to include VP9, Opus, and WebM.
-- [x] **Configurable CPU thread count** — Programmatically set `OPENCV_FFMPEG_THREADS=N` environment variable before initializing `cv::VideoCapture` to enable multi-threaded FFmpeg decoding based on user settings.
-- [x] **Configurable Memory Limit** — Add an advanced setting to limit the RAM usage (MB) of the background frame prefetcher.
-- [x] **CLI Mode / Headless Execution (GUI Executable)** — Allow users to process videos directly from the command line.
-  - [x] Accept a video file path as a CLI argument (e.g., `"ChessTube Analyzer.exe" video_to_process.mp4`).
-  - [x] Save and load user settings (PGN export, Stockfish analysis, MultiPV, threads) persistently via `QSettings`.
-  - [x] When launched with a CLI argument, automatically load the saved settings, process the video without requiring user interaction, and exit upon completion.
-  - [x] Supports additional flags: `--board-asset`, `--output`, `--pgn`, `--stockfish`, `--multi-pv N`, `--threads N`, `--version`.
+## Reference
 
 ### Headless Usage
-
 ```bash
 # Basic: process a video with saved/default settings
 "ChessTube Analyzer.exe" path/to/video.mp4

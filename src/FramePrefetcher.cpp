@@ -65,9 +65,26 @@ void FramePrefetcher::clear_queues() {
 }
 
 void FramePrefetcher::worker_loop() {
-    cv::VideoCapture cap(video_path_, cv::CAP_ANY, {
-        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+    // 1. Try explicit FFmpeg with specific GPU device (Hardware Accelerated)
+    cv::VideoCapture cap(video_path_, cv::CAP_FFMPEG, {
+        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY,
+        cv::CAP_PROP_HW_DEVICE, 0
     });
+
+    // 2. Fallback to FFmpeg with automatic hardware device selection
+    if (!cap.isOpened()) {
+        cap.open(video_path_, cv::CAP_FFMPEG, {
+            cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+        });
+    }
+
+    // 3. Ultimate fallback to OpenCV's default selection (e.g. Media Foundation on Windows)
+    if (!cap.isOpened()) {
+        cap.open(video_path_, cv::CAP_ANY, {
+            cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+        });
+    }
+
     if (!cap.isOpened()) {
         std::cerr << "FramePrefetcher: Cannot open video: " << video_path_ << "\n";
         // Signal failure to main thread so it doesn't block forever

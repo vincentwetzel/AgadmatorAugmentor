@@ -18,9 +18,6 @@ std::vector<double> compute_all_square_means(const cv::Mat& img,
                                               const BoardGeometry& geo,
                                               int margin_h,
                                               int margin_w) {
-    cv::Mat integral_img;
-    cv::integral(img, integral_img, CV_64F);
-
     std::vector<double> means(64);
     const int sq_w = static_cast<int>(geo.sq_w);
     const int sq_h = static_cast<int>(geo.sq_h);
@@ -32,18 +29,18 @@ std::vector<double> compute_all_square_means(const cv::Mat& img,
             int x1 = col * sq_w + margin_w;
             int x2 = (col + 1) * sq_w - margin_w;
 
-            y1 = std::max(0, std::min(y1, img.rows - 1));
-            x1 = std::max(0, std::min(x1, img.cols - 1));
-            y2 = std::max(y1 + 1, std::min(y2, img.rows));
-            x2 = std::max(x1 + 1, std::min(x2, img.cols));
-
-            double sum = integral_img.at<double>(y2, x2)
-                       - integral_img.at<double>(y1, x2)
-                       - integral_img.at<double>(y2, x1)
-                       + integral_img.at<double>(y1, x1);
+            y1 = std::max(0, std::min(y1, img.rows));
+            x1 = std::max(0, std::min(x1, img.cols));
+            y2 = std::max(y1, std::min(y2, img.rows));
+            x2 = std::max(x1, std::min(x2, img.cols));
 
             int area = (y2 - y1) * (x2 - x1);
-            means[(7 - row) * 8 + col] = area > 0 ? sum / area : 0.0;
+            if (area > 0) {
+                cv::Mat roi = img(cv::Rect(x1, y1, x2 - x1, y2 - y1));
+                means[(7 - row) * 8 + col] = cv::mean(roi)[0];
+            } else {
+                means[(7 - row) * 8 + col] = 0.0;
+            }
         }
     }
     return means;
@@ -69,13 +66,15 @@ static double mean_corner_yellowness(const cv::Mat& board_bgr, int row, int col,
     };
 
     for (const auto& p : patches) {
-        cv::Mat patch;
-        board_bgr(p).convertTo(patch, CV_32FC3);
-        std::vector<cv::Mat> channels;
-        cv::split(patch, channels);
-        cv::Mat yellowness = (channels[2] + channels[1]) / 2.0f - channels[0];
-        cv::Scalar m = cv::mean(yellowness);
-        score += m[0];
+        cv::Mat patch = board_bgr(p);
+        double sum_y = 0.0;
+        for (int r = 0; r < patch.rows; ++r) {
+            const auto* ptr = patch.ptr<cv::Vec3b>(r);
+            for (int pc = 0; pc < patch.cols; ++pc) {
+                sum_y += (ptr[pc][2] + ptr[pc][1]) / 2.0 - ptr[pc][0];
+            }
+        }
+        score += sum_y / (patch.rows * patch.cols);
     }
     return score / 4.0;
 }
@@ -101,12 +100,6 @@ std::string extract_move_from_yellow_squares(const cv::Mat& img_bgr,
                                               const cv::Mat& board_template,
                                               const BoardGeometry& geo) {
     cv::Mat board_img = img_bgr(cv::Rect(geo.bx, geo.by, geo.bw, geo.bh));
-
-    cv::Mat board_float;
-    board_img.convertTo(board_float, CV_32FC3);
-    std::vector<cv::Mat> channels;
-    cv::split(board_float, channels);
-    cv::Mat yellowness_map = (channels[2] + channels[1]) / 2.0f - channels[0];
 
     std::vector<std::pair<double, int>> sq_scores;
     for (int row = 0; row < 8; ++row) {

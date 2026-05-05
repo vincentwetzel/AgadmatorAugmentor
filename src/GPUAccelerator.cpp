@@ -4,8 +4,11 @@
 
 #ifdef HAVE_SYSTEM_CUDA
 #include <cuda_runtime.h>
-#include <nppi.h>
+// #include <nppi.h> // Removed general nppi.h
 #include <nppdefs.h>
+#include <nppi_geometry_transforms.h> // For nppiResizeSqrPixel
+#include <nppi_filtering_functions.h> // For nppiCrossCorrNorm
+#include <nppi_statistics_functions.h> // Also for nppiCrossCorrNorm if categorized here
 #include <windows.h>
 #include <delayimp.h>
 #endif
@@ -33,9 +36,6 @@ GPUMat::GPUMat(GPUMat&& other) noexcept
 {
     other.data_ = nullptr;
     other.capacity_ = 0;
-    other.width_ = other.height_ = 0;
-    other.channels_ = other.type_ = 0;
-    other.step_ = 0;
 }
 
 GPUMat& GPUMat::operator=(GPUMat&& other) noexcept {
@@ -48,9 +48,6 @@ GPUMat& GPUMat::operator=(GPUMat&& other) noexcept {
         step_ = other.step_;
         other.data_ = nullptr;
         other.capacity_ = 0;
-        other.width_ = other.height_ = 0;
-        other.channels_ = other.type_ = 0;
-        other.step_ = 0;
     }
     return *this;
 }
@@ -59,11 +56,13 @@ void GPUMat::release() {
 #ifdef HAVE_SYSTEM_CUDA
     if (data_) {
         cudaFree(data_);
-        data_ = nullptr;
     }
 #else
-    data_ = nullptr;
+    if (data_) {
+        free(data_);
+    }
 #endif
+    data_ = nullptr;
     capacity_ = 0;
     width_ = height_ = channels_ = type_ = 0;
     step_ = 0;
@@ -236,12 +235,17 @@ void GPUAccelerator::init() {
         for (const wchar_t* dll : npp_dlls) {
             wchar_t path_buf[MAX_PATH];
             if (!SearchPathW(nullptr, dll, nullptr, MAX_PATH, path_buf, nullptr)) {
-                wchar_t cuda_path[MAX_PATH];
-                GetEnvironmentVariableW(L"CUDA_PATH", cuda_path, MAX_PATH);
-                wchar_t full_path[MAX_PATH];
-                swprintf(full_path, MAX_PATH, L"%ls\\bin\\%ls", cuda_path, dll);
-                if (GetFileAttributesW(full_path) == INVALID_FILE_ATTRIBUTES) {
-                    std::wcout << L"  [GPU] NPP runtime DLL not found (" << dll << L"), using CPU\n";
+                wchar_t cuda_path[MAX_PATH] = {0};
+                if (GetEnvironmentVariableW(L"CUDA_PATH", cuda_path, MAX_PATH) > 0) {
+                    wchar_t full_path[MAX_PATH];
+                    swprintf(full_path, MAX_PATH, L"%ls\\bin\\%ls", cuda_path, dll);
+                    if (GetFileAttributesW(full_path) == INVALID_FILE_ATTRIBUTES) {
+                        std::wcout << L"  [GPU] NPP runtime DLL not found (" << dll << L"), using CPU\n";
+                        available_ = false;
+                        return;
+                    }
+                } else {
+                    std::wcout << L"  [GPU] CUDA_PATH not set and NPP DLL not found (" << dll << L"), using CPU\n";
                     available_ = false;
                     return;
                 }
@@ -280,48 +284,10 @@ std::string GPUAccelerator::device_name() {
 
 void GPUAccelerator::resize(const cv::Mat& src, cv::Mat& dst, cv::Size dsize,
                              double fx, double fy, int interp) {
-    if (!initialized_) init();
-#ifdef HAVE_SYSTEM_CUDA
-    if (available_ && src.depth() == CV_8U && src.channels() <= 4) {
-        cv::Mat c_src = src.isContinuous() ? src : src.clone();
-        cv::Mat c_out;
-        c_out.create(dsize, c_src.type());
-        NppiSize src_roi = { c_src.cols, c_src.rows };
-        NppiSize dst_roi = { c_out.cols, c_out.rows };
-        NppiRect src_rect = { 0, 0, c_src.cols, c_src.rows };
-        NppiRect dst_rect = { 0, 0, c_out.cols, c_out.rows };
-        NppStreamContext ctx = make_stream_ctx();
-        NppiInterpolationMode mode = NPPI_INTER_LINEAR;
-        if (interp == cv::INTER_AREA || interp == cv::INTER_LANCZOS4)
-            mode = NPPI_INTER_LANCZOS;
-        else if (interp == cv::INTER_CUBIC)
-            mode = NPPI_INTER_CUBIC;
-        NppStatus st;
-        double x_factor = static_cast<double>(c_out.cols) / c_src.cols;
-        double y_factor = static_cast<double>(c_out.rows) / c_src.rows;
-        Npp8u *d_src = static_cast<Npp8u*>(tls.a.get(c_src.total() * c_src.elemSize()));
-        Npp8u *d_dst = static_cast<Npp8u*>(tls.b.get(c_out.total() * c_out.elemSize()));
-        cudaMemcpy(d_src, c_src.data, c_src.total() * c_src.elemSize(), cudaMemcpyHostToDevice);
-        if (c_src.channels() == 1) {
-            st = nppiResizeSqrPixel_8u_C1R_Ctx(d_src, src_roi, c_src.cols * 1, src_rect,
-                d_dst, c_out.cols * 1, dst_rect, x_factor, y_factor, 0, 0, mode, ctx);
-        } else if (c_src.channels() == 3) {
-            st = nppiResizeSqrPixel_8u_C3R_Ctx(d_src, src_roi, c_src.cols * 3, src_rect,
-                d_dst, c_out.cols * 3, dst_rect, x_factor, y_factor, 0, 0, mode, ctx);
-        } else {
-            st = nppiResizeSqrPixel_8u_C4R_Ctx(d_src, src_roi, c_src.cols * 4, src_rect,
-                d_dst, c_out.cols * 4, dst_rect, x_factor, y_factor, 0, 0, mode, ctx);
-        }
-        if (st == NPP_SUCCESS) {
-            cudaDeviceSynchronize();
-            if (cudaGetLastError() == cudaSuccess) {
-                cudaMemcpy(c_out.data, d_dst, c_out.total() * c_out.elemSize(), cudaMemcpyDeviceToHost);
-                c_out.copyTo(dst);
-                return;
-            }
-        }
-    }
-#endif
+    // Keep host-image resize on OpenCV. The direct NPP resize path delay-loads
+    // nppig64_13.dll during board localization and has triggered debug-heap
+    // assertions in the GUI process.
+    dst.create(dsize, src.type());
     cv::resize(src, dst, dsize, fx, fy, interp);
 }
 
@@ -367,20 +333,171 @@ void GPUAccelerator::resize_gpu(const GPUMat& src, GPUMat& dst, cv::Size dsize,
 // GPUPipeline Implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
+struct ThreadLocalPipeline {
+    GPUMat prev_gray;
+    GPUMat curr_gray;
+    GPUMat diff;
+    int width = 0;
+    int height = 0;
+    bool initialized = false;
+};
+static thread_local ThreadLocalPipeline tl_pipe;
+
+void GPUPipeline::init() {
+    if (GPUAccelerator::is_available()) {
+        tl_pipe.initialized = true;
+    }
+}
+
+void GPUPipeline::update_current(const cv::Mat& host_gray) {
+    if (!GPUAccelerator::is_available() || !tl_pipe.initialized) return;
+    
+    tl_pipe.width = host_gray.cols;
+    tl_pipe.height = host_gray.rows;
+
+    // Swap avoids device reallocation and safely shifts current to previous
+    GPUMat temp = std::move(tl_pipe.prev_gray);
+    tl_pipe.prev_gray = std::move(tl_pipe.curr_gray);
+    tl_pipe.curr_gray = std::move(temp);
+    
+    tl_pipe.curr_gray.upload(host_gray);
+}
+
+std::vector<double> GPUPipeline::compute_square_diff_means(const BoardGeometry& geo, int margin_h, int margin_w) {
+    if (!GPUAccelerator::is_available() || !tl_pipe.initialized || tl_pipe.prev_gray.width() == 0 || tl_pipe.curr_gray.width() == 0) {
+        return {};
+    }
+
 #ifdef HAVE_SYSTEM_CUDA
-void GPUPipeline::init() {}
-void GPUPipeline::update_current(const cv::Mat& host_gray) {}
-std::vector<double> GPUPipeline::compute_square_diff_means(const BoardGeometry& geo, int margin_h, int margin_w) { return {}; }
-void GPUPipeline::download_current(cv::Mat& host) const {}
-void GPUPipeline::download_previous(cv::Mat& host) const {}
-void GPUPipeline::download_diff(cv::Mat& host) const {}
+    NppiSize roi = {tl_pipe.width, tl_pipe.height};
+    NppStreamContext ctx = make_stream_ctx();
+    tl_pipe.diff.ensure_capacity(tl_pipe.width, tl_pipe.height, CV_8UC1);
+    
+    NppStatus st = nppiAbsDiff_8u_C1R_Ctx(static_cast<const Npp8u*>(tl_pipe.curr_gray.ptr()), static_cast<int>(tl_pipe.curr_gray.step()),
+                                          static_cast<const Npp8u*>(tl_pipe.prev_gray.ptr()), static_cast<int>(tl_pipe.prev_gray.step()),
+                                          static_cast<Npp8u*>(tl_pipe.diff.ptr()), static_cast<int>(tl_pipe.diff.step()),
+                                          roi, ctx);
+    if (st == NPP_SUCCESS) {
+        cv::Mat h_diff;
+        tl_pipe.diff.download(h_diff);
+        
+        std::vector<double> means(64);
+        const int sq_w = static_cast<int>(geo.sq_w);
+        const int sq_h = static_cast<int>(geo.sq_h);
+
+        for (int row = 0; row < 8; ++row) {
+            for (int col = 0; col < 8; ++col) {
+                int y1 = row * sq_h + margin_h;
+                int y2 = (row + 1) * sq_h - margin_h;
+                int x1 = col * sq_w + margin_w;
+                int x2 = (col + 1) * sq_w - margin_w;
+
+                y1 = std::max(0, std::min(y1, h_diff.rows));
+                x1 = std::max(0, std::min(x1, h_diff.cols));
+                y2 = std::max(y1, std::min(y2, h_diff.rows));
+                x2 = std::max(x1, std::min(x2, h_diff.cols));
+
+                int area = (y2 - y1) * (x2 - x1);
+                if (area > 0) {
+                    cv::Mat roi = h_diff(cv::Rect(x1, y1, x2 - x1, y2 - y1));
+                    means[(7 - row) * 8 + col] = cv::mean(roi)[0];
+                } else {
+                    means[(7 - row) * 8 + col] = 0.0;
+                }
+            }
+        }
+        return means;
+    }
+#endif
+    return {};
+}
+
+void GPUPipeline::download_current(cv::Mat& host) const {
+    if (tl_pipe.initialized) tl_pipe.curr_gray.download(host);
+}
+
+void GPUPipeline::download_previous(cv::Mat& host) const {
+    if (tl_pipe.initialized) tl_pipe.prev_gray.download(host);
+}
+
+void GPUPipeline::download_diff(cv::Mat& host) const {
+    if (tl_pipe.initialized) tl_pipe.diff.download(host);
+}
 
 
 void GPUAccelerator::absdiff(const cv::Mat& a, const cv::Mat& b, cv::Mat& out) {
+#ifdef HAVE_SYSTEM_CUDA
+    if (is_available() && a.type() == CV_8UC1 && b.type() == CV_8UC1 && a.size() == b.size()) {
+        static thread_local GPUMat d_a, d_b, d_out;
+        static thread_local const uchar* cached_b_data = nullptr;
+        
+        d_a.upload(a);
+        if (cached_b_data != b.data) {
+            d_b.upload(b);
+            cached_b_data = b.data;
+        }
+        d_out.ensure_capacity(a.cols, a.rows, a.type());
+        NppiSize roi = {a.cols, a.rows};
+        NppStreamContext ctx = make_stream_ctx();
+        NppStatus st = nppiAbsDiff_8u_C1R_Ctx(static_cast<const Npp8u*>(d_a.ptr()), static_cast<int>(d_a.step()),
+                                              static_cast<const Npp8u*>(d_b.ptr()), static_cast<int>(d_b.step()),
+                                              static_cast<Npp8u*>(d_out.ptr()), static_cast<int>(d_out.step()),
+                                              roi, ctx);
+        if (st == NPP_SUCCESS) {
+            cudaDeviceSynchronize();
+            d_out.download(out);
+            return;
+        }
+    }
+#endif
     cv::absdiff(a, b, out);
 }
 
 void GPUAccelerator::matchTemplate(const cv::Mat& image, const cv::Mat& templ, cv::Mat& result, int method) {
+#ifdef HAVE_SYSTEM_CUDA
+    if (is_available() && image.type() == CV_8UC1 && templ.type() == CV_8UC1 && method == cv::TM_CCOEFF_NORMED) {
+        int res_w = image.cols - templ.cols + 1;
+        int res_h = image.rows - templ.rows + 1;
+        if (res_w > 0 && res_h > 0) {
+            static thread_local GPUMat d_img, d_tpl, d_res, d_buffer;
+            static thread_local const uchar* cached_tpl_data = nullptr;
+            
+            d_img.upload(image);
+            if (cached_tpl_data != templ.data) {
+                d_tpl.upload(templ);
+                cached_tpl_data = templ.data;
+            }
+            d_res.ensure_capacity(res_w, res_h, CV_32FC1);
+            NppiSize oSrcSize = {image.cols, image.rows};
+            NppiSize oTplSize = {templ.cols, templ.rows};
+            
+            int nBufferSize = 0;
+            // Use the specific GetBufferSize function for the Valid_NormLevel kernel
+            NppStatus st_size = nppiCrossCorrValid_NormLevelGetBufferSize_8u32f_C1R(oSrcSize, oTplSize, &nBufferSize);
+            if (st_size == NPP_SUCCESS) {
+                // Use GPUMat as an RAII wrapper to guarantee the buffer is freed even if exceptions occur
+                d_buffer.ensure_capacity(nBufferSize, 1, CV_8UC1);
+                
+                NppStreamContext ctx = make_stream_ctx();
+                NppStatus st = nppiCrossCorrValid_NormLevel_8u32f_C1R_Ctx(
+                    static_cast<const Npp8u*>(d_img.ptr()), static_cast<int>(d_img.step()), oSrcSize,
+                    static_cast<const Npp8u*>(d_tpl.ptr()), static_cast<int>(d_tpl.step()), oTplSize,
+                    static_cast<Npp32f*>(d_res.ptr()), static_cast<int>(d_res.step()),
+                    static_cast<Npp8u*>(d_buffer.ptr()), ctx
+                );
+                
+                if (st == NPP_SUCCESS) {
+                    cudaDeviceSynchronize();
+                    d_res.download(result);
+                    return;
+                }
+            }
+        }
+    }
+#endif
+    if (image.cols >= templ.cols && image.rows >= templ.rows) {
+        result.create(image.rows - templ.rows + 1, image.cols - templ.cols + 1, CV_32F);
+    }
     cv::matchTemplate(image, templ, result, method);
 }
 
@@ -399,5 +516,4 @@ void GPUAccelerator::inRange(const cv::Mat& src, cv::Scalar lower, cv::Scalar up
 void GPUAccelerator::threshold(const cv::Mat& src, cv::Mat& dst, double thresh, double maxval, int type) {
     cv::threshold(src, dst, thresh, maxval, type);
 }
-#endif
 } // namespace cta

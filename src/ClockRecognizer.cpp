@@ -54,13 +54,11 @@ static std::vector<DigitTemplate> build_digit_templates() {
 
         cv::Mat binary;
         cv::threshold(canvas, binary, 127, 255, cv::THRESH_BINARY);
-        std::vector<cv::Point> pts;
-        cv::findNonZero(binary, pts);
-        if (pts.empty()) {
+        if (cv::countNonZero(binary) == 0) {
             continue;
         }
 
-        cv::Rect bbox = cv::boundingRect(pts);
+        cv::Rect bbox = cv::boundingRect(binary);
         DigitTemplate tpl;
         tpl.symbol = symbol;
         tpl.mask = binary(bbox).clone();
@@ -83,16 +81,29 @@ static const std::vector<DigitTemplate>& get_digit_templates() {
 }
 
 static std::pair<int, double> analyze_glyph_holes(const cv::Mat& glyph) {
-    std::vector<std::vector<cv::Point>> contours;
-    std::vector<cv::Vec4i> hierarchy;
-    cv::findContours(glyph.clone(), contours, hierarchy, cv::RETR_CCOMP, cv::CHAIN_APPROX_SIMPLE);
+    cv::Mat inverted;
+    cv::bitwise_not(glyph, inverted);
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int component_count = cv::connectedComponentsWithStats(
+        inverted, labels, stats, centroids, 8, CV_32S);
 
     int hole_count = 0;
     double hole_center_y_sum = 0.0;
-    for (size_t i = 0; i < hierarchy.size(); ++i) {
-        if (hierarchy[i][3] >= 0) {
-            cv::Rect r = cv::boundingRect(contours[i]);
-            hole_center_y_sum += (r.y + r.height * 0.5) / std::max(1, glyph.rows);
+
+    for (int label = 1; label < component_count; ++label) {
+        const int x = stats.at<int>(label, cv::CC_STAT_LEFT);
+        const int y = stats.at<int>(label, cv::CC_STAT_TOP);
+        const int w = stats.at<int>(label, cv::CC_STAT_WIDTH);
+        const int h = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+
+        const bool touches_border =
+            x <= 0 || y <= 0 || x + w >= glyph.cols || y + h >= glyph.rows;
+        if (!touches_border && area >= 2) {
+            hole_center_y_sum += centroids.at<double>(label, 1) / std::max(1, glyph.rows);
             ++hole_count;
         }
     }
@@ -127,42 +138,17 @@ static double analyze_bottom_half_ratio(const cv::Mat& glyph) {
     return bottom / total;
 }
 
-static std::vector<std::tuple<int, int, cv::Mat>> segment_characters(const cv::Mat& thresh) {
-    std::vector<std::tuple<int, int, cv::Mat>> segments;
-    cv::Mat proj;
-    cv::reduce(thresh, proj, 0, cv::REDUCE_SUM, CV_32S);
-    int w = thresh.cols;
-    const int min_col_sum = 0;
-
-    int seg_start = -1;
-    for (int x = 0; x < w; ++x) {
-        int col_sum = proj.at<int>(0, x);
-        if (col_sum > min_col_sum) {
-            if (seg_start < 0) seg_start = x;
-        } else if (seg_start >= 0) {
-            int seg_end = x;
-            if (seg_end - seg_start >= 1) {
-                segments.emplace_back(seg_start, seg_end,
-                    thresh(cv::Rect(seg_start, 0, seg_end - seg_start, thresh.rows)).clone());
-            }
-            seg_start = -1;
-        }
-    }
-    if (seg_start >= 0 && w - seg_start >= 1) {
-        segments.emplace_back(seg_start, w,
-            thresh(cv::Rect(seg_start, 0, w - seg_start, thresh.rows)).clone());
-    }
-    return segments;
-}
-
 static std::vector<cv::Rect> extract_character_boxes(const cv::Mat& thresh) {
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(thresh, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int component_count = cv::connectedComponentsWithStats(
+        thresh, labels, stats, centroids, 8, CV_32S);
 
     std::vector<cv::Rect> digit_boxes;
     std::vector<cv::Rect> colon_dots;
-    digit_boxes.reserve(contours.size());
-    colon_dots.reserve(contours.size());
+    digit_boxes.reserve(std::max(0, component_count - 1));
+    colon_dots.reserve(std::max(0, component_count - 1));
 
     const int min_digit_height = std::max(8, thresh.rows / 3);
     const int max_digit_height = thresh.rows;
@@ -171,8 +157,11 @@ static std::vector<cv::Rect> extract_character_boxes(const cv::Mat& thresh) {
     const int colon_max_size = std::max(10, thresh.rows / 4);
     const int left_noise_cutoff = thresh.cols / 6;
 
-    for (const auto& cnt : contours) {
-        cv::Rect r = cv::boundingRect(cnt);
+    for (int label = 1; label < component_count; ++label) {
+        cv::Rect r(stats.at<int>(label, cv::CC_STAT_LEFT),
+                   stats.at<int>(label, cv::CC_STAT_TOP),
+                   stats.at<int>(label, cv::CC_STAT_WIDTH),
+                   stats.at<int>(label, cv::CC_STAT_HEIGHT));
         if (r.width <= 1 || r.height <= 1) {
             continue;
         }
@@ -445,9 +434,9 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
             int x1 = std::clamp(static_cast<int>(bgr.cols * 0.34), 0, std::max(0, bgr.cols - 1));
             int width = bgr.cols - x1;
             if (width <= 0) {
-                return bgr.clone();
+                return bgr;
             }
-            return bgr(cv::Rect(x1, 0, width, bgr.rows)).clone();
+            return bgr(cv::Rect(x1, 0, width, bgr.rows));
         };
 
         state.white_time = robust_recognize(bot_bgr);
@@ -465,7 +454,7 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
                 std::clamp(static_cast<int>(top_bgr.cols * 0.40), 0, std::max(0, top_bgr.cols - 1)),
                 0,
                 top_bgr.cols - std::clamp(static_cast<int>(top_bgr.cols * 0.40), 0, std::max(0, top_bgr.cols - 1)),
-                top_bgr.rows)).clone();
+                top_bgr.rows));
             state.black_time = recognize_time(tight_top_text, true);
             if (state.black_time.empty()) {
                 state.black_time = recognize_time(tight_top_text, false);
@@ -475,8 +464,8 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
         state.ocr_skipped = false;
 
         if (cache) {
-            cache->top_gray = top_gray.clone();
-            cache->bot_gray = bot_gray.clone();
+            cache->top_gray = top_gray;
+            cache->bot_gray = bot_gray;
             cache->white_time = state.white_time;
             cache->black_time = state.black_time;
             cache->valid = true;

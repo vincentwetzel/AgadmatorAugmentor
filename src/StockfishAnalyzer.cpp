@@ -11,6 +11,7 @@
 #include <vector>
 #include <map>
 #include <atomic>
+#include "ScopedTimer.h"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -64,7 +65,7 @@ struct StockfishAnalyzer::StockfishImpl {
 
     bool initialized = false;
 
-    void initialize(const std::string& stockfish_path_arg) {
+    void initialize(const std::string& stockfish_path_arg, int threads) {
 #ifdef _WIN32
         SECURITY_ATTRIBUTES saAttr;
         saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -121,7 +122,7 @@ struct StockfishAnalyzer::StockfishImpl {
         send_command("uci");
         wait_for_response("uciok", nullptr);
 
-        unsigned int hw_threads = std::thread::hardware_concurrency();
+        unsigned int hw_threads = threads > 0 ? threads : std::thread::hardware_concurrency();
         if (hw_threads > 1) {
             send_command("setoption name Threads value " + std::to_string(hw_threads));
         }
@@ -164,8 +165,8 @@ struct StockfishAnalyzer::StockfishImpl {
                     if (!result.empty()) {
                         return result; // Return early if we read some data, so the caller can check it immediately
                     }
-                // No data, sleep briefly to avoid busy-waiting
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // No data, sleep for the minimum interval to avoid busy-waiting without adding IPC latency
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
 
@@ -213,10 +214,15 @@ struct StockfishAnalyzer::StockfishImpl {
     }
 };
 
-StockfishAnalyzer::StockfishAnalyzer(int multi_pv, const std::string& stockfish_path) : multi_pv_(multi_pv) {
+StockfishAnalyzer::StockfishAnalyzer(int multi_pv, const std::string& stockfish_path, int threads) : multi_pv_(multi_pv), threads_(threads), stockfish_path_(stockfish_path) {
     impl_ = new StockfishImpl();
-    impl_->initialize(stockfish_path);
-    set_multi_pv(multi_pv);
+    try {
+        impl_->initialize(stockfish_path, threads);
+        set_multi_pv(multi_pv);
+    } catch (...) {
+        delete impl_;
+        throw;
+    }
 }
 
 StockfishAnalyzer::~StockfishAnalyzer() {
@@ -233,6 +239,8 @@ void StockfishAnalyzer::set_multi_pv(int multi_pv) {
 }
 
 StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int depth, int time_ms, int nodes, std::atomic<bool>* cancel_flag) {
+    cta::ScopedTimer timer("StockfishAnalyzer::analyze_position");
+
     StockfishResult result;
     result.fen = fen;
 
@@ -311,17 +319,65 @@ StockfishResult StockfishAnalyzer::analyze_position(const std::string& fen, int 
 }
 
 std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vector<std::string>& fens, int depth, int time_ms, int nodes, std::atomic<bool>* cancel_flag) {
-    std::vector<StockfishResult> results;
-    results.reserve(fens.size());
+    cta::ScopedTimer timer("StockfishAnalyzer::analyze_positions (Batch)");
 
-    for (size_t i = 0; i < fens.size(); ++i) {
-        if (cancel_flag && *cancel_flag) {
-            break;
-        }
-        if (progress_callback_) {
-            progress_callback_(static_cast<int>(i + 1), static_cast<int>(fens.size()));
-        }
-        results.push_back(analyze_position(fens[i], depth, time_ms, nodes, cancel_flag));
+    std::vector<StockfishResult> results(fens.size());
+    if (fens.empty()) return results;
+
+    unsigned int hw_threads = std::thread::hardware_concurrency();
+    if (hw_threads == 0) hw_threads = 4;
+    
+    // Dynamically cap concurrent engines (e.g., 4-8 instances max)
+    unsigned int num_procs = std::clamp(hw_threads / 2, 1u, 8u);
+    if (fens.size() < num_procs) num_procs = static_cast<unsigned int>(fens.size());
+    
+    // Allocate a safe amount of compute threads for each inner process
+    unsigned int sf_threads = std::max(1u, hw_threads / num_procs);
+    
+    std::atomic<size_t> current_idx{0};
+    std::atomic<int> completed_count{0};
+    std::mutex exception_mutex;
+    std::exception_ptr first_exception = nullptr;
+    
+    std::vector<std::thread> workers;
+    for (unsigned int i = 0; i < num_procs; ++i) {
+        workers.emplace_back([&]() {
+            try {
+                StockfishAnalyzer local_analyzer(multi_pv_, stockfish_path_, sf_threads);
+                
+                while (true) {
+                    if (cancel_flag && *cancel_flag) break;
+                    
+                    size_t idx = current_idx.fetch_add(1);
+                    if (idx >= fens.size()) break;
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(exception_mutex);
+                        if (first_exception) break;
+                    }
+                    
+                    results[idx] = local_analyzer.analyze_position(fens[idx], depth, time_ms, nodes, cancel_flag);
+                    
+                    int c = completed_count.fetch_add(1) + 1;
+                    if (progress_callback_) {
+                        progress_callback_(c, static_cast<int>(fens.size()));
+                    }
+                }
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(exception_mutex);
+                if (!first_exception) {
+                    first_exception = std::current_exception();
+                }
+            }
+        });
+    }
+    
+    for (auto& t : workers) {
+        if (t.joinable()) t.join();
+    }
+    
+    if (first_exception) {
+        std::rethrow_exception(first_exception);
     }
 
     return results;

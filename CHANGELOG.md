@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **WYSIWYG Overlay Editor:** Added an interactive drag-and-drop editor (`OverlayEditorDialog`) to visually customize the positions and sizes of analysis video elements (board, eval bar, PV text).
 - **Channel-Specific Templates:** Introduced `TemplateManager` to handle multiple layout profiles. Templates auto-select based on video filename keywords and use static reference screenshots for accurate visual positioning.
+- **Promotion Detection:** Added an Auto-Queen heuristic to properly extract 5-character UCI pawn promotions (e.g., `e7e8q`), fixing a bug where engine validation rejected them entirely.
 - **Stockfish Search Limits:** Users can now bound Stockfish engine analysis by specifying maximum time per move (ms) or total nodes searched, in addition to search depth.
 - **GUI Application:** Fully featured Qt6-based interface with settings persistence, theme manager (Light/Dark/System), and headless CLI execution mode.
 - **Analysis Video Generation:** Added `AnalysisVideoGenerator` class to generate a copy of the source video with a synchronized analysis board overlay in the top-right corner. This feature can be toggled in the GUI.
@@ -35,9 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
-- **GPU-Resident Board Localization:** The final, full-resolution pass of the board localization search is now fully GPU-resident. This eliminates repeated, expensive memory transfers between the CPU and GPU during the search iterations, resolving a significant startup delay.
+- **Parallel Stockfish Analysis:** Spawns a pool of worker threads (clamped to hardware concurrency) to evaluate unique board FENs concurrently, drastically speeding up bulk analysis.
+- **Hardware Video Decoding:** Explicitly offloads OpenCV frame decoding to NVDEC/QuickSync using `cv::CAP_PROP_HW_ACCELERATION`.
+- **Crop-First Pipeline:** Prevents unnecessary memory bandwidth usage by strictly cropping the 1080p/4K frame to the board ROI before applying Grayscale/HSV color conversions.
+- **Stockfish IPC Latency:** Eliminated artificial 10ms sleep delays during IPC polling, significantly speeding up bulk engine evaluation.
+- **Zero-Allocation Ray Casting:** Re-used static thread-local memory buffers in `ArrowDetector` to eliminate over 2,000 `cv::Mat` heap allocations per frame.
+- **Board Analysis Optimization:** Removed unused full-board floating-point channel math during yellow square extraction.
+- **Vector Pre-allocation:** Pre-allocated synchronized `StockfishResult` arrays in worker threads to prevent expensive vector reallocations.
+- **Sparse Grid Evaluation for Board Localization:** The final, full-resolution pass of the board localization search now uses a fast, sparse uniform grid of sampled points to evaluate correlation, bypassing the overhead of full dense template matching and resolving a significant startup delay.
 - **Golden Section Search for Board Localization** — Replaced linear 67-step scale sweep with O(log N) Golden Section Search (39 iterations: 15+12+12 vs 25+21+21). Linear fallback handles edge cases where both initial bracket points are out-of-bounds. **~42% fewer `matchTemplate` calls** per localization.
-- **Zero-Copy GPU Pipeline Framework** — `GPUPipeline` class with `GPUMat` RAII device memory wrapper. Keeps `prev_gray` and `curr_gray` on GPU, performs GPU absdiff + GPU integral for fast change detection. CPU integral used for accurate move scoring (64F precision). **~10% faster on GPU-accelerated systems** by eliminating per-frame H→D copies for frame diff input.
+- **Targeted GPU Pipeline Framework** — `GPUPipeline` class with `GPUMat` RAII device memory wrapper. Uses GPU `nppiAbsDiff` where available, then keeps precision-sensitive scoring on the CPU with direct square ROI means.
 - **Hu Moments Digit Recognizer (Replace Tesseract)** — Replaced Tesseract OCR with a Hu moments-based shape classifier. Pre-computed 7-segment display templates, vertical projection character segmentation, and nearest-neighbor classification. Runs in microseconds vs Tesseract's milliseconds. **Eliminates tesseract55.dll, tessdata files, and all Windows dynamic loading code.**
 
 ### Refactored
@@ -48,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ClockRecognizer.cpp` (264 lines) — Hu Moments digit recognizer + clock extraction with conditional caching
 - `UIDetectors.h` converted to umbrella header for backwards compatibility.
 - **Split `ChessVideoExtractor.cpp`** — Moved utility functions (`ts`, `expand_fen`, path helpers) to `ExtractorUtils.cpp` and validation logic (`check_yellowness`, `check_hover_box`) to `MoveValidations.cpp` to improve modularity and reduce file size.
+- **Dead Code Elimination:** Removed obsolete architectural files (`RevertDetector.cpp/.h`, `MoveVerifier.cpp/.h`) as their logic is now fully integrated into the core `ChessVideoExtractor` state machine and O(1) hashing path. Removed unused SAN expansion helpers in `VideoProcessorWorker.cpp`.
+
+### Fixed
+
+- **Memory Leak:** Fixed a PImpl memory leak in `StockfishAnalyzer` that occurred if initialization threw an exception.
 
 ---
 

@@ -6,17 +6,9 @@ namespace cta {
 namespace AnalysisVideoRenderUtils {
 
 cv::Scalar arrow_gradient_color_at(cv::Point start, cv::Point end, int x, int y, const EngineArrowStyle& style) {
-    const double dx = static_cast<double>(end.x - start.x);
-    const double dy = static_cast<double>(end.y - start.y);
-    const double len2 = dx * dx + dy * dy;
-    double t = 1.0;
-    if (len2 > 1.0) {
-        t = ((x - start.x) * dx + (y - start.y) * dy) / len2;
-        t = std::clamp(t, 0.0, 1.0);
-    }
-    t = t * t * (3.0 - 2.0 * t);
-
-    return style.tail_color * (1.0 - t) + style.head_color * t;
+    // Solid color matching modern chess engine UI (no gradient)
+    (void)start; (void)end; (void)x; (void)y; // Unused
+    return style.tail_color;
 }
 
 void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scalar color, double squareSize, int thicknessPct) {
@@ -30,37 +22,33 @@ void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scala
     cv::Point2f dir = delta * (1.0f / length);
     cv::Point2f perp(-dir.y, dir.x);
 
-    const float shaftThickness = static_cast<float>(std::clamp(squareSize * (thicknessPct / 100.0),
-                                                               squareSize * 0.105,
-                                                               squareSize * 0.18));
-    const float headLength = std::min(std::max(shaftThickness * 3.15f, static_cast<float>(squareSize * 0.42)),
-                                      length * 0.58f);
-    const float headWidth = std::max(shaftThickness * 3.55f, static_cast<float>(squareSize * 0.50));
-    const float tipInset = std::min(static_cast<float>(squareSize * 0.09), length * 0.12f);
-    const float startInset = std::min(static_cast<float>(squareSize * 0.08), length * 0.20f);
+    const float thicknessRatio = static_cast<float>(std::clamp(thicknessPct, 4, 24)) / 100.0f;
+    const float shaftThickness = std::max(1.0f, static_cast<float>(squareSize) * thicknessRatio);
+    const float headLength = std::min({shaftThickness * 3.1f,
+                                       static_cast<float>(squareSize * 0.50),
+                                       length * 0.58f});
+    const float headWidth = std::min(static_cast<float>(squareSize * 0.68), shaftThickness * 4.2f);
+    const float tipInset = std::min(static_cast<float>(squareSize * 0.045), length * 0.08f);
 
     cv::Point2f tip = endf - dir * tipInset;
     cv::Point2f headBase = tip - dir * headLength;
-    cv::Point2f bodyStart = startf + dir * startInset;
 
     auto toPoint = [](const cv::Point2f& p) {
         return cv::Point(cvRound(p.x), cvRound(p.y));
     };
 
-    const float shaftHalf = shaftThickness * 0.5f;
     const float headHalf = headWidth * 0.5f;
+    const cv::Point shaftStart = toPoint(startf);
+    const cv::Point shaftEnd = toPoint(headBase + dir * (shaftThickness * 0.35f));
 
-    std::vector<cv::Point> arrowPts;
-    arrowPts.reserve(7);
-    arrowPts.push_back(toPoint(bodyStart + perp * shaftHalf));
-    arrowPts.push_back(toPoint(headBase + perp * shaftHalf));
-    arrowPts.push_back(toPoint(headBase + perp * headHalf));
-    arrowPts.push_back(toPoint(tip));
-    arrowPts.push_back(toPoint(headBase - perp * headHalf));
-    arrowPts.push_back(toPoint(headBase - perp * shaftHalf));
-    arrowPts.push_back(toPoint(bodyStart - perp * shaftHalf));
+    cv::line(overlay, shaftStart, shaftEnd, color, cvRound(shaftThickness), cv::LINE_AA);
 
-    cv::fillPoly(overlay, std::vector<std::vector<cv::Point>>{arrowPts}, color, cv::LINE_AA);
+    std::vector<cv::Point> headPts = {
+        toPoint(tip),
+        toPoint(headBase + perp * headHalf),
+        toPoint(headBase - perp * headHalf)
+    };
+    cv::fillConvexPoly(overlay, headPts, color, cv::LINE_AA);
 }
 
 void blend_arrow_on_bgr(cv::Mat& image,
@@ -275,29 +263,39 @@ void drawAnalysisBar(cv::Mat& img, cv::Rect rect, double cpScore) {
 }
 
 EngineArrowStyle compute_engine_arrow_style(int line_index, double diff_cp, int arrow_thickness_pct) {
-    const double similarity = std::clamp(1.0 - (diff_cp / 200.0), 0.0, 1.0);
-
     EngineArrowStyle style;
-    style.thickness_pct = std::max(8, static_cast<int>(std::round(arrow_thickness_pct * (0.78 + similarity * 0.22))));
+    const int base_thickness_pct = std::clamp(arrow_thickness_pct, 8, 24);
 
+    // Lichess scales MultiPV arrows by how close each line is to the best engine
+    // line. Near-equal choices stay large; moves beyond roughly two pawns of
+    // loss collapse to the thin "candidate" arrow seen in analysis mode.
     if (line_index == 0 || diff_cp <= 10.0) {
-        style.opacity = 0.50;
-        style.thickness_pct = std::max(style.thickness_pct, arrow_thickness_pct + 1);
-    } else if (diff_cp <= 25.0) {
-        style.opacity = 0.40;
-    } else if (diff_cp <= 60.0) {
-        style.opacity = 0.32;
-    } else if (diff_cp <= 110.0) {
-        style.opacity = 0.25;
+        style.thickness_pct = base_thickness_pct;
     } else {
-        const double far_ratio = std::clamp((diff_cp - 110.0) / 220.0, 0.0, 1.0);
-        style.opacity = 0.22 - far_ratio * 0.08;
+        const double closeness = 1.0 - std::clamp((diff_cp - 10.0) / 170.0, 0.0, 1.0);
+        const double scaled = base_thickness_pct * (0.42 + 0.58 * closeness);
+        style.thickness_pct = std::clamp(static_cast<int>(std::round(scaled)), 5, base_thickness_pct);
     }
 
-    const int channel = static_cast<int>(std::round(82.0 + (1.0 - similarity) * 42.0));
-    style.tail_color = cv::Scalar(channel, channel, channel);
+    if (line_index == 0 || diff_cp <= 10.0) {
+        style.opacity = 0.48;
+    } else if (line_index == 1) {
+        style.opacity = 0.34;
+    } else if (line_index == 2) {
+        style.opacity = 0.26;
+    } else {
+        style.opacity = 0.20;
+    }
+
+    if (diff_cp > 80.0) {
+        const double far_ratio = std::clamp((diff_cp - 80.0) / 240.0, 0.0, 1.0);
+        style.opacity *= (1.0 - far_ratio * 0.35);
+    }
+
+    // Lichess analysis arrows use a subdued neutral overlay rather than saturated PV colors.
+    style.tail_color = cv::Scalar(93, 98, 101);
     style.head_color = style.tail_color;
-    style.opacity = std::clamp(style.opacity, 0.14, 0.50);
+    style.opacity = std::clamp(style.opacity, 0.14, 0.48);
     return style;
 }
 

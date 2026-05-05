@@ -1,5 +1,6 @@
 // Extracted from cpp directory
 #include "RevertDetector.h"
+#include "ScopedTimer.h"
 #include <algorithm>
 #include <iostream> // For debug output, can be replaced with a proper logger
 
@@ -39,7 +40,7 @@ double RevertDetector::calculate_mean_abs_diff(const cv::Mat& img1, const cv::Ma
         return std::numeric_limits<double>::max(); // Indicate error or significant difference
     }
 
-    cv::Mat diff;
+    static thread_local cv::Mat diff; // Re-use memory buffer across calls
     cv::absdiff(img1, img2, diff);
     return cv::mean(diff)[0];
 }
@@ -58,6 +59,8 @@ int RevertDetector::detect_revert(const cv::Mat& current_board_gray, double curr
                                   std::vector<libchess::Move>& move_history,
                                   std::vector<double>& timestamp_history,
                                   std::vector<ClockRecognizer::ClockDetectionResult>& clock_history) {
+    cta::ScopedTimer timer("RevertDetector::detect_revert");
+
     if (history_.empty()) {
         return -1;
     }

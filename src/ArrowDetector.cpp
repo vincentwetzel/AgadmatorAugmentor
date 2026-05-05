@@ -69,7 +69,11 @@ std::vector<std::string> find_yellow_arrows(const cv::Mat& img_bgr,
             double dist = std::hypot(dx, dy);
             if (dist < geo.sq_w * 0.8) continue;
 
-            cv::Mat line_mask = cv::Mat::zeros(arrow_mask.size(), CV_8UC1);
+            static thread_local cv::Mat line_mask;
+            if (line_mask.size() != arrow_mask.size() || line_mask.type() != CV_8UC1) {
+                line_mask = cv::Mat::zeros(arrow_mask.size(), CV_8UC1);
+            }
+            line_mask.setTo(0); // Re-use memory without reallocation
             cv::line(line_mask,
                      cv::Point(static_cast<int>(centers[i].cx), static_cast<int>(centers[i].cy)),
                      cv::Point(static_cast<int>(centers[j].cx), static_cast<int>(centers[j].cy)),
@@ -81,7 +85,7 @@ std::vector<std::string> find_yellow_arrows(const cv::Mat& img_bgr,
             int overlap = cv::countNonZero(arrow_mask & line_mask);
             if (overlap < static_cast<int>(0.60 * line_area)) continue;
 
-            candidates.push_back({i, j, line_area, std::move(line_mask)});
+            candidates.push_back({i, j, line_area, line_mask.clone()}); // Only clone if accepted
         }
     }
 

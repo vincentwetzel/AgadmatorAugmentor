@@ -123,10 +123,14 @@ Raw Video
 | Clock OCR | `ClockRecognizer.h/.cpp` |
 | Verification + Orchestrator | `ChessVideoExtractor.h/.cpp` |
 | Move Validation Logic | `MoveValidations.h/.cpp` |
-| Core Utilities | `ExtractorUtils.h/.cpp` |
+| Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
 | Frame I/O | `FramePrefetcher.h/.cpp` |
+| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp` |
+| Output Generation | `PgnWriter.h/.cpp`, `ImageWriteUtils.h/.cpp` |
+| GUI & Orchestration | `MainWindow*.cpp`, `VideoProcessorWorker.h/.cpp` |
+| Configuration & Templates | `SettingsDialog.h/.cpp`, `ThemeManager.h/.cpp`, `TemplateManager.h/.cpp`, `OverlayEditorDialog.h/.cpp` |
 
 ## Future: Parallel Agent Architecture
 

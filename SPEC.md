@@ -112,13 +112,13 @@ The system is designed for **high accuracy** rather than speed — it treats the
 | ID | Requirement |
 |----|-------------|
 | NF-1 | The system must be implemented in **C++20** with CMake 3.20+ build system. |
-| NF-2 | MSVC static runtime linkage (`/MT`) must be used on Windows. |
+| NF-2 | Windows builds must use one consistent MSVC runtime/triplet pair across the application and vcpkg dependencies. The supported default is `x64-windows` with dynamic runtime linkage (`/MD`, `/MDd` for Debug). |
 | NF-3 | Link-Time Optimization (LTO/IPO) must be enabled for Release builds. |
-| NF-4 | GPU acceleration must use NVIDIA NPP directly — OpenCV must **not** require CUDA support. |
-| NF-5 | All GPU operations must have automatic CPU fallback on failure or unavailability. |
+| NF-4 | The stable Windows build must not require CUDA-enabled OpenCV or system CUDA/NPP. Experimental GPU acceleration, when enabled, must use NVIDIA NPP directly. |
+| NF-5 | Experimental GPU operations must have automatic CPU fallback on failure or unavailability. |
 | NF-6 | Frame prefetching must use a background thread to hide FFmpeg I/O latency. |
 | NF-7 | Per-frame heap allocations must be minimized via pre-allocated scratch buffers and device-side GPU memory pools (`GPUMat`). |
-| NF-8 | The `GPUPipeline` must keep grayscale board frames on GPU, perform `absdiff` and integral on-device, and download only 64 double values for change detection. CPU integral recomputation is used for accurate move scoring (64F precision). |
+| NF-8 | CPU scoring must remain the precision reference path. Optional GPU acceleration may perform NPP `absdiff` and video decode assist, but move scoring must preserve deterministic CPU-side validation behavior. |
 | NF-9 | The system must compile with vcpkg-managed dependencies: OpenCV, nlohmann_json, CLI11. |
 | NF-10 | A comprehensive test suite using Google Test must be maintained, with integration tests printing a summary table after each run. |
 
@@ -224,7 +224,7 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Windows x64 | ✅ Primary | MSVC `/MT`, vcpkg, CUDA 13.2 |
+| Windows x64 | ✅ Primary | MSVC `/MD`, vcpkg `x64-windows`, CUDA 13.2 optional |
 | Linux x64 | 🔜 Future | Requires CMake adaptation |
 | macOS | 🔜 Future | Requires alternative to SEH for GPU detection |
 

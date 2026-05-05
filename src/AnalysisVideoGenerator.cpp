@@ -127,25 +127,7 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
     double sq_w = static_cast<double>(board.cols) / 8.0;
     double sq_h = static_cast<double>(board.rows) / 8.0;
 
-    int row = 0, col = 0;
-    for (char c : fen) {
-        if (c == ' ') break; // Stop after piece placement data
-        if (c == '/') {
-            row++;
-            col = 0;
-        } else if (std::isdigit(c)) {
-            col += (c - '0'); // Skip empty squares
-        } else {
-            auto it = scaled_pieces.find(c);
-            if (it != scaled_pieces.end()) {
-                cv::Point loc(static_cast<int>(col * sq_w), static_cast<int>(row * sq_h));
-                overlay_image(board, it->second, loc);
-            }
-            col++;
-        }
-    }
-
-    // Draw engine arrows on the debug board
+    // Draw engine arrows before pieces, matching lichess' analysis-board layering.
     if (analysis.has_value() && !analysis->lines.empty()) {
         try {
             libchess::Position pos(fen);
@@ -176,24 +158,43 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
 
                 AnalysisVideoRenderUtils::blend_arrow_on_bgr(board, start, end, style, sq_w);
             }
-            
-            // Draw graphical move quality annotations on top of the debug board
-            for (const auto& line : analysis->lines) {
-                if (line.move_uci == "ANNOTATION") {
-                    std::string uci, sym;
-                    size_t uci_len = 0;
-                    while (uci_len < line.pv_line.length()) {
-                        char c = line.pv_line[uci_len];
-                        if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') uci_len++;
-                        else break;
-                    }
-                    uci = line.pv_line.substr(0, uci_len);
-                    sym = line.pv_line.substr(uci_len);
-                    AnalysisVideoRenderUtils::drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
-                }
-            }
         } catch(...) {
             // Ignore errors if FEN or move is invalid, just don't draw arrows
+        }
+    }
+
+    int row = 0, col = 0;
+    for (char c : fen) {
+        if (c == ' ') break; // Stop after piece placement data
+        if (c == '/') {
+            row++;
+            col = 0;
+        } else if (std::isdigit(c)) {
+            col += (c - '0'); // Skip empty squares
+        } else {
+            auto it = scaled_pieces.find(c);
+            if (it != scaled_pieces.end()) {
+                cv::Point loc(static_cast<int>(col * sq_w), static_cast<int>(row * sq_h));
+                overlay_image(board, it->second, loc);
+            }
+            col++;
+        }
+    }
+
+    if (analysis.has_value()) {
+        for (const auto& line : analysis->lines) {
+            if (line.move_uci == "ANNOTATION") {
+                std::string uci, sym;
+                size_t uci_len = 0;
+                while (uci_len < line.pv_line.length()) {
+                    char c = line.pv_line[uci_len];
+                    if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') uci_len++;
+                    else break;
+                }
+                uci = line.pv_line.substr(0, uci_len);
+                sym = line.pv_line.substr(uci_len);
+                AnalysisVideoRenderUtils::drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
+            }
         }
     }
 
@@ -262,7 +263,22 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                                                      const VideoOverlayConfig& overlay_config,
                                                      std::atomic<bool>* cancel_flag,
                                                      std::function<void(int, const std::string&)> progress_callback) {
-    cv::VideoCapture cap(input_video_path);
+    // Try explicit FFmpeg with specific GPU device to quickly retrieve metadata
+    cv::VideoCapture cap(input_video_path, cv::CAP_FFMPEG, {
+        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY,
+        cv::CAP_PROP_HW_DEVICE, 0
+    });
+    if (!cap.isOpened()) {
+        cap.open(input_video_path, cv::CAP_FFMPEG, {
+            cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+        });
+    }
+    if (!cap.isOpened()) {
+        cap.open(input_video_path, cv::CAP_ANY, {
+            cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
+        });
+    }
+
     if (!cap.isOpened()) {
         if (progress_callback) progress_callback(-1, "Failed to open input video for analysis video generation.");
         return false;
@@ -575,7 +591,34 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
     int stream_idx = 1;
     std::string board_stream, bar_stream, text_stream, arrows_stream;
-    std::string input_args_str = "-y -i \"" + input_video_path + "\" ";
+
+    bool has_nvidia_gpu = GPUAccelerator::is_available();
+    bool has_amd_gpu = false;
+    bool has_intel_gpu = false;
+
+#ifdef _WIN32
+    char sysDir[MAX_PATH];
+    if (GetSystemDirectoryA(sysDir, MAX_PATH)) {
+        std::string sysDirStr(sysDir);
+        if (!has_nvidia_gpu) {
+            if (std::filesystem::exists(sysDirStr + "\\nvcuda.dll") ||
+                std::filesystem::exists(sysDirStr + "\\nvcuvid.dll")) {
+                has_nvidia_gpu = true;
+            }
+        }
+        if (std::filesystem::exists(sysDirStr + "\\amfrt64.dll")) {
+            has_amd_gpu = true;
+        }
+        if (std::filesystem::exists(sysDirStr + "\\libmfxhw64.dll") || 
+            std::filesystem::exists(sysDirStr + "\\libmfx64.dll")) {
+            has_intel_gpu = true;
+        }
+    }
+#endif
+
+    bool use_hwaccel = has_nvidia_gpu || has_amd_gpu || has_intel_gpu || vCodec.find("nvenc") != std::string::npos;
+    std::string hwaccel_arg = use_hwaccel ? "-hwaccel auto " : "";
+    std::string input_args_str = "-y " + hwaccel_arg + "-i \"" + input_video_path + "\" ";
 
     if (overlay_config.board.enabled) {
         input_args_str += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
@@ -636,11 +679,22 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     if (vCodec == "libvpx-vp9") {
         extra_args = "-deadline realtime -cpu-used 4 -row-mt 1 -crf " + crf + " -b:v 0";
         if (progress_callback) progress_callback(80, "Using CPU-based FFmpeg (" + actual_vcodec + ")...");
+    } else if (vCodec == "h264_nvenc" || vCodec == "hevc_nvenc") {
+        extra_args = "-preset p4 -cq " + crf;
+        if (progress_callback) progress_callback(80, "Using GPU-accelerated FFmpeg (" + actual_vcodec + ") with CPU filters...");
     } else {
-        if (GPUAccelerator::is_available()) {
+        if (has_nvidia_gpu) {
             if (vCodec == "libx264") { actual_vcodec = "h264_nvenc"; extra_args = "-preset p4 -cq " + crf; }
             else if (vCodec == "libx265") { actual_vcodec = "hevc_nvenc"; extra_args = "-preset p4 -cq " + crf; }
-            if (progress_callback) progress_callback(80, "Using GPU-accelerated FFmpeg (" + actual_vcodec + ") with CPU filters...");
+            if (progress_callback) progress_callback(80, "Using NVIDIA GPU FFmpeg (" + actual_vcodec + ") with CPU filters...");
+        } else if (has_amd_gpu) {
+            if (vCodec == "libx264") { actual_vcodec = "h264_amf"; extra_args = "-quality speed -rc cqp -qp_i " + crf + " -qp_p " + crf; }
+            else if (vCodec == "libx265") { actual_vcodec = "hevc_amf"; extra_args = "-quality speed -rc cqp -qp_i " + crf + " -qp_p " + crf; }
+            if (progress_callback) progress_callback(80, "Using AMD GPU FFmpeg (" + actual_vcodec + ") with CPU filters...");
+        } else if (has_intel_gpu) {
+            if (vCodec == "libx264") { actual_vcodec = "h264_qsv"; extra_args = "-preset veryfast -global_quality " + crf; }
+            else if (vCodec == "libx265") { actual_vcodec = "hevc_qsv"; extra_args = "-preset veryfast -global_quality " + crf; }
+            if (progress_callback) progress_callback(80, "Using Intel GPU FFmpeg (" + actual_vcodec + ") with CPU filters...");
         } else {
             if (vCodec == "libx264") extra_args = "-preset fast -crf " + crf;
             else if (vCodec == "libx265") extra_args = "-preset fast -crf " + crf;
@@ -652,6 +706,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     if (aCodec.empty()) aCodec = "copy";
 
     ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
+                 "-filter_complex_threads " + std::to_string(num_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" "
                  "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " \"" + actual_output_path + "\"";
 
@@ -770,7 +825,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (progress_callback) progress_callback(100, "Debug video generation complete.");
         return true;
     } else {
-        if (progress_callback) progress_callback(-1, "FFmpeg composition failed. Is ffmpeg in your system's PATH?");
+        if (progress_callback) progress_callback(-1, "FFmpeg composition failed. Check if ffmpeg is in PATH and if GPU encoding is supported on your hardware.");
         return false;
     }
 }

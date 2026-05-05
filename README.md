@@ -1,30 +1,32 @@
 # ChessTube Analyzer
 
-A C++ project to analyze chess videos and extract game data, including moves, positions, and timestamps.
+A C++20 application that analyzes chess videos, reconstructs legal games from the visual board state, and can generate PGN plus optional Stockfish-powered analysis video overlays.
 
 ## Overview
 
-This tool processes chess video files, identifies board states, and reconstructs the game played. The pipeline is purely visual — it uses the chess.com UI itself (highlights, clocks, arrows) as an absolute state machine to achieve high accuracy.
+ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data and optional engine variations.
 
 ## Features
 
-- **Video Processing**: Extract chess moves from video files using computer vision
-- **Move Verification**: Legal move validation using libchess engine
-- **UI Detection**: Automatic detection of yellow highlights, arrows, clocks, and hover boxes
-- **Clock Recognition**: Hu Moments-based OCR for clock time extraction
-- **PGN Export**: Generate PGN files with extracted moves, clock information, and analysis variations.
-- **Stockfish Analysis**: Optional engine analysis with configurable MultiPV, search limits (depth, time per move, nodes), and engine variation length. The application can auto-find your Stockfish executable or you can specify a path.
-- **Custom Output**: Save analysis alongside the source video or in a custom directory (defaults to your Documents folder).
-- **Channel-Specific Templates**: Auto-detect and apply custom visual overlay layouts tailored for different chess YouTube channels. Templates are copied to `%APPDATA%\ChessTubeAnalyzer\templates` on first run, can be overridden per queued video, and are edited in a built-in screenshot-based WYSIWYG editor with 8-way resize handles and independent X/Y eval-bar scaling.
-- **Analysis Video Generation**: Option to generate an analysis video with a synchronized board overlay, evaluation bar, dynamic best move arrows (scaled by evaluation strength), and engine evaluation lines.
-- **GUI Application**: Qt6-based GUI with universal theme system (Light/Dark/System mode)
+- **Video Processing:** Extract chess moves from video files using computer vision.
+- **Move Verification:** Validate candidates against legal libchess moves and UI signals.
+- **UI Detection:** Detect yellow highlights, red emphasis marks, yellow arrows, clocks, hover boxes, and piece-count changes.
+- **Clock Recognition:** Hu Moments digit OCR with no Tesseract dependency.
+- **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
+- **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
+- **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits.
+- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, and engine arrows into an annotated MP4.
+- **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
+- **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
 
 ## Quick Start
 
-### Windows Installer (Recommended)
-Download and run the latest NSIS installer from the Releases page. The application stores configuration in `%APPDATA%\ChessTubeAnalyzer`, including overlay templates in `%APPDATA%\ChessTubeAnalyzer\templates`, and exports generated files to your `Documents` folder by default to avoid write-permission errors.
+### Windows Installer
+
+Download and run the latest NSIS installer from the Releases page. The application stores configuration in `%APPDATA%\ChessTubeAnalyzer` and exports generated files to your Documents folder by default.
 
 ### Developer Build
+
 ```cmd
 cmake --preset vs2022-dev
 cmake --build --preset gui-release
@@ -32,49 +34,130 @@ cmake --build --preset gui-release
 
 The GUI CMake target is `analyzer_gui`; the preset still emits the application as `ChessTube Analyzer.exe`.
 
-> **Note:** On Windows, the project now defaults to the documented `E:/vcpkg` toolchain and auto-selects a matching triplet based on the installed OpenCV package, preferring `x64-windows-static` when it exists. You can still override either value explicitly if your environment differs.
+On Windows, the project defaults to the documented `E:/vcpkg` toolchain, the `x64-windows` vcpkg triplet, and the dynamic MSVC runtime (`/MD` or `/MDd`). Keep the app and all vcpkg dependencies on the same triplet/runtime pair; mixing `x64-windows-static` (`/MT`) with a dynamic-runtime app can trigger Debug CRT heap assertions when STL/OpenCV objects cross module boundaries.
 
-For day-to-day iteration, the `vs2022-dev` preset keeps expensive packaging steps off: Release IPO/LTO is disabled, vcpkg app-local copying is disabled, and Qt runtime deployment is disabled. Use `vs2022-release-package` when you want the slower packaging-oriented build.
+For day-to-day iteration, the `vs2022-dev` preset keeps expensive packaging steps off. Use `vs2022-release-package` when you want the slower packaging-oriented build.
 
-#### Optional GPU Acceleration
+### Clean CMake Reconfigure
 
-The project includes a GPU acceleration layer (`GPUAccelerator` + `GPUPipeline`) that uses NVIDIA NPP directly from your system CUDA SDK — **no OpenCV rebuild needed**.
+CMake caches the Visual Studio generator platform and vcpkg triplet in the build directory. If you are switching triplets, changing `-A x64`, or recovering from an old static build, delete or rename `build/` first:
 
-To enable:
+```cmd
+cmake -S . -B build -G "Visual Studio 17 2022" ^
+  -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows
+cmake --build build --config Debug --target analyzer_gui
+```
 
-1. Install the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (includes NPP runtime DLLs like `nppial64_13.dll`, `nppicc64_13.dll`, etc.)
-2. CMake auto-detects CUDA at `C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2`
-3. Rebuild — NPP ops will be compiled in and used at runtime
+Do not rerun CMake with a different generator platform against an existing `build/` directory.
 
-When CUDA runtime DLLs are not installed, the binary still runs — `GPUAccelerator::init()` checks for DLL existence before attempting GPU ops, falling back to CPU seamlessly.
+### Optional GPU Acceleration
 
-Recent GPU work focuses on keeping expensive board-localization operations device-resident where possible, including reusable `GPUMat` storage and a GPUMat-based resize path to reduce host/device transfers during startup.
+The project contains an optional CUDA/NPP acceleration layer (`GPUAccelerator` + `GPUPipeline`) that is auto-detected when the NVIDIA CUDA Toolkit is installed. The supported path keeps CPU fallbacks for every operation, so a normal OpenCV/vcpkg build does not require CUDA-enabled OpenCV.
 
-### Run
+Current GPU work focuses on safe, targeted acceleration: hardware video decode requests through OpenCV/FFmpeg, NPP `absdiff` where available, and CPU-side scoring for precision-sensitive move validation.
 
-**GUI (Recommended):**
+## Run
+
+GUI:
+
 ```cmd
 cd build\Release
 "ChessTube Analyzer.exe"
 ```
 
-**CLI Mode:**
+Headless:
+
 ```cmd
 cd build\Release
-"ChessTube Analyzer.exe" "path\to\video1.mp4;path\to\video2.mp4" --board-asset "path\to\board.png"
+"ChessTube Analyzer.exe" "path\to\video.mp4" --stockfish --multi-pv 3 --pgn
 ```
 
-### Queue And Template Workflow
+Multiple videos can be passed as a semicolon-separated list:
 
-- Add one or more videos to the queue by browsing or drag-and-drop.
-- Each queued item is auto-matched against the template's Name (or alternative keywords) using the video filename; if nothing matches, the built-in `generic` template is used.
-- You can override the template per queue item from its inline dropdown before processing starts.
-- The selected template is snapshotted onto the queue item right before launch, so a batch can safely mix channels and still keep the intended overlay layout for each video.
-- Use **Manage Templates** to load a reference screenshot, drag and resize the Analysis Board, Eval Bar, and PV Text overlays, and choose whether engine arrows render on the analysis board, the main board, both, or neither.
+```cmd
+"ChessTube Analyzer.exe" "path\to\video1.mp4;path\to\video2.mp4"
+```
 
-Template JSON files and reference screenshots live in `%APPDATA%\ChessTubeAnalyzer\templates`. Bundled defaults are copied there automatically on first run so they can be customized without touching the installed files.
+## Queue And Templates
 
-### Test
+- Add one or more videos by browsing or drag-and-drop.
+- Each queued item is auto-matched against the template name or alternative keywords using the video filename.
+- You can override the template per queue item before processing starts.
+- The selected template is snapshotted onto the queue item right before launch, so mixed-channel batches keep the intended overlay layout per video.
+- Use **Manage Templates** to load a reference screenshot, drag/resize overlays, and choose whether engine arrows render on the analysis board, main board, both, or neither.
+
+Template JSON files and reference screenshots live in `%APPDATA%\ChessTubeAnalyzer\templates`. Bundled defaults are copied there automatically on first run.
+
+## Dependencies
+
+Dependencies are managed via vcpkg on `E:\vcpkg`:
+
+| Dependency | Purpose |
+|-----------|---------|
+| OpenCV 4.12 | Image processing and video I/O |
+| Qt6 / qtbase | GUI framework |
+| nlohmann-json | JSON configuration and templates |
+| CLI11 | CLI argument parsing |
+| libchess | Legal move generation and FEN I/O |
+| Google Test | Optional tests |
+| FFmpeg | Analysis video composition and audio muxing |
+
+Tesseract has been removed; clock OCR now uses the built-in Hu Moments recognizer.
+
+## Project Structure
+
+```text
+ChessTubeAnalyzer/
+|-- CMakeLists.txt
+|-- include/
+|   |-- BoardLocalizer.h
+|   |-- BoardAnalysis.h
+|   |-- ArrowDetector.h
+|   |-- ClockRecognizer.h
+|   |-- ChessVideoExtractor.h
+|   |-- StockfishAnalyzer.h
+|   |-- GPUAccelerator.h
+|   `-- ScopedTimer.h
+|-- src/
+|   |-- BoardLocalizer.cpp
+|   |-- BoardAnalysis.cpp
+|   |-- ArrowDetector.cpp
+|   |-- ClockRecognizer.cpp
+|   |-- ChessVideoExtractor.cpp
+|   |-- StockfishAnalyzer.cpp
+|   |-- AnalysisVideoGenerator.cpp
+|   |-- AnalysisVideoRenderUtils.cpp
+|   |-- GPUAccelerator.cpp
+|   `-- main.cpp
+|-- tests/
+|   `-- test_ui_detectors.cpp
+|-- assets/
+|   |-- board/board.png
+|   |-- board/red_board.png
+|   `-- sample_games_*/
+|-- docs/
+|   `-- USAGE.md
+|-- TODO.md
+|-- architecture.md
+|-- SPEC.md
+|-- CHANGELOG.md
+`-- agents.md
+```
+
+## Pipeline
+
+1. **Board Localization:** Golden Section Search across coarse, fine, and exact passes. Scale evaluation uses sparse sampled correlation to avoid dense full-frame template matching during search.
+2. **Chunked Visual Map Pass:** The video is split into time chunks and decoded by worker threads with hardware acceleration requested where OpenCV/FFmpeg supports it.
+3. **Motion Filtering:** Workers crop to the board ROI, convert to grayscale, and keep candidate frames with meaningful visual changes.
+4. **Square Diffing:** Candidate frames are compared against verified board history with `absdiff` and direct square ROI means.
+5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, revert handling, and clock validation stay deterministic.
+6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
+7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
+8. **Output:** PGN is written with timestamps, clock data, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
+
+## Testing
+
 ```cmd
 cmake -B build -DBUILD_TESTS=ON
 cmake --build build --config Release
@@ -82,129 +165,15 @@ cd build\Release
 test_extract_moves.exe
 ```
 
-See `TODO.md` for the full list of tests and how to toggle them.
+All tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file.
 
-## Runtime Dependencies
-
-| Dependency | Purpose |
-|-----------|---------|
-| FFmpeg | Required for analysis video generation to composite overlays and mux audio into the final MP4. Must be available in the system's PATH. |
-
-## Dependencies
-
-All dependencies are managed via vcpkg on `E:\vcpkg`:
-
-| Dependency | Purpose |
-|-----------|---------|
-| OpenCV 4.12 | Image processing, video I/O |
-| nlohmann-json | JSON output |
-| CLI11 | CLI argument parsing |
-| libchess (E:\libchess) | Legal move generation, FEN I/O |
-| Google Test | Unit testing |
-| qtbase | Qt6 Core GUI framework |
-
-**Removed dependencies:** Tesseract — replaced with a lightweight Hu Moments-based digit recognizer (zero external dependencies, runs in microseconds).
-
-## Project Structure
-
-```
-ChessTubeAnalyzer/
-├── CMakeLists.txt
-├── include/
-│   ├── BoardLocalizer.h         # Board geometry detection
-│   ├── BoardAnalysis.h          # Square means, yellow squares, piece count, red squares, hover
-│   ├── ArrowDetector.h          # Yellow arrow detection
-│   ├── ClockRecognizer.h        # Hu Moments OCR + clock extraction
-│   ├── UIDetectors.h            # Umbrella header (includes all detectors)
-│   ├── ChessVideoExtractor.h    # Orchestrator class
-│   ├── FramePrefetcher.h        # Async frame pre-decoding
-│   └── GPUAccelerator.h         # GPUMat + GPUPipeline + GPUAccelerator
-├── src/
-│   ├── main.cpp                 # CLI entry point
-│   ├── BoardLocalizer.cpp       # GSS board localization (213 lines)
-│   ├── BoardAnalysis.cpp        # Square means, yellow, red, hover, debug (356 lines)
-│   ├── ArrowDetector.cpp        # Yellow arrow detection (141 lines)
-│   ├── ClockRecognizer.cpp      # Hu Moments OCR + clocks (264 lines)
-│   ├── ChessVideoExtractor.cpp  # Orchestrator + libchess + GPU pipeline
-│   ├── FramePrefetcher.cpp      # Async frame pre-decoding
-│   └── GPUAccelerator.cpp       # GPU/CUDA acceleration + GPUPipeline
-├── tests/
-│   └── test_ui_detectors.cpp    # All unit + integration tests + summary table
-├── build/                       # Build output
-├── assets/
-│   ├── board/board.png              # Required: pristine board image
-│   ├── board/red_board.png          # Optional: red highlights for threshold
-│   ├── sample_games_*/              # Test videos with ground-truth PGNs
-│   └── ...                          # Sample images for unit tests
-├── debug_screenshots/               # Auto-generated debug output
-├── output/                          # Generated JSON files
-├── docs/
-│   └── USAGE.md
-├── TODO.md                          # Optimization status & project conventions
-├── README.md
-├── architecture.md
-├── SPEC.md
-├── CHANGELOG.md
-├── agents.md
-└── PROJECT_PLAN.md
-```
-
-## Test Control Panel
-
-All tests live in `tests/test_ui_detectors.cpp` with toggles at the top:
-
-```cpp
-#define TEST_LOCATE_BOARD         0   // Board localization on itself
-#define TEST_DRAW_GRID            0   // Grid drawing utility
-#define TEST_YELLOW_SQUARES       0   // Yellow square move extraction (8 images)
-#define TEST_PIECE_COUNTS         0   // Piece counting via edge detection (3 images)
-#define TEST_RED_SQUARES          0   // Red square detection (2 images)
-#define TEST_YELLOW_ARROWS        0   // Yellow arrow detection (2 images)
-#define TEST_MISALIGNED_PIECE     0   // Hover box detection (5 images)
-#define TEST_GAME_CLOCKS          0   // Clock OCR + active player (3 images)
-#define TEST_7_PLIES_EXTRACTION   0   // Full pipeline: 7-ply video vs PGN
-#define TEST_MEDIUM_GAME_REVERT   1   // Full pipeline: medium game with revert
-#define TEST_CONSTRUCTOR_THROWS   1   // Smoke test: constructor validation
-```
-
-Set to `0` to disable. Every test **must** have a toggle — no exceptions.
-
-Integration tests print a summary table after each run, showing test name, video duration, plies extracted, result, processing time, and accuracy across all tests.
-
-## Architecture
-
-The extractor treats the chess.com UI as a deterministic state machine:
-
-1. **Board Localization** — Golden Section Search (O(log N)) across 3 passes: coarse (15 iterations, ¼ res), fine (12 iterations, ¼ res), exact (12 iterations, full res). Total: 39 evaluations vs 67 linear steps before.
-2. **Frame Polling** — Sequential 5 FPS forward-only scan via `cap.grab()` (no backward seeks)
-3. **Async Frame Prefetching** — Background worker decodes the *next* frame (seek + read + crop + grayscale) while the main thread processes the *current* one
-4. **GPU Pipeline** — `GPUPipeline` keeps `prev_gray` and `curr_gray` on GPU. GPU `nppiAbsDiff` + GPU `nppiIntegral` for fast change detection; CPU integral (64F) for accurate move scoring
-5. **Square Diffing** — Batch integral image computes all 64 square means simultaneously (no per-ROI `cv::mean` loop)
-6. **Legal Move Scoring** — libchess generates legal moves, highest visual diff wins
-7. **4-Layer Validation** — Yellow highlights, hover-box rejection, clock turn check, revert detection
-8. **Conditional Clock OCR** — Cached clock ROIs; Hu Moments digit recognizer runs in microseconds when pixels change
-9. **Move Settling** — Adaptive 0.2s peek-ahead, skipped when confidence >90%
-10. **Output** — A PGN file (`<video_name>.pgn`) containing moves, timestamps, and clock data. If Stockfish analysis is enabled, the PGN will also include engine variations and evaluations bounded by the configured depth, time, or node limits.
-11. **Overlay Templates** - Each queued video carries a selected overlay template. Templates are auto-matched from filename keywords, can be overridden per queue item, and persist an item-specific snapshot of enable/position/scale settings for the board, eval bar, PV text, and engine-arrow target.
-12. **Video Compositing** — Generates static overlay BMPs combined using FFmpeg `concat` demuxer scripts, dropping overlay render time from minutes to under a second while keeping overlays synchronized with the source video.
-
-Progress is shown as an inline `[XX.X%]` ticker during scanning.
-
-## Performance
+## Performance Snapshot
 
 | Metric | Value |
 |--------|-------|
-| 7-ply video (18s) | ~5.8s processing (3.0x real-time) |
-| Medium game (2m37s, 17 plies) | ~67s processing (2.5x real-time) |
-| Board localization | ~2.2s (39 GSS evaluations) |
-| Analysis Video Generation | <1s rendering, followed by FFmpeg NVENC stream muxing |
-| Unit tests | 9/9 passing |
-| Integration tests | 7/7 plies, 17/17 with revert |
+| Medium game (2m37s, 17 plies) | ~15s processing in current roadmap notes |
+| Board localization | Sparse GSS exact pass |
+| Analysis video generation | Static overlays plus FFmpeg mux/composite |
+| Integration coverage | 7-ply and medium-game revert scenarios |
 
-See [architecture.md](architecture.md) and [SPEC.md](SPEC.md) for full details.
-
-## Troubleshooting
-
-### "Error: Could not load board asset at: assets/board/board.png"
-The application searches for the `assets/` folder relative to the Current Working Directory. If not found, it intelligently falls back to searching two directories up (`../../assets/`) to support running directly from `build/Release/`. 
-If you encounter this error, ensure the `assets/` folder exists at the root of the project and has not been moved.
+See [architecture.md](architecture.md), [SPEC.md](SPEC.md), and [docs/USAGE.md](docs/USAGE.md) for more detail.

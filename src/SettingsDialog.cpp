@@ -163,7 +163,13 @@ void SettingsDialog::setupUi() {
     videoCodecLayout->addWidget(new QLabel("Video Format:"));
     auto* videoCodecComboBox = new QComboBox();
     videoCodecComboBox->setObjectName("videoCodecComboBox");
-    videoCodecComboBox->addItems({"libx264 (H.264 - Fast & Compatible)", "libx265 (HEVC - High Quality)", "libvpx-vp9 (VP9 - Web Optimized)"});
+    videoCodecComboBox->addItems({
+        "libx264 (H.264 - Fast & Compatible)", 
+        "h264_nvenc (NVIDIA GPU H.264 - Fastest)", 
+        "libx265 (HEVC - High Quality)", 
+        "hevc_nvenc (NVIDIA GPU HEVC - Fastest)", 
+        "libvpx-vp9 (VP9 - Web Optimized)"
+    });
     videoCodecComboBox->setProperty("class", "dropdown");
     videoCodecComboBox->setToolTip("Select the video compression format. H.264 is recommended for best compatibility.");
     videoCodecLayout->addWidget(videoCodecComboBox);

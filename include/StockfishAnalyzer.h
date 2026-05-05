@@ -23,7 +23,7 @@ struct StockfishResult {
 
 class StockfishAnalyzer {
 public:
-    explicit StockfishAnalyzer(int multi_pv = 1, const std::string& stockfish_path = "");
+    explicit StockfishAnalyzer(int multi_pv = 1, const std::string& stockfish_path = "", int threads = 0);
     ~StockfishAnalyzer();
 
     // Delete copy/move
@@ -43,6 +43,8 @@ private:
     struct StockfishImpl;
     StockfishImpl* impl_;
     int multi_pv_;
+    int threads_;
+    std::string stockfish_path_;
     ProgressCallback progress_callback_;
 };
 

@@ -20,19 +20,13 @@ if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE AND CHESSTUBE_VCPKG_ROOT AND
         CACHE FILEPATH "Path to the vcpkg toolchain file")
 endif()
 
-if(WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
-    if(CHESSTUBE_VCPKG_ROOT AND
-       EXISTS "${CHESSTUBE_VCPKG_ROOT}/installed/x64-windows-static/share/opencv4/OpenCVConfig.cmake")
-        set(_default_vcpkg_triplet "x64-windows-static")
-    elseif(CHESSTUBE_VCPKG_ROOT AND
-           EXISTS "${CHESSTUBE_VCPKG_ROOT}/installed/x64-windows/share/opencv4/OpenCVConfig.cmake")
-        set(_default_vcpkg_triplet "x64-windows")
-    else()
-        set(_default_vcpkg_triplet "x64-windows-static")
-    endif()
+if(WIN32)
+    set(VCPKG_TARGET_TRIPLET "x64-windows"
+        CACHE STRING "Default vcpkg triplet for ChessTubeAnalyzer" FORCE)
+endif()
 
-    set(VCPKG_TARGET_TRIPLET "${_default_vcpkg_triplet}"
-        CACHE STRING "Default vcpkg triplet for ChessTubeAnalyzer")
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
 set(ENABLE_VCPKG_APPLOCAL_DEPS OFF CACHE BOOL
@@ -49,11 +43,17 @@ endif()
 
 project(ChessTubeAnalyzer LANGUAGES CXX)
 
-if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET)
-    if(VCPKG_TARGET_TRIPLET MATCHES "(^|-)static($|-)")
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    else()
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+if(WIN32)
+    set(CHESSTUBE_VCPKG_DYNAMIC_ROOT "E:/vcpkg/installed/x64-windows" CACHE PATH
+        "vcpkg dynamic-triplet root used for Qt/OpenCV runtime consistency")
+    if(EXISTS "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6")
+        set(Qt6_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6" CACHE PATH "Qt6 package directory" FORCE)
+        set(Qt6Core_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Core" CACHE PATH "Qt6Core package directory" FORCE)
+        set(Qt6Gui_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Gui" CACHE PATH "Qt6Gui package directory" FORCE)
+        set(Qt6Widgets_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Widgets" CACHE PATH "Qt6Widgets package directory" FORCE)
+    endif()
+    if(EXISTS "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/opencv4")
+        set(OpenCV_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/opencv4" CACHE PATH "OpenCV package directory" FORCE)
     endif()
 endif()
 
@@ -66,6 +66,10 @@ option(BUILD_GUI "Build the Qt GUI target" ON)
 option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" OFF)
 option(ENABLE_SYSTEM_CUDA "Enable direct system CUDA/NPP integration when available" ON)
 option(ENABLE_IPO "Enable interprocedural optimization in Release when supported" OFF)
+
+# The direct system CUDA/NPP path has caused Debug CRT heap assertions during
+# board localization on Windows. Keep it hard-disabled until that path is
+# rebuilt and covered by targeted tests.
 
 if(ENABLE_UNITY_BUILD)
     set(CMAKE_UNITY_BUILD ON)
@@ -254,6 +258,42 @@ if(ENABLE_SYSTEM_CUDA AND WIN32 AND SYSTEM_CUDA_PATH AND
     set(HAVE_SYSTEM_CUDA TRUE)
     message(STATUS "GPU Acceleration: system CUDA toolkit found - NPP ops enabled")
     message(STATUS "  CUDA path: ${SYSTEM_CUDA_PATH}")
+
+    # Dynamically find the exact names of the CUDA runtime DLLs to delay-load.
+    # This prevents 0xc0000135 crashes caused by version suffix mismatches 
+    # (e.g., if the .lib imports nppc64_132.dll instead of nppc64_13.dll).
+    file(GLOB CUDA_DLL_PATHS 
+        "${SYSTEM_CUDA_PATH}/bin/cudart64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppc64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppial64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppicc64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppidei64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppif64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppig64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppim64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppist64_*.dll"
+        "${SYSTEM_CUDA_PATH}/bin/nppitc64_*.dll"
+    )
+    
+    set(CUDA_DELAY_LOADS_LIST "")
+    if(CUDA_DLL_PATHS)
+        foreach(DLL_PATH IN LISTS CUDA_DLL_PATHS)
+            get_filename_component(DLL_NAME "${DLL_PATH}" NAME)
+            list(APPEND CUDA_DELAY_LOADS_LIST "/DELAYLOAD:${DLL_NAME}")
+        endforeach()
+    else()
+        # Fallback: if GLOB fails (e.g., due to permissions or path formats), 
+        # guarantee the delay-load flags are populated for CUDA 13.
+        set(CUDA_DELAY_LOADS_LIST 
+            "/DELAYLOAD:cudart64_13.dll" "/DELAYLOAD:nppc64_13.dll"
+            "/DELAYLOAD:nppial64_13.dll" "/DELAYLOAD:nppicc64_13.dll"
+            "/DELAYLOAD:nppidei64_13.dll" "/DELAYLOAD:nppif64_13.dll"
+            "/DELAYLOAD:nppig64_13.dll" "/DELAYLOAD:nppim64_13.dll"
+            "/DELAYLOAD:nppist64_13.dll" "/DELAYLOAD:nppitc64_13.dll")
+    endif()
+
+    # Suppress LNK4199 warning when a DLL is delay-loaded but no symbols are imported from it
+    list(APPEND CUDA_DELAY_LOADS_LIST "/IGNORE:4199")
 else()
     message(STATUS "GPU Acceleration: system CUDA not found or disabled - CPU fallback mode")
 endif()
@@ -383,43 +423,6 @@ target_include_directories(extract_moves PRIVATE
 
 if(HAVE_SYSTEM_CUDA AND WIN32)
     target_link_directories(extract_moves PRIVATE "${SYSTEM_CUDA_PATH}/lib/x64")
-    
-    # Dynamically find the exact names of the CUDA runtime DLLs to delay-load.
-    # This prevents 0xc0000135 crashes caused by version suffix mismatches 
-    # (e.g., if the .lib imports nppc64_132.dll instead of nppc64_13.dll).
-    file(GLOB CUDA_DLL_PATHS 
-        "${SYSTEM_CUDA_PATH}/bin/cudart64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppc64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppial64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppicc64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppidei64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppif64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppig64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppim64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppist64_*.dll"
-        "${SYSTEM_CUDA_PATH}/bin/nppitc64_*.dll"
-    )
-    
-    set(CUDA_DELAY_LOADS_LIST "")
-    if(CUDA_DLL_PATHS)
-        foreach(DLL_PATH IN LISTS CUDA_DLL_PATHS)
-            get_filename_component(DLL_NAME "${DLL_PATH}" NAME)
-            list(APPEND CUDA_DELAY_LOADS_LIST "/DELAYLOAD:${DLL_NAME}")
-        endforeach()
-    else()
-        # Fallback: if GLOB fails (e.g., due to permissions or path formats), 
-        # guarantee the delay-load flags are populated for CUDA 13.
-        set(CUDA_DELAY_LOADS_LIST 
-            "/DELAYLOAD:cudart64_13.dll" "/DELAYLOAD:nppc64_13.dll"
-            "/DELAYLOAD:nppial64_13.dll" "/DELAYLOAD:nppicc64_13.dll"
-            "/DELAYLOAD:nppidei64_13.dll" "/DELAYLOAD:nppif64_13.dll"
-            "/DELAYLOAD:nppig64_13.dll" "/DELAYLOAD:nppim64_13.dll"
-            "/DELAYLOAD:nppist64_13.dll" "/DELAYLOAD:nppitc64_13.dll")
-    endif()
-
-    # Suppress LNK4199 warning when a DLL is delay-loaded but no symbols are imported from it
-    list(APPEND CUDA_DELAY_LOADS_LIST "/IGNORE:4199")
-
 endif()
 
 configure_cuda_target(extract_moves)

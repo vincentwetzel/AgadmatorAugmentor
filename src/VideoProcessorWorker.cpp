@@ -260,9 +260,11 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
             
             // Build synchronized results arrays
+            mainLineStockfishResults.reserve(gameData.fens.size());
             for (const auto& fen : gameData.fens) {
                 mainLineStockfishResults.push_back(fenAnalysisCache[fen]);
             }
+            videoStockfishResults.reserve(gameData.video_fens.size());
             for (const auto& fen : gameData.video_fens) {
                 videoStockfishResults.push_back(fenAnalysisCache[fen]);
             }
@@ -272,7 +274,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
         // Step 2a: Optional move quality annotation based on Stockfish analysis
         std::vector<std::string> move_annotations(gameData.moves.size(), "");
-            QSettings q_settings;
+        QSettings q_settings;
         bool enableMoveAnnotations = q_settings.value("analysis/enableMoveAnnotations", true).toBool();
 
         if (enableMoveAnnotations && (settings.enableStockfish || settings.generateAnalysisVideo)) {
