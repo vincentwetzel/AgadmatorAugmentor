@@ -410,7 +410,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     log_info(utils::ts(elapsed()) + " Launching Map-Reduce visual extraction (" + std::to_string(num_threads) + " workers, " + std::to_string(total_chunks) + " chunks)...");
 
-    auto map_worker = & {
+    auto map_worker = [&]() {
         while (true) {
             int chunk_idx = next_chunk_to_map.fetch_add(1);
             if (chunk_idx >= total_chunks) break;
