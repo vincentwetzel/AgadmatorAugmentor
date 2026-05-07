@@ -235,6 +235,9 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             analyzer.set_progress_callback([this, cancelFlag](int current, int total) {
                 QString msg = QString("Analyzing position %1 of %2...").arg(current).arg(total);
                 emit logMessage(msg);
+                if (total > 0) {
+                    emit progressUpdated((current * 100) / total);
+                }
             });
             std::vector<StockfishResult> unique_results = analyzer.analyze_positions(unique_fens, settings.stockfishDepth, settings.stockfishTime * 1000, settings.stockfishNodes, cancelFlag);
             if (cancelFlag && *cancelFlag) {
@@ -488,8 +491,14 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 } else {
                     clockStr = "0:00:00"; // Fallback if no clock data exists for this ply
                 }
+                
+                std::string main_eval_str = "";
+                if (settings.enableStockfish && !mainLineStockfishResults.empty() && i + 1 < mainLineStockfishResults.size()) {
+                    main_eval_str = get_eval_str(mainLineStockfishResults[i + 1]);
+                }
+
                 std::string move_with_annotation = gameData.moves[i] + move_annotations[i];
-                pgn.add_ply(move_with_annotation, format_clock_string(clockStr));
+                pgn.add_ply(move_with_annotation, format_clock_string(clockStr), main_eval_str);
 
                 // Check for and add variations that branch from this move
                 auto it = gameData.variations.find(i);
@@ -518,108 +527,61 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                     }
                 }
             }
-
-            // Inject Stockfish analysis if requested for PGN
-            if (settings.enableStockfish && !mainLineStockfishResults.empty()) {
-                pgn.add_stockfish_analysis(mainLineStockfishResults, settings.stockfishAnalysisDepth);
-            }
-
+            
+            QString outPath = settings.outputPath;
             std::string pgnContent = pgn.build();
-
-            // Write to file
-            QFileInfo outInfo(settings.outputPath);
-            QString pgnPath = outInfo.absoluteDir().filePath(outInfo.completeBaseName() + ".pgn");
-            QDir().mkpath(outInfo.absolutePath()); // Ensure output directory exists
-            std::ofstream pgnFile(pgnPath.toStdString());
+            std::ofstream pgnFile(outPath.toStdString());
             if (pgnFile.is_open()) {
                 pgnFile << pgnContent;
                 pgnFile.close();
-                emit logMessage("PGN file written to: " + pgnPath);
+                emit logMessage("Saved PGN to: " + outPath);
             } else {
-                emit logMessage("Warning: Could not write PGN file.");
+                emit error(QString("Failed to save PGN to: %1").arg(outPath));
             }
         }
 
         // Step 4: Optional Analysis Video Generation
         if (settings.generateAnalysisVideo) {
-            emit logMessage("Starting Analysis Video generation...");
+            emit logMessage("Generating Analysis Video...");
+            AnalysisVideoGenerator video_gen(settings.assetsPath.toStdString());
             
-            QSettings qs;
-            QString ext = qs.value("videoExtension", ".mp4").toString();
-            QString vCodec = qs.value("videoCodec", "libx264 (H.264)").toString();
-            QString aCodec = qs.value("audioCodec", "aac").toString();
-            QString res = qs.value("videoResolution", "Source Resolution").toString();
-            QString crf = qs.value("videoQuality", 23).toString();
-            emit logMessage(QString("Using video encoding settings: Codec=%1, Audio=%2, Container=%3, Resolution=%4, Quality (CRF)=%5").arg(vCodec).arg(aCodec).arg(ext).arg(res).arg(crf));
+            QFileInfo pgnInfo(settings.outputPath);
+            QString outPath = pgnInfo.absolutePath() + "/" + QFileInfo(settings.videoPath).completeBaseName() + "_analysis.mp4";
 
-            try {
-                AnalysisVideoGenerator generator(settings.assetsPath.toStdString());
-                
-                QFileInfo outInfo(settings.outputPath);
-                QString analysisVideoPath = outInfo.absoluteDir().filePath(outInfo.completeBaseName() + "_analysis" + ext);
-
-                auto generator_progress_callback = [this](int percent, const std::string& msg) {
-                    // This callback is called from within the generator's loop.
-                    // The loop itself will check the cancel flag, so we don't
-                    // need to check it here, but we could if we wanted to
-                    // perform a specific action on cancel during progress update.
-                    // For now, just log messages. A more complex progress system could scale this.
-                    if (percent >= 0) {
-                        emit progressUpdated(percent);
-                    }
-                    if (!msg.empty()) {
-                        emit logMessage(QString::fromStdString(msg));
-                    }
-                };
-
-                const BoardGeometry* geo = extractor.get_board_geometry();
-                if (!geo) {
-                    emit logMessage("Error: Board geometry not available for Analysis Video generation.");
-                } else {
-                    // Pack the UI codec settings into the path string to seamlessly pass them 
-                    // without altering the underlying C++ interface signature.
-                    QString magicVideoPath = analysisVideoPath + "|" + vCodec + "|" + aCodec + "|" + res + "|" + crf;
-
-                    bool success = generator.generate_analysis_video(
-                        settings.videoPath.toStdString(),
-                        magicVideoPath.toStdString(),
-                        *geo,
-                        gameData.video_fens,
-                        gameData.video_timestamps,
-                        videoStockfishResults,
-                        15, // Hardcoded engine arrow thickness percentage
-                        settings.overlayConfig,
-                        cancelFlag,
-                        generator_progress_callback
-                    );
-
-                    if (success) {
-                        emit logMessage("Successfully generated Analysis Video: " + analysisVideoPath);
-                    } else {
-                        emit logMessage("Error: Failed to generate Analysis Video.");
-                    }
+            auto progress_cb = [this](int percent, const std::string& message) {
+                if (percent >= 0) {
+                    emit progressUpdated(percent);
                 }
+                if (!message.empty()) {
+                    emit logMessage(QString::fromStdString(message));
+                }
+            };
 
-            } catch (const std::exception& e) {
-                emit logMessage("Error during Analysis Video generation: " + QString::fromStdString(e.what()));
-            }
+            video_gen.generate_analysis_video(
+                settings.videoPath.toStdString(),
+                outPath.toStdString(),
+                *extractor.get_board_geometry(),
+                gameData.video_fens,
+                gameData.video_timestamps,
+                videoStockfishResults,
+                15, // arrow_thickness_pct
+                settings.overlayConfig,
+                cancelFlag,
+                progress_cb
+            );
+            emit logMessage("Analysis Video generation complete: " + outPath);
         }
 
-        if (cancelFlag && *cancelFlag) {
-            emit finished();
-            return;
-        }
-
+        emit progressUpdated(100);
+        emit logMessage("Processing complete.");
         emit finished();
 
     } catch (const std::exception& e) {
-        QString errorMsg = QString::fromStdString(e.what());
-        emit logMessage("Error: " + errorMsg);
-        emit error(errorMsg);
+        emit error(QString("Error during processing: %1").arg(e.what()));
+        emit finished();
     } catch (...) {
-        QString errorMsg = "An unknown error occurred during video processing.";
-        emit logMessage(errorMsg);
-        emit error(errorMsg);
+        emit error("Unknown error during processing.");
+        emit finished();
     }
 }
 

@@ -55,7 +55,7 @@ ProcessingSettings MainWindow::gatherSettings() const {
     s.assetsPath = assetsDir;
     
     QString baseDir = "output";
-    QSettings qs(QCoreApplication::applicationDirPath() + "/settings.ini", QSettings::IniFormat);
+    QSettings qs;
     bool sameAsSource = qs.value("outSameAsSource", true).toBool();
     QString customDir = qs.value("outCustomDir", "").toString();
     
@@ -65,6 +65,8 @@ ProcessingSettings MainWindow::gatherSettings() const {
         }
     } else if (!customDir.isEmpty()) {
         baseDir = customDir;
+    } else {
+        baseDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/ChessTubeAnalyzer";
     }
     
     QString outOverride = property("headlessOutputOverride").toString();

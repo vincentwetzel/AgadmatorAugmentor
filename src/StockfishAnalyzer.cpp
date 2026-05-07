@@ -324,15 +324,15 @@ std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vec
     std::vector<StockfishResult> results(fens.size());
     if (fens.empty()) return results;
 
-    unsigned int hw_threads = std::thread::hardware_concurrency();
-    if (hw_threads == 0) hw_threads = 4;
+    unsigned int total_threads = threads_ > 0 ? threads_ : std::thread::hardware_concurrency();
+    if (total_threads == 0) total_threads = 4;
     
     // Dynamically cap concurrent engines (e.g., 4-8 instances max)
-    unsigned int num_procs = std::clamp(hw_threads / 2, 1u, 8u);
+    unsigned int num_procs = std::clamp(total_threads / 2, 1u, 8u);
     if (fens.size() < num_procs) num_procs = static_cast<unsigned int>(fens.size());
     
     // Allocate a safe amount of compute threads for each inner process
-    unsigned int sf_threads = std::max(1u, hw_threads / num_procs);
+    unsigned int sf_threads = std::max(1u, total_threads / num_procs);
     
     std::atomic<size_t> current_idx{0};
     std::atomic<int> completed_count{0};
@@ -340,6 +340,12 @@ std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vec
     std::exception_ptr first_exception = nullptr;
     
     std::vector<std::thread> workers;
+    
+    struct ThreadJoiner {
+        std::vector<std::thread>& threads;
+        ~ThreadJoiner() { for (auto& t : threads) if (t.joinable()) t.join(); }
+    } joiner{workers};
+
     for (unsigned int i = 0; i < num_procs; ++i) {
         workers.emplace_back([&]() {
             try {
@@ -370,10 +376,6 @@ std::vector<StockfishResult> StockfishAnalyzer::analyze_positions(const std::vec
                 }
             }
         });
-    }
-    
-    for (auto& t : workers) {
-        if (t.joinable()) t.join();
     }
     
     if (first_exception) {

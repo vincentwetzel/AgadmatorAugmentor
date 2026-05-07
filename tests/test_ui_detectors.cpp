@@ -8,6 +8,8 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "BoardLocalizer.h"
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
@@ -39,6 +41,8 @@ static std::vector<IntegrationTestResult> g_test_results;
 #define TEST_YELLOW_ARROWS        0
 #define TEST_MISALIGNED_PIECE     0
 #define TEST_GAME_CLOCKS          1
+#define TEST_MEMORY_LIMIT         1
+#define TEST_CACHE_CORRECTNESS    1
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   0
@@ -537,8 +541,30 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    // Expected moves from game.pgn: 1. d4 d5 2. c4 e6 3. Nf3 Nf6 4. g3
-    std::vector<std::string> expected_moves = {"d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3"};
+    const std::string golden_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "golden_7_plies.json").string();
+    
+    std::vector<std::string> expected_moves;
+    if (std::filesystem::exists(golden_path)) {
+        std::ifstream ifs(golden_path);
+        nlohmann::json j;
+        ifs >> j;
+        expected_moves = j["moves"].get<std::vector<std::string>>();
+        
+        std::vector<std::string> expected_fens = j["fens"].get<std::vector<std::string>>();
+        EXPECT_EQ(data.fens, expected_fens) << "FENs do not match golden file!";
+        
+        std::cout << "  Loaded expected baseline from golden file.\n";
+    } else {
+        expected_moves = {"d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3"};
+        nlohmann::json j;
+        j["moves"] = data.moves;
+        j["fens"] = data.fens;
+        j["timestamps"] = data.timestamps;
+        std::ofstream ofs(golden_path);
+        ofs << j.dump(4);
+        std::cout << "  Generated new golden file: " << golden_path << "\n";
+    }
+
     result.plies_expected = static_cast<int>(expected_moves.size());
 
     std::cout << "  Expected (" << expected_moves.size() << "): ";
@@ -568,6 +594,7 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 
 TEST_F(DetectorsTest, MediumGameWithRevert) {
     const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "medium_game_with_analysis_line_and_revert.mp4").string();
+    const std::string golden_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "golden_medium_game_with_revert.json").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -588,13 +615,31 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    // Expected moves from game.pgn:
-    // 1. d4 d5 2. c4 e6 3. Nf3 Nf6 4. g3 Bb4+ 5. Nbd2 a5 6. Bg2 a4
-    // 7. O-O Nc6 8. Qc2 O-O 9. Re1
-    std::vector<std::string> expected_moves = {
-        "d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3", "f8b4",
-        "b1d2", "a7a5", "f1g2", "a5a4", "e1g1", "b8c6", "d1c2", "e8g8", "f1e1"
-    };
+    std::vector<std::string> expected_moves;
+    if (std::filesystem::exists(golden_path)) {
+        std::ifstream ifs(golden_path);
+        nlohmann::json j;
+        ifs >> j;
+        expected_moves = j["moves"].get<std::vector<std::string>>();
+        
+        std::vector<std::string> expected_fens = j["fens"].get<std::vector<std::string>>();
+        EXPECT_EQ(data.fens, expected_fens) << "FENs do not match golden file!";
+        
+        std::cout << "  Loaded expected baseline from golden file.\n";
+    } else {
+        expected_moves = {
+            "d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3", "f8b4",
+            "b1d2", "a7a5", "f1g2", "a5a4", "e1g1", "b8c6", "d1c2", "e8g8", "f1e1"
+        };
+        nlohmann::json j;
+        j["moves"] = data.moves;
+        j["fens"] = data.fens;
+        j["timestamps"] = data.timestamps;
+        std::ofstream ofs(golden_path);
+        ofs << j.dump(4);
+        std::cout << "  Generated new golden file: " << golden_path << "\n";
+    }
+
     result.plies_expected = static_cast<int>(expected_moves.size());
     result.reverts_detected = 1; // This test is known to have one analysis revert
 
@@ -620,5 +665,90 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 }
 
 #endif // TEST_MEDIUM_GAME_REVERT
+
+// ─── MEMORY LIMIT BEHAVIOR ───────────────────────────────────────────────────
+#if TEST_MEMORY_LIMIT
+
+TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "medium_game_with_analysis_line_and_revert.mp4").string();
+
+    if (!std::filesystem::exists(video_path)) {
+        GTEST_SKIP() << "Video not found: " << video_path;
+    }
+
+    std::cout << "\nRunning unit test on memory limit worker count...\n";
+
+    // 250MB limit should restrict it to max 1 worker.
+    ChessVideoExtractor extractor(board_path_, "", DebugLevel::None, 250);
+    
+    int detected_workers = -1;
+    extractor.set_progress_callback([&](int percent, const std::string& msg) {
+        if (msg.find("Launching Map-Reduce visual extraction") != std::string::npos) {
+            size_t start = msg.find("(") + 1;
+            size_t end = msg.find(" workers");
+            if (start != std::string::npos && end != std::string::npos) {
+                detected_workers = std::stoi(msg.substr(start, end - start));
+            }
+        }
+    });
+
+    // Run extraction with immediate cancellation to avoid waiting for the whole video
+    std::atomic<bool> cancel{true};
+    
+    try {
+        extractor.extract_moves_from_video(video_path, "test_mem_limit", &cancel);
+    } catch (...) {
+        // It might throw or exit cleanly upon cancellation, either is fine as long as we got the log
+    }
+
+    EXPECT_NE(detected_workers, -1) << "Did not find Map-Reduce launch log message.";
+    EXPECT_EQ(detected_workers, 1) << "Memory limit of 250MB should restrict worker count to 1.";
+}
+
+#endif // TEST_MEMORY_LIMIT
+
+// ─── CACHE CORRECTNESS TEST ──────────────────────────────────────────────────
+#if TEST_CACHE_CORRECTNESS
+
+TEST_F(DetectorsTest, CacheCorrectness) {
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.mp4").string();
+
+    if (!std::filesystem::exists(video_path)) {
+        GTEST_SKIP() << "Video not found: " << video_path;
+    }
+
+    std::cout << "\nRunning unit test on board caching behavior...\n";
+
+    ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
+    
+    int cache_loads = 0;
+    int multi_pass_searches = 0;
+
+    extractor.set_progress_callback([&](int percent, const std::string& msg) {
+        if (msg.find("Loaded exact board scale from cache") != std::string::npos) {
+            cache_loads++;
+        }
+        if (msg.find("Performing multi-pass template matching") != std::string::npos) {
+            multi_pass_searches++;
+        }
+    });
+
+    std::atomic<bool> cancel{true};
+    
+    // First run might be a hit or miss depending on the environment,
+    // but running it twice guarantees the second run is a hit if caching works.
+    try { extractor.extract_moves_from_video(video_path, "test_cache", &cancel); } catch (...) {}
+    
+    cache_loads = 0;
+    multi_pass_searches = 0;
+    
+    // Second run: must hit the cache
+    try { extractor.extract_moves_from_video(video_path, "test_cache", &cancel); } catch (...) {}
+
+    EXPECT_EQ(cache_loads, 1) << "Second run did not load from cache.";
+    EXPECT_EQ(multi_pass_searches, 0) << "Second run performed multi-pass search instead of using cache.";
+}
+
+#endif // TEST_CACHE_CORRECTNESS
 
 } // namespace cta

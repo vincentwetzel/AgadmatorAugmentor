@@ -10,8 +10,8 @@ struct BoardGeometry;
 
 // ── Batch 64-square mean computation ─────────────────────────────────────────
 
-/// Computes the mean value for all 64 squares in a single pass using
-/// integral image, avoiding 64 separate cv::mean() calls with individual ROIs.
+/// Computes the mean value for all 64 squares using direct ROI cv::mean()
+/// calls. This matches the current allocation-avoidance implementation.
 /// @param img  Single-channel image (e.g. absdiff result)
 /// @param geo  Board geometry
 /// @param margin_h Vertical margin to exclude from each square (edges)
@@ -44,6 +44,12 @@ std::vector<std::string> find_red_squares(const cv::Mat& img_bgr,
                                           const cv::Mat& board_template,
                                           const cv::Mat& red_board_template,
                                           const BoardGeometry& geo);
+
+// ── Promotion piece classification ──────────────────────────────────────────
+
+/// Classifies the type of piece residing on a given square using morphological edge features.
+/// Returns 'q', 'r', 'b', or 'n'. Primarily used to detect underpromotions.
+char classify_promoted_piece(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* sq_name);
 
 // ── Hover box detection ──────────────────────────────────────────────────────
 

@@ -127,11 +127,11 @@ private:
 /// Falls back to CPU gracefully if CUDA is not available.
 ///
 /// Operations accelerated:
-///   - resize       → nppiResize
-///   - absdiff      → nppiAbsDiff
-///   - cvtColor     → nppiColorTwist / nppiBGRToGray
-///   - matchTemplate → nppiCrossCorrNorm
-///   - threshold    → nppiThreshold
+///   - resize_gpu   → nppiResizeSqrPixel
+///   - absdiff      → CPU fallback (experimental NPP disabled)
+///   - cvtColor     → CPU fallback
+///   - matchTemplate → CPU fallback (experimental NPP disabled)
+///   - threshold    → CPU fallback
 ///
 /// Setup (CMakeLists.txt):
 ///   - Detects CUDA 13.2 at: C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2

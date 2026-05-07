@@ -16,7 +16,7 @@ The system is designed for **high accuracy** rather than speed — it treats the
 |----|-------------|
 | BL-1 | The system must locate the chess board within a video frame using template matching against a reference image (`assets/board/board.png`). |
 | BL-2 | Localization must use a **Golden Section Search (GSS)** across three passes: Coarse (0.3×–1.5×, 15 GSS iterations) → Fine (±0.05, 12 iterations) → Exact (±0.01, 12 iterations). Each pass shrinks the bracket interval by 0.618×. A linear fallback activates when both initial bracket points are out-of-bounds. |
-| BL-3 | The algorithm must use `TM_CCOEFF_NORMED` correlation via OpenCV `matchTemplate` (or NPP `nppiCrossCorrFull_Norm` on GPU). |
+| BL-3 | The algorithm must use `TM_CCOEFF_NORMED` correlation via OpenCV `matchTemplate` (or use a sparse sampled correlation grid during GSS to avoid dense template matching overhead). GPU `nppiCrossCorrFull_Norm` is currently disabled. |
 | BL-4 | Passes 1–2 must operate at ¼ resolution for performance; Pass 3 operates at full resolution. |
 | BL-5 | Output must include: top-left corner `(bx, by)`, board dimensions `(bw, bh)`, and per-square dimensions `(sq_w, sq_h)`. |
 | BL-6 | GPU acceleration via NVIDIA NPP must be used when available, with automatic CPU fallback. |
@@ -38,7 +38,7 @@ The system is designed for **high accuracy** rather than speed — it treats the
 |----|-------------|
 | YS-1 | Yellowness must be computed as `(R + G) / 2.0 - B` per pixel (floating-point). |
 | YS-2 | Only the outer 12% corners of each square may be sampled for yellowness scoring. |
-| YS-3 | A move candidate is accepted only if **both** origin and destination squares exceed the yellowness threshold (default: 40.0). |
+| YS-3 | A move candidate is accepted only if it meets the **elastic yellowness threshold**: minimum 25.0 per square, with a combined score ≥ 70.0. |
 | YS-4 | Origin/destination disambiguation must use Canny edge detection: the square with more edges contains the piece (Destination); the other is empty (Origin). |
 
 #### 1.3.2 Red Squares (Streamer Emphasis)
@@ -116,9 +116,9 @@ The system is designed for **high accuracy** rather than speed — it treats the
 | NF-3 | Link-Time Optimization (LTO/IPO) must be enabled for Release builds. |
 | NF-4 | The stable Windows build must not require CUDA-enabled OpenCV or system CUDA/NPP. Experimental GPU acceleration, when enabled, must use NVIDIA NPP directly. |
 | NF-5 | Experimental GPU operations must have automatic CPU fallback on failure or unavailability. |
-| NF-6 | Frame prefetching must use a background thread to hide FFmpeg I/O latency. |
+| NF-6 | Video processing uses a parallel map-reduce model to process video chunks concurrently. The older single-threaded `FramePrefetcher` model has been removed. |
 | NF-7 | Per-frame heap allocations must be minimized via pre-allocated scratch buffers and device-side GPU memory pools (`GPUMat`). |
-| NF-8 | CPU scoring must remain the precision reference path. Optional GPU acceleration may perform NPP `absdiff` and video decode assist, but move scoring must preserve deterministic CPU-side validation behavior. |
+| NF-8 | CPU scoring must remain the precision reference path. Optional GPU acceleration may assist with video decoding, but move scoring must preserve deterministic CPU-side validation behavior (NPP `absdiff` is currently disabled). |
 | NF-9 | The system must compile with vcpkg-managed dependencies: OpenCV, nlohmann_json, CLI11. |
 | NF-10 | A comprehensive test suite using Google Test must be maintained, with integration tests printing a summary table after each run. |
 
@@ -139,7 +139,6 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 | Orchestrator | `ChessVideoExtractor.h/.cpp` | Video scanning loop, move verification, revert detection, JSON output |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp` | UCI engine integration, MultiPV evaluation, PGN variations |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
-| Frame Prefetcher | `FramePrefetcher.h/.cpp` | Async frame pre-decoding in background thread |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
 
@@ -156,14 +155,14 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 │                  ChessVideoExtractor                         │
 │            (Orchestrator — extract_moves_from_video)         │
 │                                                              │
-│  ┌─────────────────────┐   ┌──────────────────────────────┐  │
-│  │   BoardGeometry     │   │      FramePrefetcher          │  │
-│  │  (BoardLocalizer)   │   │  (Background I/O thread)      │  │
-│  └─────────┬───────────┘   └──────────────┬───────────────┘  │
-│            │                              │                   │
-│            ▼                              ▼                   │
+│  ┌─────────────────────┐                                     │
+│  │   BoardGeometry     │                                     │
+│  │  (BoardLocalizer)   │                                     │
+│  └─────────┬───────────┘                                     │
+│            │                                                 │
+│            ▼                                                 │
 │  ┌─────────────────────────────────────────────────────────┐  │
-│  │              Sequential 5 FPS Forward Scanner           │  │
+│  │        Video Scanner (Map-Reduce or Sequential)         │  │
 │  └─────────────────────────┬───────────────────────────────┘  │
 │                            │                                   │
 │            ┌───────────────┼───────────────┐                   │
@@ -232,14 +231,16 @@ Detector code is split into focused modules (soft limit: ~400 lines):
 
 ## 6. Future Scope
 
+For more detailed plans and actionable items related to these future scope features, please refer to the `TODO.md` file in the project root.
+
 | Feature | Status | Description |
 |---------|--------|-------------|
 | Stockfish Analysis | ✅ Implemented | Engine evaluation of positions (Phase 2) |
 | Overlay Rendering | ✅ Implemented | Visual overlays: eval bar, dynamic arrows, PV text (Phase 3) |
 | Video Compositing | ✅ Implemented | Composite overlays onto original video (Phase 4) |
 | Audio Integration | 🔜 Not started | Sound event detection, speech-to-text |
-| Piece Classification | 🔜 Not started | Determine piece types via contour matching |
-| Parallel Agent Architecture | 🔜 Not started | Async, independent processing agents |
+| Piece Classification | 🔜 Not started | Determine piece types via contour matching (detailed plan in TODO.md) |
+| Parallel Agent Architecture | 🔜 Not started | Async, independent processing agents (detailed plan in TODO.md) |
 
 ---
 

@@ -44,16 +44,29 @@ endif()
 project(ChessTubeAnalyzer LANGUAGES CXX)
 
 if(WIN32)
-    set(CHESSTUBE_VCPKG_DYNAMIC_ROOT "E:/vcpkg/installed/x64-windows" CACHE PATH
-        "vcpkg dynamic-triplet root used for Qt/OpenCV runtime consistency")
-    if(EXISTS "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6")
-        set(Qt6_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6" CACHE PATH "Qt6 package directory" FORCE)
-        set(Qt6Core_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Core" CACHE PATH "Qt6Core package directory" FORCE)
-        set(Qt6Gui_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Gui" CACHE PATH "Qt6Gui package directory" FORCE)
-        set(Qt6Widgets_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Widgets" CACHE PATH "Qt6Widgets package directory" FORCE)
+    if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+        set(DEFAULT_VCPKG_DYNAMIC_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+    elseif(DEFINED ENV{VCPKG_ROOT})
+        set(DEFAULT_VCPKG_DYNAMIC_ROOT "$ENV{VCPKG_ROOT}/installed/x64-windows")
+    elseif(CHESSTUBE_VCPKG_ROOT)
+        set(DEFAULT_VCPKG_DYNAMIC_ROOT "${CHESSTUBE_VCPKG_ROOT}/installed/x64-windows")
+    else()
+        set(DEFAULT_VCPKG_DYNAMIC_ROOT "")
     endif()
-    if(EXISTS "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/opencv4")
-        set(OpenCV_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/opencv4" CACHE PATH "OpenCV package directory" FORCE)
+
+    set(CHESSTUBE_VCPKG_DYNAMIC_ROOT "${DEFAULT_VCPKG_DYNAMIC_ROOT}" CACHE PATH
+        "vcpkg dynamic-triplet root used for Qt/OpenCV runtime consistency")
+    
+    if(CHESSTUBE_VCPKG_DYNAMIC_ROOT)
+        if(EXISTS "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6")
+            set(Qt6_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6" CACHE PATH "Qt6 package directory" FORCE)
+            set(Qt6Core_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Core" CACHE PATH "Qt6Core package directory" FORCE)
+            set(Qt6Gui_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Gui" CACHE PATH "Qt6Gui package directory" FORCE)
+            set(Qt6Widgets_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/Qt6Widgets" CACHE PATH "Qt6Widgets package directory" FORCE)
+        endif()
+        if(EXISTS "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/opencv4")
+            set(OpenCV_DIR "${CHESSTUBE_VCPKG_DYNAMIC_ROOT}/share/opencv4" CACHE PATH "OpenCV package directory" FORCE)
+        endif()
     endif()
 endif()
 
@@ -64,7 +77,7 @@ option(ENABLE_PCH "Use precompiled headers to speed up rebuilds" ON)
 option(ENABLE_UNITY_BUILD "Use CMake unity builds for faster full builds" OFF)
 option(BUILD_GUI "Build the Qt GUI target" ON)
 option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" OFF)
-option(ENABLE_SYSTEM_CUDA "Enable direct system CUDA/NPP integration when available" ON)
+option(ENABLE_SYSTEM_CUDA "Enable direct system CUDA/NPP integration when available" OFF)
 option(ENABLE_IPO "Enable interprocedural optimization in Release when supported" OFF)
 
 # The direct system CUDA/NPP path has caused Debug CRT heap assertions during
@@ -366,7 +379,6 @@ add_library(chess_extraction_core
     src/ExtractorUtils.cpp
     src/MoveValidations.cpp
     src/GPUAccelerator.cpp
-    src/FramePrefetcher.cpp
 )
 
 target_include_directories(chess_extraction_core PUBLIC

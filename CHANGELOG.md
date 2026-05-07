@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-25
+
 ### Added
 
+- **New Game Detection:** Implemented logic to detect when the board resets to an initial FEN (`rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1`), treating it as a new game rather than a revert. This prevents incorrect variation tree growth in multi-game videos.
+- **Fast Preview Mode:** Added a "Fast Preview" setting to the GUI, which uses a lower depth and a time limit for Stockfish analysis, allowing for quicker analysis when full depth is not required.
 - **WYSIWYG Overlay Editor:** Added an interactive drag-and-drop editor (`OverlayEditorDialog`) to visually customize the positions and sizes of analysis video elements (board, eval bar, PV text).
 - **Channel-Specific Templates:** Introduced `TemplateManager` to handle multiple layout profiles. Templates auto-select based on video filename keywords and use static reference screenshots for accurate visual positioning.
 - **Promotion Detection:** Added an Auto-Queen heuristic to properly extract 5-character UCI pawn promotions (e.g., `e7e8q`), fixing a bug where engine validation rejected them entirely.
@@ -21,32 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Streamlined GUI:** Removed the Red Board Template file picker from the GUI. The backend now relies entirely on its robust dynamic fallback threshold for detecting streamer red square highlights.
 - **Move Quality Annotations:** Added an optional feature to generate chess.com-style move quality symbols (`!!`, `!`, `?`, `??`, `(Book)`) based on Stockfish centipawn loss evaluations. These are dynamically injected into exported PGNs and Analysis Video overlays.
 - **WebM & VP9 Support:** Added export options for `libvpx-vp9` video and `libopus` audio codecs within WebM/MKV containers, optimized for web playback.
-- **Memory Limit Control:** Added an advanced setting to limit the RAM usage (MB) of the background frame prefetcher.
+- **Memory Limit Control:** Added an advanced setting to limit the number of parallel map-reduce workers to control peak RAM usage.
 - `changelog.md` for tracking project history
 - **File size soft limit** convention (~400 lines) documented in TODO.md
 - **Universal Tooltips:** Added comprehensive hover tooltips to all GUI elements to improve user experience.
 - **Universal Engine Variation Length:** The Stockfish variation length setting now universally applies to both the generated PGN files and the text overlays in the Analysis Video. Video text automatically scales down to fit longer variations.
 
+### Performance
+
+- **Zero-Copy GPU Pipeline:** Implemented an optimized GPU pipeline (`GPUPipeline`) that performs `absdiff` on the GPU, eliminating redundant Host-to-Device copies per frame.
+- **O(1) Perceptual Hashing:** Replaced linear full-image revert scanning with an O(1) 64-square perceptual hash filter, vastly accelerating deep analysis undo-tree handling.
+
 ### Changed
 
+- **Build System:** Migrated the default MSVC runtime linkage from static (`/MT`) to dynamic (`/MD`) using the `x64-windows` vcpkg triplet to prevent cross-module heap assertions.
+- **Improved Parallelism Logging:** The log messages for parallel Stockfish analysis now include the thread ID, making it clear that the analysis is running concurrently.
 - **GUI Target Rename:** Renamed the CMake GUI target from `augmentor_gui` to `analyzer_gui` while preserving the generated executable name, `ChessTube Analyzer.exe`.
 - **Lightweight Editor Backend:** Replaced heavy `QtMultimedia` video playback with static reference screenshots for the overlay editor, eliminating the Qt multimedia dependency and improving stability.
 - **UI Clarity:** Renamed the ambiguous "Video Quality" setting to "Video Compression (CRF)" and updated the dropdown options to clearly explain the trade-off between file size and visual artifacts.
 - **Queue-Level Templates:** Users can now override the auto-selected layout template for individual videos directly via a dropdown in the processing queue.
 
-### Performance
 
-- **Parallel Stockfish Analysis:** Spawns a pool of worker threads (clamped to hardware concurrency) to evaluate unique board FENs concurrently, drastically speeding up bulk analysis.
-- **Hardware Video Decoding:** Explicitly offloads OpenCV frame decoding to NVDEC/QuickSync using `cv::CAP_PROP_HW_ACCELERATION`.
-- **Crop-First Pipeline:** Prevents unnecessary memory bandwidth usage by strictly cropping the 1080p/4K frame to the board ROI before applying Grayscale/HSV color conversions.
-- **Stockfish IPC Latency:** Eliminated artificial 10ms sleep delays during IPC polling, significantly speeding up bulk engine evaluation.
-- **Zero-Allocation Ray Casting:** Re-used static thread-local memory buffers in `ArrowDetector` to eliminate over 2,000 `cv::Mat` heap allocations per frame.
-- **Board Analysis Optimization:** Removed unused full-board floating-point channel math during yellow square extraction.
-- **Vector Pre-allocation:** Pre-allocated synchronized `StockfishResult` arrays in worker threads to prevent expensive vector reallocations.
-- **Sparse Grid Evaluation for Board Localization:** The final, full-resolution pass of the board localization search now uses a fast, sparse uniform grid of sampled points to evaluate correlation, bypassing the overhead of full dense template matching and resolving a significant startup delay.
-- **Golden Section Search for Board Localization** — Replaced linear 67-step scale sweep with O(log N) Golden Section Search (39 iterations: 15+12+12 vs 25+21+21). Linear fallback handles edge cases where both initial bracket points are out-of-bounds. **~42% fewer `matchTemplate` calls** per localization.
-- **Targeted GPU Pipeline Framework** — `GPUPipeline` class with `GPUMat` RAII device memory wrapper. Uses GPU `nppiAbsDiff` where available, then keeps precision-sensitive scoring on the CPU with direct square ROI means.
-- **Hu Moments Digit Recognizer (Replace Tesseract)** — Replaced Tesseract OCR with a Hu moments-based shape classifier. Pre-computed 7-segment display templates, vertical projection character segmentation, and nearest-neighbor classification. Runs in microseconds vs Tesseract's milliseconds. **Eliminates tesseract55.dll, tessdata files, and all Windows dynamic loading code.**
 
 ### Refactored
 
@@ -88,11 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
-| Optimization | Impact |
-|--------------|--------|
-| Board localization downscaling (¼ res passes 1–2) | ~16× faster template matching |
-| Skip settle check for high-confidence moves | 53% total speedup |
-| Combined optimizations | ~26–53% speedup across pipeline |
+- **Stockfish Analysis Cache:** Implemented a file-based cache for Stockfish analysis results. This significantly speeds up re-analysis of videos with similar positions by avoiding redundant engine evaluations.
+- **Per-Phase Timing Telemetry:** Added `ScopedTimer` to log the duration of major pipeline stages (e.g., board localization, move extraction, Stockfish analysis), making it easier to identify performance bottlenecks.
+- **Consolidated Analysis Loop:** Refactored `VideoProcessorWorker` to eliminate a redundant loop that was re-implementing the Stockfish analysis pipeline for move annotation. Annotation is now performed inside the main analysis loop, improving efficiency.
+- **Throttled Progress Logging:** Implemented time-based throttling for FFmpeg progress updates to reduce UI and console churn during video composition.
+- **Index Board-State History by Lightweight Hash:** Implemented a hash map for board states to speed up revert detection, reducing the number of expensive image comparisons by quickly identifying potential matches.
+- **Adaptive Frame Step During Quiet Periods:** `map_worker` now dynamically adjusts its frame-skipping stride. It uses a coarser step during static periods and switches to fine-grained sampling when motion or yellow highlights are detected, reducing processing in pauses.
 
 ### Fixed
 
@@ -156,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/vincentwetzel/chess-tube-analyzer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/vincentwetzel/chess-tube-analyzer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/vincentwetzel/chess-tube-analyzer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vincentwetzel/chess-tube-analyzer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vincentwetzel/chess-tube-analyzer/releases/tag/v0.1.0

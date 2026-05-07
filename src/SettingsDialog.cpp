@@ -139,7 +139,7 @@ void SettingsDialog::setupUi() {
     auto* themeGroup = new QGroupBox("Appearance");
     themeGroup->setToolTip("Customize the look and feel of the application");
     auto* themeLayout = new QHBoxLayout(themeGroup);
-    auto* themeLabel = new QLabel("Theme:");
+    auto* themeLabel = createSettingsLabel("Theme:", "Choose the application's visual color theme");
     themeLayout->addWidget(themeLabel);
     themeComboBox_ = new QComboBox();
     themeComboBox_->addItems({"System", "Light", "Dark"});
@@ -160,7 +160,7 @@ void SettingsDialog::setupUi() {
     auto* encodingLayout = new QVBoxLayout(encodingGroup);
 
     auto* videoCodecLayout = new QHBoxLayout();
-    videoCodecLayout->addWidget(new QLabel("Video Format:"));
+    videoCodecLayout->addWidget(createSettingsLabel("Video Format:", "Select the video compression format. H.264 is recommended for best compatibility."));
     auto* videoCodecComboBox = new QComboBox();
     videoCodecComboBox->setObjectName("videoCodecComboBox");
     videoCodecComboBox->addItems({
@@ -177,7 +177,7 @@ void SettingsDialog::setupUi() {
     encodingLayout->addLayout(videoCodecLayout);
 
     auto* audioCodecLayout = new QHBoxLayout();
-    audioCodecLayout->addWidget(new QLabel("Audio Track:"));
+    audioCodecLayout->addWidget(createSettingsLabel("Audio Track:", "Select the audio format. 'copy' retains original audio without re-encoding."));
     auto* audioCodecComboBox = new QComboBox();
     audioCodecComboBox->setObjectName("audioCodecComboBox");
     audioCodecComboBox->addItems({"copy (Original, Fastest)", "aac (Standard)"});
@@ -188,7 +188,7 @@ void SettingsDialog::setupUi() {
     encodingLayout->addLayout(audioCodecLayout);
 
     auto* extensionLayout = new QHBoxLayout();
-    extensionLayout->addWidget(new QLabel("File Type:"));
+    extensionLayout->addWidget(createSettingsLabel("File Type:", "Select the container format for the output video file."));
     auto* extensionComboBox = new QComboBox();
     extensionComboBox->setObjectName("extensionComboBox");
     extensionComboBox->addItems({".mp4", ".mkv", ".avi", ".mov"});
@@ -199,7 +199,7 @@ void SettingsDialog::setupUi() {
     encodingLayout->addLayout(extensionLayout);
 
     auto* resolutionLayout = new QHBoxLayout();
-    resolutionLayout->addWidget(new QLabel("Output Resolution:"));
+    resolutionLayout->addWidget(createSettingsLabel("Output Resolution:", "Select the output video resolution. Scaling down can save processing time and space."));
     auto* resolutionComboBox = new QComboBox();
     resolutionComboBox->setObjectName("resolutionComboBox");
     resolutionComboBox->addItems({"Source Resolution (No Scaling)", "4K (3840x2160)", "1080p (1920x1080)", "720p (1280x720)"});
@@ -210,7 +210,7 @@ void SettingsDialog::setupUi() {
     encodingLayout->addLayout(resolutionLayout);
 
     auto* qualityLayout = new QHBoxLayout();
-    qualityLayout->addWidget(new QLabel("Video Compression (CRF):"));
+    qualityLayout->addWidget(createSettingsLabel("Video Compression (CRF):", "Controls the Constant Rate Factor (CRF) for FFmpeg video compression."));
     auto* qualityComboBox = new QComboBox();
     qualityComboBox->setObjectName("qualityComboBox");
     qualityComboBox->addItem("Very Low Compression (CRF 18 - Best Quality)", 18);
@@ -239,6 +239,19 @@ void SettingsDialog::setupUi() {
         "Recommended starting point: use 1-2 lines, depth 15, and leave time/nodes unlimited. Raise depth or lines only if you want stronger analysis and do not mind waiting longer.",
         "Beginner guidance for balancing Stockfish strength against processing time"
     ));
+
+    ToggleSwitch* fastPreviewToggle = nullptr;
+    auto* fpRow = createToggleRow("Fast Preview Mode", "Uses a lower depth and strict time limit for much quicker engine analysis, bypassing manual limits below", fastPreviewToggle, false);
+    fastPreviewToggle->setObjectName("fastPreviewToggle");
+    stockfishOptionsLayout->addWidget(fpRow);
+
+    connect(fastPreviewToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
+        if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setEnabled(!checked);
+        if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setEnabled(!checked);
+        if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setEnabled(!checked);
+        emit logMessage(checked ? "Fast Preview enabled (manual limits bypassed)" : "Fast Preview disabled (using manual limits)");
+        saveSettings();
+    });
 
     auto* stockfishPathLayout = new QHBoxLayout();
     stockfishPathLayout->addWidget(createSettingsLabel(
@@ -349,7 +362,7 @@ void SettingsDialog::setupUi() {
     auto* advancedGroupLayout = new QVBoxLayout(advancedGroup);
 
     auto* threadLayout = new QHBoxLayout();
-    threadLayout->addWidget(new QLabel("FFmpeg Decode Threads:"));
+    threadLayout->addWidget(createSettingsLabel("FFmpeg Decode Threads:", "Set the number of CPU threads allocated for video decoding. Higher values increase speed but use more memory."));
     threadSpinBox_ = new QSpinBox();
     threadSpinBox_->setRange(1, 16);
     threadSpinBox_->setToolTip("Set the number of CPU threads allocated for video decoding. Higher values increase speed but use more memory.");
@@ -358,7 +371,7 @@ void SettingsDialog::setupUi() {
     advancedGroupLayout->addLayout(threadLayout);
 
     auto* debugLevelLayout = new QHBoxLayout();
-    debugLevelLayout->addWidget(new QLabel("Debug Image Generation:"));
+    debugLevelLayout->addWidget(createSettingsLabel("Debug Image Generation:", "Select the level of debug images to save to the disk during processing."));
     debugLevelComboBox_ = new QComboBox();
     debugLevelComboBox_->addItems({"None", "Moves Only", "Full"});
     debugLevelComboBox_->setProperty("class", "dropdown");
@@ -368,12 +381,12 @@ void SettingsDialog::setupUi() {
     advancedGroupLayout->addLayout(debugLevelLayout);
 
     auto* memoryLimitLayout = new QHBoxLayout();
-    memoryLimitLayout->addWidget(new QLabel("Memory Limit (MB):"));
+    memoryLimitLayout->addWidget(createSettingsLabel("Memory Limit (MB):", "Limits the number of parallel map-reduce workers to control peak RAM usage. Use 0 for unlimited."));
     auto* memoryLimitSpinBox = new QSpinBox();
     memoryLimitSpinBox->setObjectName("memoryLimitSpinBox");
     memoryLimitSpinBox->setRange(0, 65536);
     memoryLimitSpinBox->setSingleStep(512);
-    memoryLimitSpinBox->setToolTip("Limit the RAM usage of the frame prefetcher in MB. Use 0 for unlimited memory.");
+    memoryLimitSpinBox->setToolTip("Limits the number of parallel map-reduce workers to control peak RAM usage.\nEach worker can hold a chunk of decoded video frames in memory.\nUse 0 for unlimited (uses all available CPU cores).");
     memoryLimitLayout->addWidget(memoryLimitSpinBox);
     memoryLimitLayout->addStretch();
     advancedGroupLayout->addLayout(memoryLimitLayout);
@@ -575,6 +588,14 @@ void SettingsDialog::loadSettings() {
     if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(settings.value("stockfishAnalysisDepth", 5).toInt());
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) p->setText(settings.value("stockfishPath", "").toString());
     
+    if (auto* fp = findChild<ToggleSwitch*>("fastPreviewToggle")) {
+        bool fpEnabled = settings.value("fastPreview", false).toBool();
+        fp->setChecked(fpEnabled);
+        if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setEnabled(!fpEnabled);
+        if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setEnabled(!fpEnabled);
+        if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setEnabled(!fpEnabled);
+    }
+
     debugLevelComboBox_->setCurrentIndex(settings.value("debugLevel", 0).toInt());
     themeComboBox_->setCurrentIndex(settings.value("themeMode", 0).toInt());
 
@@ -643,6 +664,10 @@ void SettingsDialog::saveSettings() {
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) settings.setValue("stockfishPath", p->text());
     settings.setValue("debugLevel", debugLevelComboBox_->currentIndex());
 
+    if (auto* fp = findChild<ToggleSwitch*>("fastPreviewToggle")) {
+        settings.setValue("fastPreview", fp->isChecked());
+    }
+
     if (auto* ss = findChild<QRadioButton*>("sameAsSourceRadio")) settings.setValue("outSameAsSource", ss->isChecked());
     if (auto* cd = findChild<QLineEdit*>("customDirEdit")) settings.setValue("outCustomDir", cd->text());
     if (auto* vc = findChild<QComboBox*>("videoCodecComboBox")) settings.setValue("videoCodec", vc->currentText());
@@ -667,6 +692,14 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
     s.stockfishPath = findChild<QLineEdit*>("stockfishPathEdit") ? findChild<QLineEdit*>("stockfishPathEdit")->text() : "";
     s.debugLevel = debugLevelComboBox_->currentIndex();
     s.memoryLimitMB = findChild<QSpinBox*>("memoryLimitSpinBox") ? findChild<QSpinBox*>("memoryLimitSpinBox")->value() : 0;
+
+    if (auto* fp = findChild<ToggleSwitch*>("fastPreviewToggle")) {
+        if (fp->isChecked()) {
+            s.stockfishDepth = 10;
+            s.stockfishTime = 2; // 2 seconds max
+            s.stockfishNodes = 0;
+        }
+    }
 }
 
 void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {

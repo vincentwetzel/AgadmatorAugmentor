@@ -7,7 +7,7 @@ The ChessTube Analyzer uses a purely visual processing pipeline to analyze chess
 To ensure the system works across varying video resolutions, it locates the board dynamically using the first frame of the video.
 
 - **Golden Section Search (O(log N)):** Replaces the previous linear 67-step scale sweep with GSS across 3 passes: Coarse (0.3×–1.5×, 15 iterations) → Fine (±0.05, 12 iterations) → Exact (±0.01, 12 iterations). Each iteration shrinks the bracket interval by 0.618× (the golden ratio conjugate). **39 total evaluations vs 67 linear steps** (42% fewer `matchTemplate` calls).
-- **Multi-Pass Template Matching:** Uses OpenCV `matchTemplate` (TM_CCOEFF_NORMED) or NPP `nppiCrossCorrFull_Norm` on GPU to compare the video frame against `assets/board/board.png`.
+- **Multi-Pass Template Matching:** Uses OpenCV `matchTemplate` (TM_CCOEFF_NORMED) to compare the video frame against `assets/board/board.png`. (NPP `nppiCrossCorrFull_Norm` on GPU was attempted but is currently disabled).
 - **Downscaled Passes:** Passes 1–2 operate at ¼ resolution (16× faster matchTemplate), with the downscaling also handled by NPP `nppiResizeSqrPixel`.
 - **Sparse Grid Evaluation:** To evaluate a given scale quickly, `eval_scale` resizes the template and samples a sparse uniform grid of points (e.g., 16x16 grid), performing a manual normalized cross-correlation only on those sampled coordinates. This completely circumvents the overhead of full dense template matching during the search iterations.
 - **Linear Fallback:** When both initial GSS bracket points are out-of-bounds (edge case for unusual video dimensions), a linear sweep activates automatically. This also has a GPU-resident equivalent.
@@ -29,7 +29,7 @@ The chess.com UI highlights both the origin and destination squares of every com
 
 - **Mathematical Yellowness:** `(R + G) / 2.0 - B` — suppresses neutral wood colors and skin-tone shadows.
 - **Corner Sampling:** Only the outer 12% corners of each square are tested (center is occluded by pieces).
-- **Strict Validation:** A move candidate is only accepted if **both** its origin and destination squares exceed the yellowness threshold (default: 40.0).
+- **Elastic Validation:** A move candidate is only accepted if its origin and destination squares meet the elastic threshold: a minimum of 25.0 each and a combined score ≥ 70.0. This improves recall on heavily shadowed/occluded squares.
 - **Edge Detection (Piece vs. Empty):** Canny edge detection on highlighted squares determines direction — the square with more edges contains the piece (Destination), the other is empty (Origin).
 
 ### Red Squares (Streamer Emphasis)
@@ -135,12 +135,13 @@ The detector code is split into three focused modules to keep files manageable (
 | Move Validation | `MoveValidations.h/.cpp` | 97 | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
-| Frame Prefetcher | `FramePrefetcher.h/.cpp` | 125 | Async frame pre-decoding in background thread |
 | Template Manager | `TemplateManager.h/.cpp` | ~200 | Overlay template loading, matching, persistence in AppData |
 | Overlay Editor | `OverlayEditorDialog.h/.cpp` | ~450 | Screenshot-based WYSIWYG editor for overlay template layout |
 | Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
+
+*Note: The CMake build system strictly compiles source files from the `src/` directory. The `FramePrefetcher` module has been removed in favor of the map-reduce chunking model. Duplicate `.cpp` files in the project root are also deprecated and ignored.*
 
 ## 9. Attempted Speedup Optimizations
 
@@ -153,17 +154,17 @@ The following optimizations were investigated but abandoned due to correctness r
 | **Batch Frame Prefetch** | Prefetcher decodes 2–3 frames ahead instead of 1 to hide more FFmpeg I/O latency | 🤷 Marginal gains | Single-frame prefetch already overlaps decode with processing. Additional batching showed no proportional performance improvement. |
 | **Custom 64F GPU Integral Kernel** | Write a custom CUDA kernel for 64F integral computation to eliminate the 3.3MB 32F integral download | 🔧 Not started | Requires a separate `.cu` compilation unit and careful device memory management. ROI unclear given current 9.9x real-time performance. |
 
-**Current bottleneck:** Frame decode from the prefetcher at ~15ms/frame. The theoretical minimum for 788 frames at 15ms decode is ~11.8s; the system achieves ~15s with ~3s overhead for scoring, validation, and revert detection.
-
 ## 10. Integrations & Future Scope
+
+For more detailed plans and actionable items related to these future scope features, please refer to the `TODO.md` file in the project root.
 
 - **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — ✅ Implemented). Integrated into PGN generation with configurable MultiPV, depth, and time limits.
 - **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 4 — ✅ Implemented).
 - **Video Compositing:** Composite overlays onto original video (Phase 4 — ✅ Implemented).
 - **Audio Integration:** Using sound templates (`sample_sounds/`) to classify move types (capture, castle, check) and supplement visual detection.
 - **Transcripts & Context:** Aligning detected red squares and yellow arrows with speech-to-text outputs to contextualize streamer commentary.
-- **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection.
-- **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md`.
+- **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection (detailed plan in TODO.md).
+- **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md` (detailed plan in TODO.md).
 
 ## 11. Architectural Trade-offs & Rejected Optimizations
 

@@ -1,8 +1,9 @@
 // Extracted from cpp directory
 #include "ChessVideoExtractor.h"
 #include "UIDetectors.h"
-#include "FramePrefetcher.h"
+#include "BoardAnalysis.h"
 #include "GPUAccelerator.h"
+#include "BoardLocalizer.h"
 #include "ExtractorUtils.h"
 #include "MoveValidations.h"
 #include "libchess/position.hpp"
@@ -13,6 +14,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <cstdlib>
 #include <vector>
 #include <filesystem>
 #include <algorithm>
@@ -106,13 +108,11 @@ ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const 
 
     auto& pos = *pos_ptr_;
 
-    // Get legal moves from libchess
-    auto legal_moves = pos.legal_moves();
-
-    // Thread-local cache to avoid expanding FEN on every scoring call for the same position
+    // Thread-local cache to avoid expanding FEN and generating legal moves on every scoring call
     struct FenCache {
         std::string fen;
         std::array<char, 64> board_map;
+        std::vector<libchess::Move> legal_moves;
     };
     static thread_local FenCache fen_cache;
 
@@ -120,8 +120,13 @@ ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const 
     if (fen_cache.fen != fen) {
         fen_cache.fen = fen;
         fen_cache.board_map = utils::expand_fen(fen);
+        fen_cache.legal_moves.clear();
+        for (const auto& m : pos.legal_moves()) {
+            fen_cache.legal_moves.push_back(m);
+        }
     }
     const std::array<char, 64>& board_map = fen_cache.board_map;
+    const auto& legal_moves = fen_cache.legal_moves;
 
     MoveScore best;
     for (const auto& move : legal_moves) {
@@ -166,10 +171,29 @@ ChessVideoExtractor::MoveScore ChessVideoExtractor::score_moves_for_board(const 
             score += sq_diffs[captured_pawn_sq];
         }
 
-        if (score > best.score) {
+        char move_promo = '\0';
+        char p = board_map[from_sq];
+        if ((p == 'P' && to_sq >= 56) || (p == 'p' && to_sq <= 7)) {
+            libchess::Position temp_pos = pos;
+            temp_pos.makemove(move);
+            std::array<char, 64> board_after = utils::expand_fen(temp_pos.get_fen());
+            move_promo = static_cast<char>(std::tolower(board_after[to_sq]));
+        }
+
+        // Prefer Queen promotion if scores are equal (which they will be for all 4 promotion piece types)
+        bool better_score = score > best.score;
+        bool equal_score_better_promotion = false;
+        if (score == best.score && score > 0) {
+            if (move_promo == 'q' && best.promotion != 'q') {
+                equal_score_better_promotion = true;
+            }
+        }
+
+        if (better_score || equal_score_better_promotion) {
             best.from_sq = from_sq;
             best.to_sq = to_sq;
             best.score = score;
+            best.promotion = move_promo;
         }
     }
     return best;
@@ -234,10 +258,34 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     }
     
     // Free the hardware video decoder instance to save VRAM and avoid contention
-    // (the prefetcher uses its own dedicated VideoCapture instance)
+    // (the map-reduce workers use their own dedicated VideoCapture instances)
     cap.release();
 
-    std::string cache_key = std::filesystem::path(safe_video_path).filename().string() + "_" + std::to_string(static_cast<int>(total_frames));
+    std::error_code ec;
+    auto fsize = std::filesystem::file_size(safe_video_path, ec);
+    auto ftime = std::filesystem::last_write_time(safe_video_path, ec).time_since_epoch().count();
+
+    // Compute a fast FNV-1a hash of the board template to detect if the user changed it
+    size_t template_hash = 0;
+    if (!board_template_.empty()) {
+        cv::Mat continuous_tpl = board_template_.isContinuous() ? board_template_ : board_template_.clone();
+        const uchar* p = continuous_tpl.ptr<uchar>(0);
+        size_t len = continuous_tpl.total() * continuous_tpl.elemSize();
+        size_t hash = 14695981039346656037ull;
+        for (size_t i = 0; i < len; ++i) {
+            hash ^= p[i];
+            hash *= 1099511628211ull;
+        }
+        template_hash = hash;
+    }
+
+    std::string cache_key = std::filesystem::absolute(safe_video_path).string()
+        + "_size=" + std::to_string(fsize)
+        + "_time=" + std::to_string(ftime)
+        + "_frames=" + std::to_string(static_cast<int>(total_frames))
+        + "_video=" + std::to_string(first_frame.cols) + "x" + std::to_string(first_frame.rows)
+        + "_template=" + std::to_string(board_template_.cols) + "x" + std::to_string(board_template_.rows)
+        + "_tplhash=" + std::to_string(template_hash);
     bool loaded_from_cache = false;
     
     std::filesystem::path appdata_dir;
@@ -261,15 +309,26 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             ifs >> j;
             if (j.contains(cache_key)) {
                 auto& c = j[cache_key];
-                geo_ = std::make_unique<BoardGeometry>();
-                geo_->bx = c["bx"];
-                geo_->by = c["by"];
-                geo_->bw = c["bw"];
-                geo_->bh = c["bh"];
-                geo_->sq_w = c["sq_w"];
-                geo_->sq_h = c["sq_h"];
-                loaded_from_cache = true;
-                log_info(utils::ts(elapsed()) + " Loaded exact board scale from cache (skipped multi-pass search).");
+                int bx = c["bx"];
+                int by = c["by"];
+                int bw = c["bw"];
+                int bh = c["bh"];
+
+                // Validate cached geometry against current frame bounds
+                if (bx >= 0 && by >= 0 && bw > 0 && bh > 0 && 
+                    (bx + bw) <= first_frame.cols && (by + bh) <= first_frame.rows) {
+                    geo_ = std::make_unique<BoardGeometry>();
+                    geo_->bx = bx;
+                    geo_->by = by;
+                    geo_->bw = bw;
+                    geo_->bh = bh;
+                    geo_->sq_w = c["sq_w"];
+                    geo_->sq_h = c["sq_h"];
+                    loaded_from_cache = true;
+                    log_info(utils::ts(elapsed()) + " Loaded exact board scale from cache (skipped multi-pass search).");
+                } else {
+                    log_info(utils::ts(elapsed()) + " Cached board geometry is out of bounds for current frame. Ignoring cache.");
+                }
             }
         } catch (...) {
             // Ignore parse errors, fallback to matching
@@ -387,6 +446,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     struct CandidateFrame {
         double t;
         cv::Mat full_bgr;
+        cv::Mat clock_top_bgr;
+        cv::Mat clock_bot_bgr;
         cv::Mat board_bgr;
         cv::Mat board_gray;
     };
@@ -394,70 +455,190 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     double chunk_duration = 30.0;
     int total_chunks = std::max(1, static_cast<int>(std::ceil(duration / chunk_duration)));
 
+    int frame_width = first_frame.cols;
+    int frame_height = first_frame.rows;
+    int roi_x1 = std::max(0, static_cast<int>(geo_->bx + geo_->bw * 0.76));
+    int roi_x2 = std::min(frame_width, static_cast<int>(geo_->bx + geo_->bw));
+    int top_roi_y1 = std::max(0, static_cast<int>(geo_->by - geo_->sq_h * 0.40));
+    int top_roi_y2 = std::max(top_roi_y1 + 1, static_cast<int>(geo_->by - geo_->sq_h * 0.03));
+    int bot_roi_y1 = std::min(frame_height - 1, static_cast<int>(geo_->by + geo_->bh + geo_->sq_h * 0.07));
+    int bot_roi_y2 = std::min(frame_height, static_cast<int>(geo_->by + geo_->bh + geo_->sq_h * 0.40));
+    bool has_clocks = (roi_x2 > roi_x1 && top_roi_y2 > top_roi_y1 && bot_roi_y2 > bot_roi_y1);
+
     int num_threads = std::max(1u, std::thread::hardware_concurrency());
+    
+    int ffmpeg_threads = 1;
+#ifdef _WIN32
+    char* env_val = nullptr;
+    size_t env_len = 0;
+    if (_dupenv_s(&env_val, &env_len, "OPENCV_FFMPEG_THREADS") == 0 && env_val != nullptr) {
+        ffmpeg_threads = std::max(1, std::atoi(env_val));
+        free(env_val);
+    }
+#else
+    const char* env_val = std::getenv("OPENCV_FFMPEG_THREADS");
+    if (env_val) {
+        ffmpeg_threads = std::max(1, std::atoi(env_val));
+    }
+#endif
+
+    // Prevent massive thread contention from OpenCV's internal FFmpeg multi-threading.
+    int max_safe_workers = std::max(1u, static_cast<unsigned int>(std::thread::hardware_concurrency()) / ffmpeg_threads);
+    num_threads = std::min(num_threads, max_safe_workers);
+
     if (memory_limit_mb_ > 0) {
-        // Bound memory (assume ~250MB overhead per active mapped chunk)
-        int max_threads_mem = std::max(1, memory_limit_mb_ / 250);
+        // Bound memory (assume ~500MB overhead per active mapped chunk + VideoCapture context)
+        int max_threads_mem = std::max(1, memory_limit_mb_ / 500);
         num_threads = std::min(num_threads, max_threads_mem);
     }
     num_threads = std::min(num_threads, total_chunks);
 
     std::vector<std::vector<CandidateFrame>> chunk_results(total_chunks);
     std::vector<bool> chunk_done(total_chunks, false);
+    std::atomic<int> current_reducing_chunk{0};
+    std::atomic<bool> map_failed{false};
     std::atomic<int> next_chunk_to_map{0};
     std::mutex results_mutex;
     std::condition_variable results_cv;
 
     log_info(utils::ts(elapsed()) + " Launching Map-Reduce visual extraction (" + std::to_string(num_threads) + " workers, " + std::to_string(total_chunks) + " chunks)...");
 
-    auto map_worker = [&]() {
+    // Static block allocation prevents workers from hopping around the video and
+    // destroying FFmpeg's sequential read efficiency by constantly seeking.
+    int max_lookahead = std::max(12, num_threads * 3);
+
+    auto map_worker = [&](int worker_idx) {
+        // Stagger thread initializations to prevent I/O thrashing when 6 decoders hit the disk at once
+        std::this_thread::sleep_for(std::chrono::milliseconds(worker_idx * 150));
+        
+        cv::VideoCapture cap;
+
+        // Use CPU decoding for workers. Hardware decoding (NVDEC/DXVA) incurs massive 
+        // driver-level synchronization locks and multi-second delays when calling cap.set() 
+        // concurrently across multiple threads.
+        cap.open(safe_video_path, cv::CAP_FFMPEG);
+        if (!cap.isOpened()) {
+            cap.open(safe_video_path, cv::CAP_ANY);
+        }
+        if (!cap.isOpened()) {
+            map_failed = true;
+            std::lock_guard<std::mutex> lock(results_mutex);
+            results_cv.notify_all();
+            return;
+        }
+
         while (true) {
             int chunk_idx = next_chunk_to_map.fetch_add(1);
-            if (chunk_idx >= total_chunks) break;
+            if (chunk_idx >= total_chunks) {
+                break;
+            }
+
+            while (true) {
+                    if (cancel_flag && *cancel_flag) return;
+                    if (map_failed.load()) return;
+
+                int current_red = current_reducing_chunk.load();
+                if (chunk_idx > current_red + max_lookahead) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    } else {
+                        break;
+                }
+            }
+
             if (cancel_flag && *cancel_flag) break;
+            if (map_failed.load()) break;
 
             double start_t = chunk_idx * chunk_duration;
             double end_t = std::min(duration, start_t + chunk_duration);
 
             std::vector<CandidateFrame> local_candidates;
-            cv::VideoCapture cap(safe_video_path, cv::CAP_ANY, { cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY });
-            if (cap.isOpened()) {
+
+            double current_msec = cap.get(cv::CAP_PROP_POS_MSEC);
+            double v_fps = cap.get(cv::CAP_PROP_FPS);
+            if (v_fps <= 0) v_fps = 30.0;
+
+            // Seek only if we are significantly off from the start time.
+            if (std::abs(current_msec - start_t * 1000.0) > 100.0) {
                 cap.set(cv::CAP_PROP_POS_MSEC, start_t * 1000.0);
-                double local_t = start_t;
-                double v_fps = cap.get(cv::CAP_PROP_FPS);
-                int skip = std::max(0, static_cast<int>(std::round((v_fps > 0 ? v_fps : 30.0) * fine_step)) - 1);
+                
+                // OpenCV seeks to the preceding keyframe. We MUST fast-forward to the exact start_t.
+                // Allow massive fast-forward because screen recordings can have 10+ minute keyframe intervals.
+                int max_grabs = static_cast<int>(v_fps * std::max(600.0, start_t + 60.0));
+                int grabs = 0;
+                
+                // Force a single grab so FFmpeg updates internal timestamp properties after the seek
+                cap.grab();
+                double post_seek_msec = cap.get(cv::CAP_PROP_POS_MSEC);
+                
+                if (post_seek_msec <= 0.01 && start_t > 1.0) {
+                    // Timestamps broken or keyframe is exactly at 0.0. Track by frame count.
+                    double target_f = start_t * v_fps;
+                    while (cap.get(cv::CAP_PROP_POS_FRAMES) < target_f && grabs < max_grabs) {
+                        if (cancel_flag && *cancel_flag) break;
+                        if (!cap.grab()) break;
+                        grabs++;
+                    }
+                } else {
+                    // Track by MSEC.
+                    while (cap.get(cv::CAP_PROP_POS_MSEC) < start_t * 1000.0 && grabs < max_grabs) {
+                        if (cancel_flag && *cancel_flag) break;
+                        if (!cap.grab()) break;
+                        grabs++;
+                    }
+                }
+            }
 
-                cv::Mat prev_gray;
-                bool was_move = true; // Force evaluation of the first frame of every chunk
+            double local_t = cap.get(cv::CAP_PROP_POS_MSEC) / 1000.0;
+            // Fallback if the video container doesn't report timestamps correctly
+            if (local_t <= 0.01 && start_t > 1.0) {
+                local_t = cap.get(cv::CAP_PROP_POS_FRAMES) / v_fps;
+                if (local_t <= 0.01) {
+                    local_t = start_t;
+                }
+            }
+            
+            int fine_skip = std::max(0, static_cast<int>(std::round(v_fps * fine_step)) - 1);
 
-                while (local_t < end_t && (!cancel_flag || !*cancel_flag)) {
-                    cv::Mat frame;
-                    if (!cap.read(frame)) break;
+            cv::Mat frame, prev_gray, board_gray, motion_diff, thresh;
+            bool was_move = true; // Force evaluation of the first frame of every chunk
+            
+            while (local_t < end_t && (!cancel_flag || !*cancel_flag)) {
+                if (!cap.read(frame)) break;
 
+                cv::Mat board_bgr_view = frame(cv::Rect(geo_->bx, geo_->by, geo_->bw, geo_->bh));
+                cv::cvtColor(board_bgr_view, board_gray, cv::COLOR_BGR2GRAY);
+
+                bool has_motion = true;
+                if (!prev_gray.empty()) {
+                    cv::absdiff(board_gray, prev_gray, motion_diff);
+                    cv::threshold(motion_diff, thresh, 25.0, 255, cv::THRESH_BINARY);
+                    // Ignore compression artifacts and minor UI animations.
+                    // A moving chess piece covers >1.5% of the board, so 0.5% is a very safe threshold.
+                    if (cv::countNonZero(thresh) < static_cast<int>(board_gray.total() * 0.005)) {
+                        has_motion = false;
+                    }
+                }
+
+                board_gray.copyTo(prev_gray);
+
+                if (has_motion || was_move) {
                     CandidateFrame cf;
                     cf.t = local_t;
-                    cf.full_bgr = frame.clone();
-                    cf.board_bgr = cf.full_bgr(cv::Rect(geo_->bx, geo_->by, geo_->bw, geo_->bh));
-                    cv::cvtColor(cf.board_bgr, cf.board_gray, cv::COLOR_BGR2GRAY);
-
-                    bool has_motion = true;
-                    if (!prev_gray.empty()) {
-                        cv::Mat motion_diff;
-                        cv::absdiff(cf.board_gray, prev_gray, motion_diff);
-                        double max_val = 0;
-                        cv::minMaxLoc(motion_diff, nullptr, &max_val);
-                        if (max_val < 10.0) has_motion = false;
+                    if (debug_level_ != DebugLevel::None) {
+                        cf.full_bgr = frame.clone();
                     }
-                    prev_gray = cf.board_gray;
-
-                    if (has_motion || was_move) {
-                        local_candidates.push_back(cf);
+                    if (has_clocks) {
+                        cf.clock_top_bgr = frame(cv::Rect(roi_x1, top_roi_y1, roi_x2 - roi_x1, top_roi_y2 - top_roi_y1)).clone();
+                        cf.clock_bot_bgr = frame(cv::Rect(roi_x1, bot_roi_y1, roi_x2 - roi_x1, bot_roi_y2 - bot_roi_y1)).clone();
                     }
-                    was_move = has_motion;
-
-                    for (int j = 0; j < skip; ++j) if (!cap.grab()) break;
-                    local_t = round_t(local_t + fine_step);
+                    cf.board_bgr = board_bgr_view.clone();
+                    cf.board_gray = board_gray.clone();
+                    local_candidates.push_back(cf);
                 }
+                was_move = has_motion;
+
+                for (int j = 0; j < fine_skip; ++j) if (!cap.grab()) break;
+                local_t = round_t(local_t + fine_step);
             }
 
             std::lock_guard<std::mutex> lock(results_mutex);
@@ -469,18 +650,30 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     std::vector<std::thread> workers;
     for (int i = 0; i < num_threads; ++i) {
-        workers.emplace_back(map_worker);
+        workers.emplace_back(map_worker, i);
     }
+    
+    // RAII joiner to ensure threads are always safely joined even if an exception is thrown
+    struct ThreadJoiner {
+        std::vector<std::thread>& threads;
+        ~ThreadJoiner() { for (auto& t : threads) if (t.joinable()) t.join(); }
+    } joiner{workers};
 
     double last_progress_t = -1.0;
     
     for (int current_chunk = 0; current_chunk < total_chunks; ++current_chunk) {
+        current_reducing_chunk.store(current_chunk);
+
         std::unique_lock<std::mutex> lock(results_mutex);
-        results_cv.wait(lock, [&]{ return chunk_done[current_chunk] || (cancel_flag && *cancel_flag); });
+        results_cv.wait(lock, [&]{ return chunk_done[current_chunk] || (cancel_flag && *cancel_flag) || map_failed.load(); });
         
         if (cancel_flag && *cancel_flag) {
             log_info("\nExtraction cancelled by user.");
             break;
+        }
+        
+        if (map_failed) {
+            throw std::runtime_error("Worker thread failed to open VideoCapture for a chunk.");
         }
 
         // Take ownership of the candidates, freeing memory for the vector once out of chunk scope
@@ -515,7 +708,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
         std::vector<double> sq_means;
         double max_sd = 0;
-        cv::Mat diff;
+        static thread_local cv::Mat diff;
 
         // Compute the accurate diff against the anchored pristine snapshot (prev_gray),
         // which is essential for correct move scoring and rejecting partial animations.
@@ -550,26 +743,18 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     if (max_hash_diff >= 15.0) continue; // Guaranteed to not match
 
                     // Passed fast filter, do full verification
-                    cv::Mat d;
+                    static thread_local cv::Mat d;
                     GPUAccelerator::absdiff(board_gray, board_image_history[idx], d);
+                    double mean_diff = cv::mean(d)[0];
 
-                    double sq_diff = 0.0;
-                    double max_d_val = 0;
-                    cv::minMaxLoc(d, nullptr, &max_d_val);
-                    if (max_d_val >= 15.0) {
-                        auto hist_sq_means = compute_all_square_means(d, *geo_, margin_h_, margin_w_);
-                        for (double sd : hist_sq_means) {
-                            if (sd > sq_diff) sq_diff = sd;
-                        }
-                    }
-
-                    if (sq_diff < best_diff_val) {
-                        best_diff_val = sq_diff;
+                    if (mean_diff < best_diff_val) {
+                        best_diff_val = mean_diff;
                         best_idx = idx;
                     }
                 }
 
-                if (best_idx >= 0 && best_diff_val < 15.0) {
+                // A mean pixel difference < 3.0 indicates a near-identical board state.
+                if (best_idx >= 0 && best_diff_val < 3.0) {
                     ++branch_counter;
                     int reverted_count = static_cast<int>(data.moves.size()) - best_idx;
                     log_info("\n" + utils::ts(elapsed()) + " --- ANALYSIS REVERT at " + std::to_string(t) + "s (board matched past state) ---");
@@ -631,8 +816,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     found_settle = true;
                 } else if (current_chunk + 1 < total_chunks) {
                     std::unique_lock<std::mutex> nx_lock(results_mutex);
-                    results_cv.wait(nx_lock, [&]{ return chunk_done[current_chunk + 1] || (cancel_flag && *cancel_flag); });
+                    results_cv.wait(nx_lock, [&]{ return chunk_done[current_chunk + 1] || (cancel_flag && *cancel_flag) || map_failed.load(); });
                     if (cancel_flag && *cancel_flag) break;
+                    if (map_failed.load()) break;
                     if (!chunk_results[current_chunk + 1].empty()) {
                         settle_cf = chunk_results[current_chunk + 1].front();
                         found_settle = true;
@@ -640,7 +826,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 }
 
                 if (found_settle) {
-                    cv::Mat settle_diff;
+                    static thread_local cv::Mat settle_diff;
                     GPUAccelerator::absdiff(settle_cf.board_gray, board_image_history.back(), settle_diff);
                     auto settle_sq_means = compute_all_square_means(settle_diff, *geo_, margin_h_, margin_w_);
                     auto settle_best_tmp = score_moves_for_board(settle_sq_means);
@@ -653,6 +839,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             board_gray = settle_cf.board_gray;
                             board_bgr = settle_cf.board_bgr;
                             full_bgr = settle_cf.full_bgr;
+                            cf.clock_top_bgr = settle_cf.clock_top_bgr;
+                            cf.clock_bot_bgr = settle_cf.clock_bot_bgr;
                             diff = settle_diff;
                             best = settle_best_tmp;
                             from_name = settle_from;
@@ -678,6 +866,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         }
                     }
                 }
+            }
+
+            // If it's a promotion, visually classify the piece type on the destination square post-settling
+            if (best.promotion != '\0') {
+                best.promotion = classify_promoted_piece(board_bgr, *geo_, to_name);
+                move_uci.back() = best.promotion; // Update the trailing 'q' with the true piece
             }
 
             // Inverse move filter: reject if this is the reverse of a recent move
@@ -712,9 +906,11 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             // ── Validation 1: Yellow square check ────────────────────────────
             double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
             double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
-            if (y_from < 40.0 || y_to < 40.0) {
+            
+            // Elastic threshold: allow one square to dip to 25.0 if the other is strong, requiring a combined score of 70.0
+            if (y_from < 25.0 || y_to < 25.0 || (y_from + y_to) < 70.0) {
                 if (debug_level_ != DebugLevel::None) {
-                    log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Missing yellow highlights)");
+                    log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Missing yellow highlights: from=" + std::to_string(std::round(y_from)) + ", to=" + std::to_string(std::round(y_to)) + ")");
                 }
                 continue;
             }
@@ -729,7 +925,17 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             // ── Validation 3: Clock turn check ───────────────────────────────
-            ClockState clocks = extract_clocks(full_bgr, board_template_, *geo_, clock_cache_.get());
+            cv::Mat fake_full_bgr;
+            if (debug_level_ != DebugLevel::None) {
+                fake_full_bgr = full_bgr;
+            } else {
+                fake_full_bgr = cv::Mat::zeros(frame_height, frame_width, CV_8UC3);
+                if (has_clocks && !cf.clock_top_bgr.empty() && !cf.clock_bot_bgr.empty()) {
+                    cf.clock_top_bgr.copyTo(fake_full_bgr(cv::Rect(roi_x1, top_roi_y1, roi_x2 - roi_x1, top_roi_y2 - top_roi_y1)));
+                    cf.clock_bot_bgr.copyTo(fake_full_bgr(cv::Rect(roi_x1, bot_roi_y1, roi_x2 - roi_x1, bot_roi_y2 - bot_roi_y1)));
+                }
+            }
+            ClockState clocks = extract_clocks(fake_full_bgr, board_template_, *geo_, clock_cache_.get());
             if (!clocks.active_player.empty()) {
                 std::string expected = (pos_ptr_->turn() == libchess::Side::White) ? "black" : "white";
                 if (clocks.active_player != expected) {
@@ -803,8 +1009,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     uci += utils::sq_name(f);
                     uci += utils::sq_name(to);
                     char p = board_map[f];
-                    if (p == 'P' && to >= 56) uci += 'q';
-                    else if (p == 'p' && to <= 7) uci += 'q';
+                    if ((p == 'P' && to >= 56) || (p == 'p' && to <= 7)) {
+                        libchess::Position temp_pos = *pos_ptr_;
+                        temp_pos.makemove(m);
+                        std::array<char, 64> board_after = utils::expand_fen(temp_pos.get_fen());
+                        uci += static_cast<char>(std::tolower(board_after[to]));
+                    }
                     cands.push_back({std::move(uci), s});
                 }
                 
@@ -826,7 +1036,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             // Update FEN, board image history, and clock history
             data.fens.push_back(pos_ptr_->get_fen());
             data.video_fens.push_back(pos_ptr_->get_fen());
-            board_image_history.push_back(board_gray);
+            board_image_history.push_back(board_gray.clone());
             if (hash_computed) {
                 history_hashes.push_back(current_hash);
             } else {
@@ -846,10 +1056,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             continue;
         }
         }
-    }
-
-    for (auto& w : workers) {
-        if (w.joinable()) w.join();
     }
 
     // Final progress line

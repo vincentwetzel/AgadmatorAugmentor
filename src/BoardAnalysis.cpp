@@ -22,6 +22,9 @@ std::vector<double> compute_all_square_means(const cv::Mat& img,
     const int sq_w = static_cast<int>(geo.sq_w);
     const int sq_h = static_cast<int>(geo.sq_h);
 
+    cv::Mat integral;
+    cv::integral(img, integral, CV_32S);
+
     for (int row = 0; row < 8; ++row) {
         for (int col = 0; col < 8; ++col) {
             int y1 = row * sq_h + margin_h;
@@ -36,8 +39,11 @@ std::vector<double> compute_all_square_means(const cv::Mat& img,
 
             int area = (y2 - y1) * (x2 - x1);
             if (area > 0) {
-                cv::Mat roi = img(cv::Rect(x1, y1, x2 - x1, y2 - y1));
-                means[(7 - row) * 8 + col] = cv::mean(roi)[0];
+                int sum = integral.at<int>(y2, x2) 
+                        - integral.at<int>(y1, x2) 
+                        - integral.at<int>(y2, x1) 
+                        + integral.at<int>(y1, x1);
+                means[(7 - row) * 8 + col] = static_cast<double>(sum) / area;
             } else {
                 means[(7 - row) * 8 + col] = 0.0;
             }
@@ -247,6 +253,68 @@ std::vector<std::string> find_red_squares(const cv::Mat& img_bgr,
     }
     std::sort(red_squares.begin(), red_squares.end());
     return red_squares;
+}
+
+// ── Promotion piece classification ──────────────────────────────────────────
+
+char classify_promoted_piece(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* sq_name) {
+    int col = sq_name[0] - 'a';
+    int rank = sq_name[1] - '1';
+    int row = 7 - rank;
+    
+    // Extract the central 80% of the square to avoid cell borders
+    int y1 = static_cast<int>(row * geo.sq_h + geo.sq_h * 0.1);
+    int y2 = static_cast<int>((row + 1) * geo.sq_h - geo.sq_h * 0.1);
+    int x1 = static_cast<int>(col * geo.sq_w + geo.sq_w * 0.1);
+    int x2 = static_cast<int>((col + 1) * geo.sq_w - geo.sq_w * 0.1);
+
+    int fh = board_bgr.rows, fw = board_bgr.cols;
+    x1 = std::max(0, std::min(x1, fw - 1));
+    y1 = std::max(0, std::min(y1, fh - 1));
+    x2 = std::max(x1 + 1, std::min(x2, fw));
+    y2 = std::max(y1 + 1, std::min(y2, fh));
+
+    if (x2 <= x1 || y2 <= y1) return 'q'; // Fallback
+
+    cv::Mat sq = board_bgr(cv::Rect(x1, y1, x2 - x1, y2 - y1));
+    cv::Mat gray;
+    cv::cvtColor(sq, gray, cv::COLOR_BGR2GRAY);
+    cv::Mat edges;
+    cv::Canny(gray, edges, 50, 150);
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(edges, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    if (contours.empty()) return 'q';
+
+    double max_area = 0;
+    cv::Rect best_rect;
+    for (const auto& c : contours) {
+        cv::Rect r = cv::boundingRect(c);
+        double area = r.width * r.height;
+        if (area > max_area) {
+            max_area = area;
+            best_rect = r;
+        }
+    }
+
+    if (max_area < (geo.sq_w * geo.sq_h * 0.1)) return 'q'; // Too small, default to queen
+
+    double aspect = static_cast<double>(best_rect.width) / std::max(1, best_rect.height);
+
+    // Heuristics based on bounding box proportions
+    if (aspect < 0.65) return 'b'; // Bishops are tall and slender
+    if (aspect > 0.88) return 'q'; // Queens are very wide and triangular at the top
+    
+    // Distinguish Rook vs Knight for medium aspect ratios (0.65 - 0.88)
+    int top_y = best_rect.y;
+    int top_h = std::max(1, static_cast<int>(best_rect.height * 0.25)); // Top 25%
+    cv::Mat top_region = edges(cv::Rect(best_rect.x, top_y, best_rect.width, top_h));
+    int top_pixels = cv::countNonZero(top_region);
+    double top_density = static_cast<double>(top_pixels) / (best_rect.width * top_h);
+
+    // Rooks have a flat, wide crenellated top resulting in higher edge density.
+    // Knights have a sloped/asymmetric top (horse head) with lower edge density.
+    return (top_density > 0.25) ? 'r' : 'n';
 }
 
 // ── Hover box detection ──────────────────────────────────────────────────────

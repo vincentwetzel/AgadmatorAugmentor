@@ -14,7 +14,7 @@ ChessTube Analyzer treats the chess.com UI as a deterministic visual state machi
 - **Clock Recognition:** Hu Moments digit OCR with no Tesseract dependency.
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
 - **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
-- **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits.
+- **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
 - **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, and engine arrows into an annotated MP4.
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
@@ -55,7 +55,7 @@ Do not rerun CMake with a different generator platform against an existing `buil
 
 The project contains an optional CUDA/NPP acceleration layer (`GPUAccelerator` + `GPUPipeline`) that is auto-detected when the NVIDIA CUDA Toolkit is installed. The supported path keeps CPU fallbacks for every operation, so a normal OpenCV/vcpkg build does not require CUDA-enabled OpenCV.
 
-Current GPU work focuses on safe, targeted acceleration: hardware video decode requests through OpenCV/FFmpeg, NPP `absdiff` where available, and CPU-side scoring for precision-sensitive move validation.
+Current GPU work focuses on safe, targeted acceleration: hardware video decode requests through OpenCV/FFmpeg, and CPU-side scoring for precision-sensitive move validation. (NPP `absdiff` and `matchTemplate` were experimentally attempted but are currently disabled as fallbacks pending header compatibility fixes).
 
 ## Run
 
@@ -145,6 +145,8 @@ ChessTubeAnalyzer/
 `-- agents.md
 ```
 
+*Note: The CMake build system strictly compiles source files from the `src/` directory. Duplicate `.cpp` files in the project root are deprecated and ignored.*
+
 ## Pipeline
 
 1. **Board Localization:** Golden Section Search across coarse, fine, and exact passes. Scale evaluation uses sparse sampled correlation to avoid dense full-frame template matching during search.
@@ -171,9 +173,9 @@ All tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the
 
 | Metric | Value |
 |--------|-------|
-| Medium game (2m37s, 17 plies) | ~15s processing in current roadmap notes |
-| Board localization | Sparse GSS exact pass |
-| Analysis video generation | Static overlays plus FFmpeg mux/composite |
+| 9.9x Real-Time Extraction | 15s processing for a 2m37s benchmark video (17 plies). Hardware: 8-core CPU, 16 threads. Build: Release LTO. |
+| Board localization | Sparse GSS exact pass (39 evaluations vs 67) |
+| Analysis video generation | Static overlays plus FFmpeg mux/composite (~1000x speedup vs per-frame) |
 | Integration coverage | 7-ply and medium-game revert scenarios |
 
 See [architecture.md](architecture.md), [SPEC.md](SPEC.md), and [docs/USAGE.md](docs/USAGE.md) for more detail.

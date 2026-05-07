@@ -43,6 +43,7 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Select an output directory.
 - Toggle PGN, Stockfish analysis, move quality annotations, and analysis video generation.
 - Configure Stockfish MultiPV, depth, time, node, and variation-length limits.
+- Enable Fast Preview mode for rapid processing with bounded engine limits.
 - Automatically find or manually specify the Stockfish executable.
 - Manage channel-specific overlay templates with a screenshot-based editor.
 - Override the auto-detected template per queue item.

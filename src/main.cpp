@@ -4,6 +4,7 @@
 #include <CLI/CLI.hpp>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 
 #include <string>
 #include <thread>
@@ -116,6 +117,11 @@ int main(int argc, char* argv[]) {
         }
 
         std::string pgnContent = pgn.build();
+        std::filesystem::path out_path(output);
+        if (out_path.has_parent_path()) {
+            std::filesystem::create_directories(out_path.parent_path());
+        }
+        
         std::ofstream pgnFile(output);
         if (pgnFile.is_open()) {
             pgnFile << pgnContent;

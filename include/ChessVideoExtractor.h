@@ -10,7 +10,7 @@
 
 // Forward declarations to avoid including heavy headers
 namespace libchess { class Position; }
-namespace cta { class FramePrefetcher; class GPUPipeline; struct BoardGeometry; struct ClockCache; }
+namespace cta { class GPUPipeline; struct BoardGeometry; struct ClockCache; }
 
 namespace cta {
 
@@ -82,7 +82,6 @@ private:
     bool gpu_pipeline_active_ = false;
     std::unique_ptr<ClockCache> clock_cache_;
     std::unique_ptr<libchess::Position> pos_ptr_;
-    std::unique_ptr<FramePrefetcher> prefetcher_;
     std::unique_ptr<ScratchBuffers> scratch_;
     ProgressCallback progress_callback_;
 };

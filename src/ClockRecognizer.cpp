@@ -304,21 +304,22 @@ static std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
     if (roi_bgr.empty()) return "";
 
     cv::Mat scaled;
-    cv::resize(roi_bgr, scaled, cv::Size(), 4.0, 4.0, cv::INTER_CUBIC);
+    cv::resize(roi_bgr, scaled, cv::Size(), 3.0, 3.0, cv::INTER_CUBIC);
 
     cv::Mat gray;
     cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
 
     cv::Mat thresh;
     if (is_active) {
-        cv::threshold(gray, thresh, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
+        // Dark text on a bright background (active player clock)
+        cv::adaptiveThreshold(gray, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY_INV, 21, 10);
     } else {
-        cv::threshold(gray, thresh, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+        // Bright text on a dark background (inactive player clock)
+        cv::adaptiveThreshold(gray, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 21, -10);
     }
 
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2, 2));
     cv::morphologyEx(thresh, thresh, cv::MORPH_CLOSE, kernel);
-    cv::morphologyEx(thresh, thresh, cv::MORPH_OPEN, kernel);
 
     auto boxes = extract_character_boxes(thresh);
     if (boxes.empty()) return "";

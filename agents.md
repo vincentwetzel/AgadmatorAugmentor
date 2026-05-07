@@ -44,12 +44,12 @@ Acts as the game logic authority and state machine filter.
   - **Yellow square check:** Both origin and destination must be highlighted.
   - **Hover box check:** Reject frames where a piece is mid-drag.
   - **Clock turn check:** Active player must match expected turn.
-- Detects **analysis reverts** by matching current board grayscale against `board_image_history`, snapping back to the correct ply when the streamer undoes moves.
+- Detects **analysis reverts** by using an O(1) perceptual hash filter followed by a full-image structural comparison against `board_image_history`, snapping back to the correct ply when the streamer undoes moves.
 - Filters out sensory hallucinations and false positives, ensuring the output is 100% legal and accurate.
 
 ### Output
 
-Produces a rich PGN file containing the full game, including moves, clock times, and optional Stockfish analysis variations. The intermediate JSON file is no longer written to disk.
+Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN and Analysis Video). The intermediate JSON file is no longer written to disk.
 
 ## 3. The Commentary Agent — 🔜 Future
 
@@ -65,7 +65,12 @@ Designed to contextualize the human element of the video.
 
 ### Current Foundation
 
-Red square and yellow arrow detection are fully implemented and produce structured output. Audio processing and speech-to-text are not yet integrated.
+Red square and yellow arrow detection are fully implemented and produce structured output.
+
+**Integration Plan:**
+- **Speech-to-Text:** Utilize `whisper.cpp` to run local, privacy-respecting transcriptions of the extracted audio track.
+- **NLP Correlation:** Pass the transcript alongside the timeline of UI events (red squares, arrows) to a lightweight local LLM (e.g., `llama.cpp`) to generate natural language commentary for the PGN.
+- **Sound Events:** A fast Fourier transform (FFT) or simple amplitude envelope pass will correlate piece capture/check sounds from `sample_sounds/` with the visual move frames to increase extraction confidence.
 
 ## 4. The Stockfish Analysis Agent — ✅ Implemented
 
@@ -126,7 +131,6 @@ Raw Video
 | Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
-| Frame I/O | `FramePrefetcher.h/.cpp` |
 | Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp` |
 | Output Generation | `PgnWriter.h/.cpp`, `ImageWriteUtils.h/.cpp` |
 | GUI & Orchestration | `MainWindow*.cpp`, `VideoProcessorWorker.h/.cpp` |
@@ -134,11 +138,17 @@ Raw Video
 
 ## Future: Parallel Agent Architecture
 
-The current implementation is a linear pipeline. The long-term vision is a set of independent, asynchronously running agents:
+The current implementation uses a highly optimized map-reduce chunking model for visual extraction, followed by parallel pool processing for Stockfish analysis. The long-term vision (Phase 5) transitions the system into a set of completely independent, asynchronously running agents communicating via a thread-safe message queue (e.g., ZeroMQ or `std::mpsc` channels).
 
-- **Extraction** and **Verification** could run as a coupled pair (tight feedback loop).
-- **Commentary** could process audio in parallel while visual extraction runs.
-- **Analysis Video generation** could start rendering overlays as soon as the first batch of verified moves is available, without waiting for the full video to be processed.
+### Proposed Topology
+
+1. **Event Bus (The Orchestrator):** A central lock-free queue that accepts events like `FrameDecoded`, `MoveCandidateProposed`, `EngineEvaluated`, and `AudioTranscribed`.
+2. **Extraction Agent Node:** Subscribes to the video stream. Emits `MoveCandidateProposed` events. Can run multiple workers for different video chunks.
+3. **Verification Agent Node:** Subscribes to `MoveCandidateProposed`. Maintains strict linear state. Emits `MoveVerified` or triggers a `RevertRequested` event.
+4. **Analysis Agent Node:** Subscribes to `MoveVerified`. Processes FENs through Stockfish and emits `EngineEvaluated` events.
+5. **Compositor Agent Node:** Subscribes to `MoveVerified` and `EngineEvaluated`. Assembles static FFmpeg overlays eagerly as data arrives, rather than waiting for the entire video to finish.
+
+This topology allows rendering and engine analysis to begin immediately after the first plies are discovered, minimizing tail latency at the end of video processing.
 
 ---
 

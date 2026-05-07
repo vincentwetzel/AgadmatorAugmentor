@@ -376,14 +376,17 @@ void OverlayEditorDialog::setupUi() {
     row1->addWidget(new QLabel("Template:"));
     templateCombo_ = new QComboBox();
     templateCombo_->setMinimumWidth(200);
+    templateCombo_->setToolTip("Select an overlay template to edit or view.");
     connect(templateCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OverlayEditorDialog::onTemplateChanged);
     row1->addWidget(templateCombo_);
     
     newTemplateBtn_ = new QPushButton("New Template");
+    newTemplateBtn_->setToolTip("Create a new custom overlay template.");
     connect(newTemplateBtn_, &QPushButton::clicked, this, &OverlayEditorDialog::onNewTemplate);
     row1->addWidget(newTemplateBtn_);
     
     deleteTemplateBtn_ = new QPushButton("Delete");
+    deleteTemplateBtn_->setToolTip("Delete the currently selected custom template.");
     connect(deleteTemplateBtn_, &QPushButton::clicked, this, &OverlayEditorDialog::onDeleteTemplate);
     row1->addWidget(deleteTemplateBtn_);
     
@@ -407,6 +410,7 @@ void OverlayEditorDialog::setupUi() {
     auto* row2 = new QHBoxLayout();
     row2->addWidget(new QLabel("Name:"));
     templateNameEdit_ = new QLineEdit();
+    templateNameEdit_->setToolTip("The display name for the template. Built-in templates cannot be renamed.");
     row2->addWidget(templateNameEdit_);
     
     row2->addWidget(new QLabel("Keywords:"));

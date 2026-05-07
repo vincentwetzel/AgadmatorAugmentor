@@ -1,59 +1,108 @@
-# Compiled Object files, Static and Dynamic libs
-*.o
-*.ko
-*.obj
-*.elfls
-*.a
-*.la
-*.lo
-*.lib
-*.so
-*.so.*
-*.dylib
-*.dll
-*.pdb
-*.exp
-
-# Executables
-*.exe
-*.out
-*.app
-
-# CMake
+# CMake / Build directories
 build/
 build-*/
-build_*/
+cmake-build-*/
+build_cpu/
+build_dyn/
+build_zero_copy/
+out/
+temp/
+bin/
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
-Makefile
+Testing/
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
+CTestTestfile.cmake
+_deps/
+CPackConfig.cmake
+CPackSourceConfig.cmake
+.cmake/
 
-# Qt
-moc_*.cpp
-qrc_*.cpp
-ui_*.h
-
-# IDEs & OS
-.idea/
-.vscode/
+# Visual Studio / IDEs
 .vs/
-.qwen/
+.vscode/
 .VSCodeCounter/
+.idea/
+.qwen/
+*.user
 *.suo
 *.sln
-.DS_Store
-Thumbs.db
+*.sln.docstates
+*.vcxproj
+*.vcxproj.filters
+*.tlog
+*.log
+*.idb
+*.pdb
+*.ilk
+*.obj
+*.o
+*.opendb
+*.VC.db
+*.userosscache
+.clangd/
+.ccls-cache/
 
-# Project specific generated files & media
+# Compiled Binaries & Libraries
+*.exe
+*.exp
+*.dll
+*.lib
+*.so
+*.dylib
+*.a
+*.app/
+
+# Vcpkg
+vcpkg_installed/
+.vcpkg-root
+.vcpkg/
+
+# Qt / Generated files
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+Makefile*
+*.qm
+CMakeLists.txt.user
+*.pro.user
+*.qmake.stash
+*.qmake.cache
+
+# Output / Generated analysis
 output/
 debug_screenshots/
-temp/
-vcpkg_installed/
+analysis.json
 *.pgn
+
+# Video files (prevents accidental commits of large test files)
 *.mp4
 *.mkv
 *.avi
+*.mov
 *.webm
+
+# Logs & Crash dumps
+*.crash
+*.dmp
+*.core
+.cache/
+
+# Temporary / OS files
+*.swp
+*.swo
+*~
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
