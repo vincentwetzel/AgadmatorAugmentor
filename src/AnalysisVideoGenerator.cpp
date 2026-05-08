@@ -695,9 +695,17 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     }
 #endif
 
-    bool use_hwaccel = has_nvidia_gpu || has_amd_gpu || has_intel_gpu || vCodec.find("nvenc") != std::string::npos;
+    const bool has_alpha_overlays = draw_main_arrows || overlay_config.pvText.enabled;
+    const bool use_cuda_filters = has_nvidia_gpu && !has_alpha_overlays;
+    bool use_hwaccel = use_cuda_filters;
+
+    std::string hw_init_args = "";
+    if (use_cuda_filters) {
+        hw_init_args = "-init_hw_device cuda=cuda:0 -filter_hw_device cuda ";
+    }
+
     std::string hwaccel_arg = use_hwaccel ? "-hwaccel auto " : "";
-    std::string input_args_str = "-y " + hwaccel_arg + "-i \"" + input_video_path + "\" ";
+    std::string input_args_str = "-y " + hw_init_args + hwaccel_arg + "-i \"" + input_video_path + "\" ";
 
     if (overlay_config.board.enabled) {
         input_args_str += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
@@ -716,39 +724,52 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         arrows_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
 
-    // Compose advanced FFMPEG CPU Filter Graph using the builder
-    FFmpegFilterGraph graph;
+    HardwareAccelerationType hw_type = HardwareAccelerationType::None;
+    if (use_hwaccel) {
+        if (use_cuda_filters) hw_type = HardwareAccelerationType::NVDEC_CUDA;
+    }
+
+    bool is_hw_overlay = (hw_type == HardwareAccelerationType::NVDEC_CUDA);
+
+    // Compose advanced FFMPEG Filter Graph using the builder
+    FFmpegFilterGraph graph(hw_type);
     std::string current_bg = "[0:v]";
     
     if (draw_main_arrows) {
-        graph.add_filter(arrows_stream, "format=rgba", "[main_arrows_rgba]");
-        graph.add_filter(current_bg + "[main_arrows_rgba]", "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by) + ":format=auto", "[bg_arr]");
+        std::string arr_fmt = graph.add_filter(arrows_stream, "format=bgra", "[arr_bgra]");
+        graph.add_filter(current_bg + arr_fmt, "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by), "[bg_arr]", is_hw_overlay);
         current_bg = "[bg_arr]";
     }
 
     if (overlay_config.pvText.enabled) {
         graph.add_filter(current_bg, "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(text_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(text_h) + ":color=black@0.6:t=fill", "[bg_box]");
-        graph.add_filter(text_stream, "colorkey=black:0.01:0.5", "[txt_alpha]");
-        graph.add_filter("[bg_box][txt_alpha]", "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]");
+        std::string txt_fmt = graph.add_filter(text_stream, "colorkey=black:0.01:0.5,format=bgra", "[txt_bgra]");
+        graph.add_filter("[bg_box]" + txt_fmt, "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]", is_hw_overlay);
         current_bg = "[bg_txt]";
     }
 
     if (overlay_config.board.enabled) {
-        graph.add_filter(current_bg + board_stream, "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(board_y_pos), "[bg_brd]");
+        std::string board_fmt = graph.add_filter(board_stream, "format=nv12", "[brd_nv12]");
+        graph.add_filter(current_bg + board_fmt, "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(board_y_pos), "[bg_brd]", is_hw_overlay);
         current_bg = "[bg_brd]";
     }
     
     std::string scale_str = "";
-    if (resolution.find("1920x1080") != std::string::npos) scale_str = ",scale=1920:-2";
-    else if (resolution.find("1280x720") != std::string::npos) scale_str = ",scale=1280:-2";
-    else if (resolution.find("3840x2160") != std::string::npos) scale_str = ",scale=3840:-2";
+    if (resolution.find("1920x1080") != std::string::npos) scale_str = "scale=1920:-2";
+    else if (resolution.find("1280x720") != std::string::npos) scale_str = "scale=1280:-2";
+    else if (resolution.find("3840x2160") != std::string::npos) scale_str = "scale=3840:-2";
 
     if (overlay_config.evalBar.enabled) {
-        graph.add_filter(current_bg + bar_stream, "overlay=" + std::to_string(bar_x_pos) + ":" + std::to_string(bar_y_pos) + scale_str + ",format=yuv420p");
-    } else {
-        std::string final_filter = scale_str.empty() ? "format=yuv420p" : scale_str.substr(1) + ",format=yuv420p";
-        graph.add_filter(current_bg, final_filter);
+        std::string bar_fmt = graph.add_filter(bar_stream, "format=nv12", "[bar_nv12]");
+        std::string filter_str = "overlay=" + std::to_string(bar_x_pos) + ":" + std::to_string(bar_y_pos);
+        current_bg = graph.add_filter(current_bg + bar_fmt, filter_str, "[bg_bar]", is_hw_overlay);
     }
+
+    if (!scale_str.empty()) {
+        current_bg = graph.add_filter(current_bg, scale_str, "[bg_scaled]", is_hw_overlay);
+    }
+
+    graph.add_filter(current_bg, "format=yuv420p", "[out]");
     std::string filter_complex = graph.build();
 
     std::string ffmpeg_cmd;
@@ -765,7 +786,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (has_nvidia_gpu) {
             if (vCodec == "libx264") { actual_vcodec = "h264_nvenc"; extra_args = "-preset p4 -cq " + crf; }
             else if (vCodec == "libx265") { actual_vcodec = "hevc_nvenc"; extra_args = "-preset p4 -cq " + crf; }
-            if (progress_callback) progress_callback(80, "Using NVIDIA GPU FFmpeg (" + actual_vcodec + ") with CPU filters...");
+            if (progress_callback) {
+                progress_callback(80, "Using NVIDIA GPU FFmpeg (" + actual_vcodec + ") with " + std::string(use_cuda_filters ? "HW filters..." : "CPU filters..."));
+            }
         } else if (has_amd_gpu) {
             if (vCodec == "libx264") { actual_vcodec = "h264_amf"; extra_args = "-quality speed -rc cqp -qp_i " + crf + " -qp_p " + crf; }
             else if (vCodec == "libx265") { actual_vcodec = "hevc_amf"; extra_args = "-quality speed -rc cqp -qp_i " + crf + " -qp_p " + crf; }
@@ -787,6 +810,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
                  "-filter_complex_threads " + std::to_string(num_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" "
+                 "-map \"[out]\" -map 0:a? "
                  "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " \"" + actual_output_path + "\"";
 
 #ifdef _WIN32

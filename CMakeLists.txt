@@ -406,7 +406,7 @@ add_library(chess_analysis_core
     src/ChessFenUtils.cpp
     src/ImageWriteUtils.cpp
     src/AnalysisVideoRenderUtils.cpp
-    include/FFmpegFilterGraph.cpp
+    src/FFmpegFilterGraph.cpp
 )
 
 target_include_directories(chess_analysis_core PUBLIC

@@ -404,8 +404,7 @@ void MainWindow::refreshQueueItem(QListWidgetItem* item) {
     }
 
     item->setToolTip(path + "\nStatus: " + queueStatusText(status));
-    // Increase height to accommodate the new Template dropdown row
-    item->setSizeHint(QSize(0, 128));
+    // Removed fixed size hint to allow dynamic height based on content
 
     if (auto* existingWidget = queueList_->itemWidget(item)) {
         existingWidget->setToolTip(path + "\nStatus: " + queueStatusText(status));

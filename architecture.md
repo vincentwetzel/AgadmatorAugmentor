@@ -119,7 +119,7 @@ Analysis-video layout is driven by a template-backed configuration model rather 
 The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. 
 
 Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
-The FFmpeg composition stage now conditionally includes the board, evaluation bar, PV text, and main-board engine arrows based on the active template snapshot, and maps normalized template coordinates into absolute video positions at render time.
+The FFmpeg composition stage conditionally includes the board, evaluation bar, PV text, and main-board engine arrows based on the active template snapshot, and maps normalized template coordinates into absolute video positions at render time. `FFmpegFilterGraph` builds the final `filter_complex`, tracks whether intermediate streams live on CPU or GPU, and only enables CUDA filters when the active overlay set can stay in hardware-compatible formats. Alpha overlays such as PV text and main-board arrows fall back to CPU filters while still allowing hardware encoders for the final MP4.
 
 ## 8. Source Module Organization
 
@@ -137,6 +137,7 @@ The detector code is split into three focused modules to keep files manageable (
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Template Manager | `TemplateManager.h/.cpp` | ~200 | Overlay template loading, matching, persistence in AppData |
 | Overlay Editor | `OverlayEditorDialog.h/.cpp` | ~450 | Screenshot-based WYSIWYG editor for overlay template layout |
+| FFmpeg Filter Graph | `FFmpegFilterGraph.h/.cpp` | ~180 | Builds filter_complex chains and manages CPU/GPU filter transitions |
 | Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
