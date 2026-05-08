@@ -6,6 +6,7 @@
 #include <fstream>
 #include <filesystem>
 
+#include <algorithm>
 #include <string>
 #include <thread>
 #ifdef _WIN32
@@ -19,6 +20,11 @@ static void set_ffmpeg_threads(int threads) {
 #else
     setenv("OPENCV_FFMPEG_THREADS", val.c_str(), 1);
 #endif
+}
+
+static int max_hardware_thread_count() {
+    const unsigned int hardware_threads = std::thread::hardware_concurrency();
+    return std::max(1, static_cast<int>(hardware_threads));
 }
 
 int main(int argc, char* argv[]) {
@@ -37,8 +43,10 @@ int main(int argc, char* argv[]) {
     app.add_option("--debug-level", debug_level_str, "Detail level for debug image generation")
         ->check(CLI::IsMember({"NONE", "MOVES", "FULL"}));
 
+    const int max_threads = max_hardware_thread_count();
     int threads = 0;
-    app.add_option("--threads", threads, "FFmpeg decode threads (1-16)")->check(CLI::Range(1, 16));
+    app.add_option("--threads", threads, "FFmpeg decode threads (1-" + std::to_string(max_threads) + ")")
+        ->check(CLI::Range(1, max_threads));
 
     int memory_limit = 0;
     app.add_option("--memory-limit", memory_limit, "Memory limit in MB (0 = Unlimited)")->check(CLI::Range(0, 65536));
@@ -54,7 +62,7 @@ int main(int argc, char* argv[]) {
     if (threads > 0) {
         set_ffmpeg_threads(threads);
     } else {
-        set_ffmpeg_threads(std::thread::hardware_concurrency());
+        set_ffmpeg_threads(max_threads);
     }
 
     // F5 convenience: use sample video when no args provided

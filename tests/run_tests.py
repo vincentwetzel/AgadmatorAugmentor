@@ -3,9 +3,13 @@ import re
 import subprocess
 import sys
 
+BUILD_DIR_NAME = "build"
+TEST_TARGET = "test_extract_moves"
+
 def main():
     # Go one level up from the 'tests' directory to get the project root
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    build_dir = os.path.join(root_dir, BUILD_DIR_NAME)
     test_file = os.path.join(root_dir, "tests", "test_ui_detectors.cpp")
     
     # 1. Parse the C++ file to see which tests are toggled ON
@@ -25,9 +29,23 @@ def main():
             print(f" - {t}")
     print("--------------------\n")
 
-    # 2. Automatically compile the test executable
+    # 2. Ensure the build tree includes the test target, then compile it.
+    os.makedirs(build_dir, exist_ok=True)
+    print("Configuring test build target...")
+    configure_cmd = [
+        "cmake",
+        "-S", root_dir,
+        "-B", build_dir,
+        "-DBUILD_TESTS=ON",
+    ]
+    try:
+        subprocess.run(configure_cmd, cwd=root_dir, check=True)
+    except subprocess.CalledProcessError:
+        print("\nCMake configuration failed. Please check the errors above.")
+        sys.exit(1)
+
     print("Compiling tests (this will be fast if only the toggles changed)...")
-    build_cmd = ["cmake", "--build", "build", "--config", "Release", "--target", "test_extract_moves"]
+    build_cmd = ["cmake", "--build", build_dir, "--config", "Release", "--target", TEST_TARGET]
     try:
         subprocess.run(build_cmd, cwd=root_dir, check=True)
     except subprocess.CalledProcessError:
@@ -35,13 +53,18 @@ def main():
         sys.exit(1)
 
     # 3. Run the executable
-    exe_dir = os.path.join(root_dir, "build", "Release")
-    exe_path = os.path.join(exe_dir, "test_extract_moves.exe")
-    
-    if not os.path.exists(exe_path):
-        # Fallback for non-Windows environments
-        exe_dir = os.path.join(root_dir, "build")
-        exe_path = os.path.join(exe_dir, "test_extract_moves")
+    exe_name = TEST_TARGET + (".exe" if os.name == "nt" else "")
+    candidate_dirs = [
+        os.path.join(build_dir, "Release"),
+        build_dir,
+    ]
+    exe_path = next(
+        (os.path.join(candidate_dir, exe_name)
+         for candidate_dir in candidate_dirs
+         if os.path.exists(os.path.join(candidate_dir, exe_name))),
+        os.path.join(candidate_dirs[0], exe_name),
+    )
+    exe_dir = os.path.dirname(exe_path)
     
     print("\nStarting Test Run...\n" + "="*40)
     try:

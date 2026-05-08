@@ -18,7 +18,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
+#include <sstream>
 #include <opencv2/imgcodecs.hpp>
 
 // Include the new ChessFenUtils header
@@ -34,6 +36,83 @@
 #endif
 
 namespace cta {
+
+namespace {
+
+#ifdef _WIN32
+std::wstring utf8_to_wide(const std::string& text) {
+    if (text.empty()) {
+        return std::wstring();
+    }
+
+    auto convert = [&text](UINT code_page, DWORD flags) -> std::wstring {
+        int size = MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        if (size <= 0) {
+            return std::wstring();
+        }
+
+        std::wstring wide(size, L'\0');
+        MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), wide.data(), size);
+        return wide;
+    };
+
+    std::wstring wide = convert(CP_UTF8, MB_ERR_INVALID_CHARS);
+    if (wide.empty()) {
+        wide = convert(CP_ACP, 0);
+    }
+    if (wide.empty()) {
+        return std::wstring(text.begin(), text.end());
+    }
+    return wide;
+}
+
+std::string format_windows_error(DWORD error_code) {
+    LPSTR message_buffer = nullptr;
+    const DWORD size = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        error_code,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPSTR>(&message_buffer),
+        0,
+        nullptr
+    );
+
+    std::string message = size > 0 && message_buffer ? message_buffer : "Unknown Windows error";
+    if (message_buffer) {
+        LocalFree(message_buffer);
+    }
+    while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' ')) {
+        message.pop_back();
+    }
+    return message;
+}
+#endif
+
+void append_tail(std::string& tail, const char* data, size_t size) {
+    constexpr size_t kMaxTailBytes = 4096;
+    tail.append(data, size);
+    if (tail.size() > kMaxTailBytes) {
+        tail.erase(0, tail.size() - kMaxTailBytes);
+    }
+}
+
+std::string compose_ffmpeg_failure_message(int result, const std::string& details) {
+    std::ostringstream oss;
+    oss << "FFmpeg composition failed";
+    if (result >= 0) {
+        oss << " (exit code " << result << ")";
+    }
+    oss << ".";
+    if (!details.empty()) {
+        oss << " Last FFmpeg output:\n" << details;
+    } else {
+        oss << " No FFmpeg output was captured. Check that ffmpeg is in PATH.";
+    }
+    return oss.str();
+}
+
+} // namespace
 
 AnalysisVideoGenerator::AnalysisVideoGenerator(const std::string& assets_dir) {
     std::string board_path = assets_dir + "/board/board.png";
@@ -724,7 +803,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     }
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOA si;
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
@@ -734,12 +813,14 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     si.wShowWindow = SW_HIDE;
     ZeroMemory(&pi, sizeof(pi));
 
-    std::vector<char> cmd_buffer(ffmpeg_cmd.begin(), ffmpeg_cmd.end());
-    cmd_buffer.push_back('\0');
+    std::wstring ffmpeg_cmd_w = utf8_to_wide(ffmpeg_cmd);
+    std::vector<wchar_t> cmd_buffer(ffmpeg_cmd_w.begin(), ffmpeg_cmd_w.end());
+    cmd_buffer.push_back(L'\0');
 
     int result = -1;
+    std::string ffmpeg_tail;
     // TRUE for bInheritHandles so FFmpeg can use hWritePipe. CREATE_NO_WINDOW strictly prevents the console.
-    if (CreateProcessA(NULL, cmd_buffer.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+    if (CreateProcessW(NULL, cmd_buffer.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(hWritePipe); // Close write end in parent
         
         char buffer[256];
@@ -752,6 +833,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                 break;
             }
             buffer[bytesRead] = '\0';
+            append_tail(ffmpeg_tail, buffer, bytesRead);
             output_acc += buffer;
             
             size_t frame_pos = output_acc.rfind("frame=");
@@ -784,6 +866,8 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         CloseHandle(pi.hThread);
         CloseHandle(hReadPipe);
     } else {
+        const DWORD create_error = GetLastError();
+        ffmpeg_tail = "CreateProcessW failed: " + format_windows_error(create_error);
         CloseHandle(hReadPipe);
         CloseHandle(hWritePipe);
     }
@@ -791,6 +875,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     ffmpeg_cmd += " 2>&1"; // redirect stderr to stdout to capture it
     FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
     int result = -1;
+    std::string ffmpeg_tail;
     if (pipe) {
         char buffer[256];
         std::string output_acc;
@@ -798,6 +883,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
             if (cancel_flag && *cancel_flag) {
                 break; // Break loop, pclose will wait.
             }
+            append_tail(ffmpeg_tail, buffer, std::strlen(buffer));
             output_acc += buffer;
             size_t frame_pos = output_acc.rfind("frame=");
             if (frame_pos != std::string::npos) {
@@ -822,10 +908,10 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 #endif
 
     if (result == 0) {
-        if (progress_callback) progress_callback(100, "Debug video generation complete.");
+        if (progress_callback) progress_callback(100, "Analysis video composition complete.");
         return true;
     } else {
-        if (progress_callback) progress_callback(-1, "FFmpeg composition failed. Check if ffmpeg is in PATH and if GPU encoding is supported on your hardware.");
+        if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail));
         return false;
     }
 }

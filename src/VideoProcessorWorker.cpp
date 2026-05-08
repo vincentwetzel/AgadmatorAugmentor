@@ -537,6 +537,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 emit logMessage("Saved PGN to: " + outPath);
             } else {
                 emit error(QString("Failed to save PGN to: %1").arg(outPath));
+                return;
             }
         }
 
@@ -557,7 +558,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
             };
 
-            video_gen.generate_analysis_video(
+            const bool videoGenerated = video_gen.generate_analysis_video(
                 settings.videoPath.toStdString(),
                 outPath.toStdString(),
                 *extractor.get_board_geometry(),
@@ -569,6 +570,16 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 cancelFlag,
                 progress_cb
             );
+
+            if (!videoGenerated) {
+                if (cancelFlag && *cancelFlag) {
+                    emit finished();
+                } else {
+                    emit error("Analysis Video generation failed. See the log above for details.");
+                }
+                return;
+            }
+
             emit logMessage("Analysis Video generation complete: " + outPath);
         }
 
@@ -578,10 +589,8 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
     } catch (const std::exception& e) {
         emit error(QString("Error during processing: %1").arg(e.what()));
-        emit finished();
     } catch (...) {
         emit error("Unknown error during processing.");
-        emit finished();
     }
 }
 

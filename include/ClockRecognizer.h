@@ -1,7 +1,9 @@
 #pragma once
 
 #include <opencv2/core/mat.hpp>
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 
 namespace cta {
 
@@ -23,6 +25,8 @@ struct ClockCache {
     cv::Mat bot_gray;    // Previous bottom clock ROI (grayscale)
     std::string white_time;
     std::string black_time;
+    std::unordered_map<std::uint64_t, std::string> top_ocr_cache;
+    std::unordered_map<std::uint64_t, std::string> bot_ocr_cache;
     bool valid = false;
 };
 
@@ -38,5 +42,23 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
                           const cv::Mat& board_template,
                           const BoardGeometry& geo,
                           ClockCache* cache = nullptr);
+
+/// Extracts clocks from already-cropped top and bottom clock pill ROIs.
+/// This avoids rebuilding a synthetic full video frame during reducer validation.
+ClockState extract_clocks_from_rois(const cv::Mat& top_bgr,
+                                    const cv::Mat& bot_bgr,
+                                    ClockCache* cache = nullptr);
+
+/// Extracts clocks after an accepted move, OCRing only the player who just moved
+/// and reusing the unchanged opponent clock from cache.
+ClockState extract_clocks_for_moved_player_from_rois(const cv::Mat& top_bgr,
+                                                     const cv::Mat& bot_bgr,
+                                                     const std::string& moved_player,
+                                                     ClockCache* cache = nullptr,
+                                                     const std::string& active_player_hint = "");
+
+/// Cheap active-clock detection from cropped clock pill ROIs. This performs no OCR.
+std::string detect_active_clock_from_rois(const cv::Mat& top_bgr,
+                                          const cv::Mat& bot_bgr);
 
 } // namespace cta

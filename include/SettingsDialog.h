@@ -70,7 +70,7 @@ private:
     QComboBox* multiPvComboBox_;
     QComboBox* themeComboBox_;
     QComboBox* debugLevelComboBox_;
-    QSpinBox* threadSpinBox_;
+    QComboBox* threadComboBox_;
     QGroupBox* stockfishSettingsGroup_;
     VideoOverlayConfig currentOverlayConfig_;
 };

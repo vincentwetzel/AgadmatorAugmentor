@@ -4,6 +4,7 @@ build-*/
 cmake-build-*/
 build_cpu/
 build_dyn/
+build_tmp/
 build_zero_copy/
 out/
 temp/

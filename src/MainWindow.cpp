@@ -47,6 +47,7 @@
 #include <QDesktopServices>
 #include <QVariantMap>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QtMath>
 #include <algorithm>
 
@@ -125,6 +126,32 @@ QString queueStatusText(cta::MainWindow::QueueItemStatus status) {
     return "Queued";
 }
 
+QString formatElapsedPrefix(qint64 totalMs) {
+    const qint64 h = totalMs / 3600000;
+    const qint64 m = (totalMs % 3600000) / 60000;
+    const qint64 s = (totalMs % 60000) / 1000;
+    const qint64 ms = totalMs % 1000;
+
+    if (h > 0) {
+        return QString("[%1:%2:%3.%4]")
+            .arg(h)
+            .arg(m, 2, 10, QChar('0'))
+            .arg(s, 2, 10, QChar('0'))
+            .arg(ms, 3, 10, QChar('0'));
+    }
+
+    return QString("[%1:%2.%3]")
+        .arg(m)
+        .arg(s, 2, 10, QChar('0'))
+        .arg(ms, 3, 10, QChar('0'));
+}
+
+bool hasElapsedPrefix(const QString& line) {
+    static const QRegularExpression elapsedPrefixPattern(
+        QStringLiteral("^\\s*\\[(?:\\d+:)?\\d+:\\d{2}\\.\\d{3}\\]"));
+    return elapsedPrefixPattern.match(line).hasMatch();
+}
+
 } // namespace
 
 static void set_ffmpeg_threads(int threads) {
@@ -144,6 +171,7 @@ const char* MainWindow::SETTINGS_APP = "ChessTubeAnalyzer";
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("ChessTube Analyzer");
     resize(800, 600);
+    logTimer_.start();
 
     setupUi();
     setupWorker();
@@ -635,6 +663,7 @@ void MainWindow::addVideosToQueue(const QStringList& paths) {
 }
 
 int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride, int memoryLimit) {
+    logTimer_.restart();
     addVideosToQueue(videoPath.split(";", Qt::SkipEmptyParts));
     
     settingsDialog_->loadSettings();
@@ -879,6 +908,7 @@ void MainWindow::onStartCancelClicked() {
 
         isProcessing_ = true;
         cancelRequested_ = false; // Reset flag before starting
+        logTimer_.restart();
         appendLog("Starting processing...");
 
         // Set FFmpeg threads before processing
@@ -894,8 +924,22 @@ void MainWindow::onStartCancelClicked() {
 }
 
 void MainWindow::appendLog(const QString& message) {
-    logOutput_->append(message);
-    qInfo().noquote() << message;
+    const QString prefix = formatElapsedPrefix(logTimer_.elapsed());
+    const QStringList lines = message.split('\n');
+    QStringList formattedLines;
+    formattedLines.reserve(lines.size());
+
+    for (const QString& line : lines) {
+        if (line.isEmpty() || hasElapsedPrefix(line)) {
+            formattedLines << line;
+        } else {
+            formattedLines << prefix + " " + line;
+        }
+    }
+
+    const QString formattedMessage = formattedLines.join('\n');
+    logOutput_->append(formattedMessage);
+    qInfo().noquote() << formattedMessage;
 }
 void MainWindow::updateProgress(int percentage) {
     auto* currentItem = findQueueItemByPath(property("currentVideo").toString());

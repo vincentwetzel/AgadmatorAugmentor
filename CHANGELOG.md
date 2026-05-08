@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **Reducer Revert Pruning:** Added a mean-hash gate before full-image revert verification so deep analysis branches perform fewer board-wide image comparisons.
+- **Faster Cancellation:** Map-reduce extraction waits now wake in short polling intervals, improving responsiveness when cancelling a long video scan.
+- **Extraction Timing Counters:** Extraction now logs mapped/reduced candidate counts plus reducer timing for revert scans, move scoring, and clock OCR.
+- **Mapper Candidate Coalescing:** Motion/highlight bursts now emit a settled candidate instead of every sampled animation frame, reducing repeated reducer scoring.
+- **Adaptive Quiet Scanning:** Map workers now scan long no-motion stretches at a coarser cadence and return to fine scans as soon as board motion appears.
+- **Deferred Motion ROI Cloning:** Mapper motion frames now avoid cloning color/clock ROIs until the settled candidate is emitted.
+- **Advanced Extraction Tuning:** Added `CTA_CHUNK_SECONDS` and `CTA_MAX_CHUNK_LOOKAHEAD` environment overrides for map-reduce scheduling experiments.
+- **Indexed Revert Candidate Lookup:** Revert detection now probes coarse-hash buckets before falling back to the full history scan.
+- **Wider Revert Hash Buckets:** Revert indexing now uses overall board brightness plus neighbor buckets to reduce full history fallbacks.
+- **ROI Clock OCR Path:** Reducer clock validation now reads cropped clock pill ROIs directly instead of constructing a synthetic full frame.
+- **Cheap Clock Activity Gate:** Candidate validation now detects the active clock without OCR and runs digit recognition only for accepted moves.
+- **Bounded Clock OCR Scaling:** Clock digit recognition now caps ROI upscaling at a target text height instead of always tripling the image.
+- **Single-Side Clock OCR:** Accepted moves now OCR only the player clock that changed and reuse the opponent time from cache.
+- **True Zero-Copy Decoding:** Implemented native FFmpeg C API (libavcodec) with CUDA to decode frames directly into `CUdeviceptr`, eliminating PCIe ping-pong and further accelerating the GPU pipeline.
+
+### Changed
+
+- **Thread Setting:** Replaced the fixed FFmpeg decode-thread spin box with a dropdown that offers every detected logical CPU thread count and defaults to the maximum detected value.
+- **Elapsed Log Prefixes:** GUI and headless logs now add elapsed-time prefixes while preserving existing extractor timestamps.
+- **Test Runner:** `tests/run_tests.py` now configures the build tree with `BUILD_TESTS=ON` before building and running `test_extract_moves`.
+
+### Fixed
+
+- **FFmpeg Error Reporting:** Analysis video composition now captures the tail of FFmpeg output and reports Windows process-launch failures with the underlying system error.
+- **Analysis Video Failure Flow:** Processing now stops after PGN save or analysis-video generation failures instead of continuing as though the batch completed successfully.
+
 ## [0.3.0] — 2026-04-25
 
 ### Added

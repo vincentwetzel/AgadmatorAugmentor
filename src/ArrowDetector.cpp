@@ -107,13 +107,49 @@ std::vector<std::string> find_yellow_arrows(const cv::Mat& img_bgr,
         int already_covered = cv::countNonZero(covered_mask & cand.line_mask);
         if (already_covered < static_cast<int>(0.45 * cand.area)) {
             accepted.emplace_back(cand.sq1, cand.sq2);
-            // Thick suppression shadow (1.8x square width)
+            // Suppress the accepted shaft without wiping out nearby/crossing arrows.
+            // A very wide shadow hides legitimate multi-arrow annotations that share
+            // an endpoint, such as b1-b7 plus g2-b7.
             cv::Mat thick_mask = cv::Mat::zeros(arrow_mask.size(), CV_8UC1);
             cv::line(thick_mask,
                      cv::Point(static_cast<int>(centers[cand.sq1].cx), static_cast<int>(centers[cand.sq1].cy)),
                      cv::Point(static_cast<int>(centers[cand.sq2].cx), static_cast<int>(centers[cand.sq2].cy)),
-                     255, static_cast<int>(geo.sq_w * 1.8));
+                     255, std::max(3, static_cast<int>(geo.sq_w * 0.35)));
             cv::bitwise_or(covered_mask, thick_mask, covered_mask);
+        }
+    }
+
+    // Recover vertical arrows that are often drawn through several same-file
+    // squares and can share the destination square with a diagonal arrow.
+    for (int c = 0; c < 8; ++c) {
+        std::vector<int> active_rows;
+        for (int r = 0; r < 8; ++r) {
+            int idx = r * 8 + c;
+            if (active[idx]) {
+                active_rows.push_back(r);
+            }
+        }
+        if (active_rows.size() < 5) {
+            continue;
+        }
+
+        int first = active_rows.front();
+        int last = active_rows.back();
+        if (last - first < 3) {
+            continue;
+        }
+
+        int sq1 = first * 8 + c;
+        int sq2 = last * 8 + c;
+        bool exists = false;
+        for (auto [a, b] : accepted) {
+            if ((a == sq1 && b == sq2) || (a == sq2 && b == sq1)) {
+                exists = true;
+                break;
+            }
+        }
+        if (!exists) {
+            accepted.emplace_back(sq1, sq2);
         }
     }
 

@@ -6,6 +6,10 @@ A C++20 application that analyzes chess videos, reconstructs legal games from th
 
 ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data and optional engine variations.
 
+The extraction path is optimized around a map-reduce scan: workers decode timeline chunks and emit visual candidates, while a reducer maintains the strict chess state, validates moves, and detects analysis reverts. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches.
+
+Advanced extraction tuning is available through environment variables for benchmarking difficult storage paths: `CTA_CHUNK_SECONDS` controls map chunk duration (30-300 seconds), and `CTA_MAX_CHUNK_LOOKAHEAD` controls how far mapping workers can run ahead of the reducer.
+
 ## Features
 
 - **Video Processing:** Extract chess moves from video files using computer vision.
@@ -17,6 +21,7 @@ ChessTube Analyzer treats the chess.com UI as a deterministic visual state machi
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
 - **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, and engine arrows into an annotated MP4.
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
+- **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
 
 ## Quick Start
@@ -161,13 +166,10 @@ ChessTubeAnalyzer/
 ## Testing
 
 ```cmd
-cmake -B build -DBUILD_TESTS=ON
-cmake --build build --config Release
-cd build\Release
-test_extract_moves.exe
+python tests\run_tests.py
 ```
 
-All tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file.
+The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. You can still run the target manually with CMake when you need lower-level control.
 
 ## Performance Snapshot
 

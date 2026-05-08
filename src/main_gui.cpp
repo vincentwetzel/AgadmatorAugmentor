@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QMetaType>
 #include <QSettings>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <thread>
@@ -89,6 +90,11 @@ bool validate_existing_file(const QString& path,
     return true;
 }
 
+int max_hardware_thread_count() {
+    const unsigned int hardware_threads = std::thread::hardware_concurrency();
+    return std::max(1, static_cast<int>(hardware_threads));
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -116,7 +122,12 @@ int main(int argc, char *argv[]) {
     QCommandLineOption time_option("time", "Stockfish max time per move in seconds (0 = no limit).", "s");
     QCommandLineOption nodes_option("nodes", "Stockfish max nodes per move (0 = no limit).", "count");
     QCommandLineOption analysis_depth_option("analysis-depth", "Stockfish analysis line depth (1-20).", "depth");
-    QCommandLineOption threads_option("threads", "FFmpeg decode threads (1-16).", "count");
+    const int max_threads = max_hardware_thread_count();
+    QCommandLineOption threads_option(
+        "threads",
+        QString("FFmpeg decode threads (1-%1).").arg(max_threads),
+        "count"
+    );
     QCommandLineOption memory_limit_option("memory-limit", "Memory limit in MB (0 = Unlimited).", "mb");
 
     parser.addOption(version_option);
@@ -168,7 +179,7 @@ int main(int argc, char *argv[]) {
         !parse_int_option(parser, "time", 0, 600, time, std::cerr) ||
         !parse_int_option(parser, "nodes", 0, 1000000000, nodes, std::cerr) ||
         !parse_int_option(parser, "analysis-depth", 1, 20, analysis_depth, std::cerr) ||
-        !parse_int_option(parser, "threads", 1, 16, threads, std::cerr) ||
+        !parse_int_option(parser, "threads", 1, max_threads, threads, std::cerr) ||
         !parse_int_option(parser, "memory-limit", 0, 65536, memory_limit, std::cerr)) {
         return 1;
     }

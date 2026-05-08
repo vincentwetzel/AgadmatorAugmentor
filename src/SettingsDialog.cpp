@@ -19,6 +19,8 @@
 #include <QFileDialog>
 #include <QStandardPaths>
 #include <QDirIterator>
+#include <algorithm>
+#include <thread>
 
 namespace {
 QWidget* createToggleRow(const QString& label, const QString& tooltip, ToggleSwitch*& outToggle, bool checked = false) {
@@ -52,6 +54,21 @@ QLabel* createHelpText(const QString& text, const QString& tooltip) {
     label->setToolTip(tooltip);
     label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     return label;
+}
+
+int maxHardwareThreadCount() {
+    const unsigned int hardwareThreads = std::thread::hardware_concurrency();
+    return std::max(1, static_cast<int>(hardwareThreads));
+}
+
+void setThreadComboValue(QComboBox* comboBox, int threads) {
+    if (!comboBox) {
+        return;
+    }
+
+    const int clampedThreads = std::clamp(threads, 1, maxHardwareThreadCount());
+    const int index = comboBox->findData(clampedThreads);
+    comboBox->setCurrentIndex(index >= 0 ? index : comboBox->count() - 1);
 }
 } // namespace
 
@@ -362,11 +379,18 @@ void SettingsDialog::setupUi() {
     auto* advancedGroupLayout = new QVBoxLayout(advancedGroup);
 
     auto* threadLayout = new QHBoxLayout();
-    threadLayout->addWidget(createSettingsLabel("FFmpeg Decode Threads:", "Set the number of CPU threads allocated for video decoding. Higher values increase speed but use more memory."));
-    threadSpinBox_ = new QSpinBox();
-    threadSpinBox_->setRange(1, 16);
-    threadSpinBox_->setToolTip("Set the number of CPU threads allocated for video decoding. Higher values increase speed but use more memory.");
-    threadLayout->addWidget(threadSpinBox_);
+    threadLayout->addWidget(createSettingsLabel("FFmpeg Decode Threads:", "Set the number of CPU threads allocated for video decoding. The maximum option uses all detected logical CPU threads."));
+    threadComboBox_ = new QComboBox();
+    const int maxThreads = maxHardwareThreadCount();
+    for (int threadCount = 1; threadCount <= maxThreads; ++threadCount) {
+        const QString label = threadCount == maxThreads
+            ? QString("%1 threads (Maximum / default)").arg(threadCount)
+            : QString("%1 thread%2").arg(threadCount).arg(threadCount == 1 ? "" : "s");
+        threadComboBox_->addItem(label, threadCount);
+    }
+    threadComboBox_->setProperty("class", "dropdown");
+    threadComboBox_->setToolTip("Set the number of CPU threads allocated for video decoding. The maximum option uses all detected logical CPU threads.");
+    threadLayout->addWidget(threadComboBox_);
     threadLayout->addStretch();
     advancedGroupLayout->addLayout(threadLayout);
 
@@ -413,7 +437,7 @@ void SettingsDialog::setupUi() {
         emit logMessage(checked ? "Analysis Video generation enabled" : "Analysis Video generation disabled");
         saveSettings(); 
     });
-    connect(threadSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(threadComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(multiPvComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(stockfishPathBtn, &QPushButton::clicked, this, [this]() {
         QSettings settings;
@@ -580,7 +604,8 @@ void SettingsDialog::loadSettings() {
     int multiPv = settings.value("multiPv", 3).toInt();
     int multiPvIdx = multiPvComboBox_->findData(multiPv);
     multiPvComboBox_->setCurrentIndex(multiPvIdx >= 0 ? multiPvIdx : 2);
-    threadSpinBox_->setValue(settings.value("ffmpegThreads", 4).toInt());
+    const int defaultThreads = maxHardwareThreadCount();
+    setThreadComboValue(threadComboBox_, settings.value("ffmpegThreads", defaultThreads).toInt());
     
     if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(settings.value("stockfishDepth", 15).toInt());
     if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(settings.value("stockfishTime", 0).toInt());
@@ -651,7 +676,7 @@ void SettingsDialog::saveSettings() {
     settings.setValue("enableStockfish", stockfishToggle_->isChecked());
     settings.setValue("generateAnalysisVideo", analysisVideoToggle_->isChecked());
     settings.setValue("multiPv", multiPvComboBox_->currentData().toInt());
-    settings.setValue("ffmpegThreads", threadSpinBox_->value());
+    settings.setValue("ffmpegThreads", threadComboBox_->currentData().toInt());
     settings.setValue("themeMode", themeComboBox_->currentIndex());
     if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
         settings.setValue("analysis/enableMoveAnnotations", mat->isChecked());
@@ -684,7 +709,7 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
     s.enableStockfish = stockfishToggle_->isChecked();
     s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
     s.multiPv = multiPvComboBox_->currentData().toInt();
-    s.ffmpegThreads = threadSpinBox_->value();
+    s.ffmpegThreads = threadComboBox_->currentData().toInt();
     s.stockfishDepth = findChild<QSpinBox*>("depthSpinBox") ? findChild<QSpinBox*>("depthSpinBox")->value() : 15;
     s.stockfishTime = findChild<QSpinBox*>("timeSpinBox") ? findChild<QSpinBox*>("timeSpinBox")->value() : 0;
     s.stockfishNodes = findChild<QSpinBox*>("nodesSpinBox") ? findChild<QSpinBox*>("nodesSpinBox")->value() : 0;
@@ -708,7 +733,7 @@ void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     analysisVideoToggle_->setChecked(settings.generateAnalysisVideo);
     int idx = multiPvComboBox_->findData(settings.multiPv);
     if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
-    threadSpinBox_->setValue(settings.ffmpegThreads);
+    setThreadComboValue(threadComboBox_, settings.ffmpegThreads);
     if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(settings.stockfishDepth);
     if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(settings.stockfishTime);
     if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(settings.stockfishNodes);
@@ -724,7 +749,7 @@ void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int stockfishOverri
         int idx = multiPvComboBox_->findData(multiPv);
         if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
     }
-    if (threads > 0) threadSpinBox_->setValue(threads);
+    if (threads > 0) setThreadComboValue(threadComboBox_, threads);
     if (depth > 0) { if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(depth); }
     if (time >= 0) { if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(time); }
     if (nodes >= 0) { if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(nodes); }

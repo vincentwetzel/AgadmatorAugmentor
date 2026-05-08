@@ -48,8 +48,11 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Manage channel-specific overlay templates with a screenshot-based editor.
 - Override the auto-detected template per queue item.
 - Reorder queued videos and mix different templates in one batch.
+- Select FFmpeg decode threads from 1 through the detected logical CPU count; the maximum detected value is the default.
 
 The queue stores the selected template configuration with each item right before processing begins. That lets mixed-channel batches keep each video's intended board, eval bar, PV text, and arrow placement.
+
+Processing logs include elapsed-time prefixes, which makes it easier to compare extraction, Stockfish, and FFmpeg composition phases across runs. If FFmpeg composition fails, the failure message includes the captured tail of FFmpeg output when available.
 
 ## Headless Mode
 
@@ -74,15 +77,19 @@ The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output direc
 
 If analysis-video generation is enabled, the application also produces an annotated MP4 using the selected overlay template snapshot for that queue item.
 
+## Advanced Extraction Tuning
+
+The default map-reduce extraction settings are chosen for normal local storage. For benchmarking difficult videos or slower storage paths, two environment variables can override the scheduler:
+
+- `CTA_CHUNK_SECONDS`: chunk duration in seconds, clamped to 30-300.
+- `CTA_MAX_CHUNK_LOOKAHEAD`: maximum number of mapped chunks allowed ahead of the reducer.
+
 ## Testing
 
 Unit tests are opt-in so the default application build does not need to download Google Test during configure.
 
 ```cmd
-cmake -B build -DBUILD_TESTS=ON
-cmake --build build --config Release
-cd build\Release
-test_extract_moves.exe
+python tests\run_tests.py
 ```
 
-You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`.
+The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`.

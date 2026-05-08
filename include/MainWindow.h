@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 #include <QThread>
+#include <QElapsedTimer>
 #include <atomic>
 #include <QString>
 #include "ProcessingSettings.h"
@@ -132,6 +133,7 @@ private:
     // State
     bool isProcessing_ = false;
     std::atomic<bool> cancelRequested_{false};
+    QElapsedTimer logTimer_;
 
     // Memory for the template fallback
     mutable QString lastUsedTemplateId_;

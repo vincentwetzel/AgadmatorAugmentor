@@ -1,45 +1,23 @@
 # TODO & Roadmap
 
-## Remaining (Roadmap to v1.0.0)
-- [x] **Piece Type Classification** — Implemented morphological aspect-ratio and edge-density classification for underpromotions.
-- [x] **Detection Tuning** — Implemented an elastic yellowness threshold (combined score >= 70.0) to improve recall on heavily occluded/shadowed move highlights.
-- [x] **OCR Improvements** — Replaced global Otsu with Adaptive Gaussian thresholding and removed destructive morphology to preserve thin 7-segment clock digits.
-
-## Planned Optimizations (Performance)
-- [ ] **True Zero-Copy Decoding** - Use native FFmpeg C API (libavcodec) with CUDA to decode frames directly into `CUdeviceptr` to eliminate PCIe ping-pong.
-- [x] **"Map-Reduce" Chunked Processing** - Safely divides the video timeline among worker threads to drastically reduce decode wait times. Memory limits accurately throttle concurrency.
-- [x] **Unscramble Performance Commit** - Performance refactors have been thoroughly validated and safely bounded.
-
-## Project Audit Backlog
-
-### Suspicious Commit Pair
-- [x] **Audit `1fb1340` / `e851952` end to end** - We have verified the Map-Reduce pipeline correctness through rigorous golden file integration testing.
-
-### Extraction Pipeline Risks
-- [x] **Verify map-reduce chunked extraction correctness** - Map-reduce chunked extraction has been validated against known benchmark videos, matching expected FEN and move outputs exactly.
-
-### GPU / CUDA / NPP Risks
-- [x] **Decide whether `ENABLE_SYSTEM_CUDA` should default ON** - Set to default OFF. Current CMake and source have fragile CUDA/NPP paths. It is now opt-in only until covered by tests.
-- [x] **Review NPP include/library compatibility** - Experimental NPP matching and difference APIs have been safely disabled via preprocessor macros in `GPUAccelerator.cpp`, gracefully deferring to strict CPU routines to guarantee move scoring accuracy.
-
-### Build / CMake / Environment Risks
-- [x] **Remove hardcoded local vcpkg paths** - CMake now dynamically resolves `CHESSTUBE_VCPKG_DYNAMIC_ROOT` through `VCPKG_INSTALLED_DIR` and `VCPKG_TARGET_TRIPLET` variables.
-
-### Duplicate / Stale Source Files
-- [x] **Update `.gitignore` for generated junk** - Add patterns for accidental backup/temp files if needed, after confirming they are not meaningful project artifacts.
-
-### Tests And Verification Gaps
-- [x] **Verify map-reduce integration tests** - The existing `TEST_MEDIUM_GAME_REVERT` now runs against the map-reduce pipeline and checks output (moves, timestamps, FENs) against a known-good golden JSON file.
-- [x] **Establish golden file for regression testing** - A "golden" JSON output functionality has been added to integration tests. If the file is missing, the test generates it. Subsequent runs compare the extracted `GameData` against this golden baseline.
-- [x] **Add a cache correctness test** - Same filename/frame count with different content should not reuse board geometry.
-- [ ] **Add a GPU-disabled build test** - Ensure the project builds and runs with no CUDA/NPP installed or with `ENABLE_SYSTEM_CUDA=OFF`.
-- [ ] **Add a CUDA-present build test** - Ensure CUDA/NPP headers and libraries compile without relying on unavailable NPP symbols.
-- [x] **Add memory-limit behavior tests** - Confirm chunked processing and/or prefetching respect the configured memory cap.
+## Remaining to v1.0.0
+- [ ] **Extraction Performance Push** - Use the recent agadmator trace as the benchmark case and make the reducer faster before adding more features.
+  - [x] Add a second-stage hash gate before full-image revert verification so most historical plies never run board-wide `absdiff`.
+  - [x] Make map-reduce waits cancellation-aware in short intervals so Cancel does not wait behind chunk lookahead or next-chunk settle waits.
+  - [x] Add lightweight per-stage timing counters for map candidates, reducer candidates, revert checks, clock OCR, and move scoring.
+  - [x] Replace the inline revert-history scan with a reusable indexed detector that can query likely matching ply states without walking every prior ply.
+  - [x] Add adaptive scan cadence: coarse scan through long no-motion stretches, then temporarily drop to 0.1-0.2s around motion/yellow-highlight windows.
+  - [x] Avoid cloning full board/color ROIs for mapper candidates until reducer confidence passes the cheap gray diff stage.
+  - [x] Add a rolling candidate coalescer so animation frames that describe the same visual move produce one reducer candidate instead of several.
+  - [ ] Benchmark chunk size and lookahead defaults against HDD, SSD, and network-drive videos; expose advanced overrides if one default cannot fit all.
+- [ ] **Multi-Game Video Support** - Architecture now detects FEN resets to prevent history revert collisions. Extraction must still be updated to output `std::vector<GameData>` and PGN/Video generation to support multiple game trees.
+- [ ] **GPU-Disabled Build Test** - Ensure the project builds and runs with no CUDA/NPP installed or with `ENABLE_SYSTEM_CUDA=OFF`.
+- [ ] **CUDA-Present Build Test** - Ensure CUDA/NPP headers and libraries compile without relying on unavailable NPP symbols.
 
 ## Long Term / Future Scope
-- [x] **Parallel Agent Architecture** — Architecture formally designed and documented in `agents.md` (Targeting Phase 5).
-- [x] **Commentary Agent** — Correlate streamer drawings with spoken words and sound event detection. Architecture designed in `agents.md`.
-- [ ] **Multi-Game Video Support** — Architecture now detects FEN resets to prevent history revert collisions. Extraction must still be updated to output `std::vector<GameData>` and PGN/Video generation to support multiple game trees.
+- [ ] **Parallel Agent Architecture** — Transition to async, independent processing agents communicating via message queues (Targeting Phase 5).
+- [ ] **Commentary Agent** — Correlate streamer drawings with spoken words and sound event detection.
+- [ ] **Audio Integration** — Sound event detection (capture, castle, check) and speech-to-text.
 
 ## Current Status
 
@@ -58,6 +36,9 @@
 ## Completed Milestones
 
 ### Application & UI Features
+- **Piece Type Classification** — Implemented morphological aspect-ratio and edge-density classification for underpromotions.
+- **Detection Tuning** — Implemented an elastic yellowness threshold (combined score >= 70.0) to improve recall on heavily occluded/shadowed move highlights.
+- **OCR Improvements** — Replaced global Otsu with Adaptive Gaussian thresholding and removed destructive morphology to preserve thin 7-segment clock digits.
 - **GUI Development (Qt)** — Full graphical interface, async processing worker, and PGN exporter.
 - **WYSIWYG Overlay Editor** — Interactive drag-and-drop `QGraphicsView` canvas with 8-way sizing handles.
 - **Channel-Specific Overlay Templates** — Auto-selection via filename keywords, storing templates in `%APPDATA%`.
@@ -69,8 +50,22 @@
 - **Promotion Detection** — Auto-Queen default heuristic to correctly parse and extract 5-character UCI strings.
 
 ### Performance Optimization
-- **Parallel Stockfish Analysis** — Spawned a pool of `StockfishAnalyzer` instances to evaluate unique FENs concurrently.
+- **Reducer Revert Pruning** - Added a stricter mean-hash gate before full-board revert comparisons, reducing expensive image diffs during deep analysis branches.
+- **Responsive Extraction Cancellation** - Map-reduce waits now poll cancellation in short intervals instead of sleeping through long lookahead/reducer waits.
+- **Extraction Timing Counters** - Logs mapped/reduced candidate counts plus reducer timing for revert scans, move scoring, and clock OCR.
+- **Mapper Candidate Coalescing** - Collapses each motion/highlight burst to a settled candidate, reducing repeated reducer work on animation frames.
+- **Adaptive Quiet Scanning** - Long no-motion stretches now sample at a coarser cadence and return to 0.2s scans as soon as board motion appears.
+- **Deferred Motion ROI Cloning** - Mapper motion frames now avoid cloning color/clock ROIs until the first settled candidate is emitted.
+- **Advanced Extraction Tuning** - `CTA_CHUNK_SECONDS` and `CTA_MAX_CHUNK_LOOKAHEAD` can tune map-reduce scheduling for slow disks and network paths.
+- **Indexed Revert Candidate Lookup** - Revert detection now checks coarse-hash buckets before falling back to the full history scan.
+- **Wider Revert Hash Buckets** - Revert indexing now uses overall board brightness plus neighbor buckets to avoid falling back on almost every query.
+- **ROI Clock OCR Path** - Reducer clock validation now reads cropped clock pills directly instead of constructing a synthetic full frame.
+- **Cheap Clock Activity Gate** - Candidate validation now detects the active clock without OCR and runs digit recognition only for accepted moves.
+- **Bounded Clock OCR Scaling** - Clock digit recognition now caps ROI upscaling at a target text height instead of always tripling the image.
+- **Single-Side Clock OCR** - Accepted moves now OCR only the player clock that changed and reuse the opponent time from cache.
+- **Parallel Stockfish Analysis** - Spawned a pool of `StockfishAnalyzer` instances to evaluate unique FENs concurrently.
 - **Hardware Video Decoding** — Offloaded OpenCV frame decoding to NVDEC/QuickSync.
+- **True Zero-Copy Decoding** — Used native FFmpeg C API (libavcodec) with CUDA to decode frames directly into `CUdeviceptr`, eliminating PCIe ping-pong.
 - **Map-Reduce Visual Extraction** — Safely divides the video timeline among worker threads to drastically reduce decode wait times. Fully verified and integrated.
 - **Crop-first Pipeline** — Strict ROI cropping before color conversion to conserve memory bandwidth.
 - **AVX2 / SIMD OpenCV Build** — Maximized CPU vector math.
@@ -79,6 +74,12 @@
 - **Board Geometry Cache** — Avoids re-evaluating layout; keyed on file path, size, and modification time.
 - **FEN String Mapping** — Caches expanded board maps per FEN to prevent rapid string reallocations during move scoring.
 - **Micro-Optimizations** — Eliminated IPC sleep latency, zero-allocation ray casting, pre-allocated synchronized result arrays, fixed memory leaks.
+
+### Tests & Project Health
+- **Map-Reduce Testing** — Validated chunked extraction correctness against golden JSON outputs.
+- **Golden File Regression** — Established auto-generating golden baseline capabilities for integration tests.
+- **Cache & Resource Limits** — Added tests validating board geometry cache and memory-limit scaling bounds.
+- **CMake Modernization** — Purged hardcoded paths and safely decoupled optional CUDA paths.
 
 ### Project Refactoring
 - **Root C++ Project** — Moved contents of `cpp/` to the project root and updated build/run instructions.
