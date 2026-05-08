@@ -42,6 +42,14 @@ public:
         Cancelled = 4
     };
 
+    static constexpr int PathRole = Qt::UserRole;
+    static constexpr int StatusRole = Qt::UserRole + 1;
+    static constexpr int ProgressRole = Qt::UserRole + 2;
+    static constexpr int OutputDirRole = Qt::UserRole + 3;
+    static constexpr int TemplateRole = Qt::UserRole + 4;
+    static constexpr int TemplateNameRole = Qt::UserRole + 5;
+    static constexpr int TemplateConfigRole = Qt::UserRole + 6;
+
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 

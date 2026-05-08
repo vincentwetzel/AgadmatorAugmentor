@@ -9,7 +9,7 @@
 namespace cta {
 
 const char* ThemeManager::SETTINGS_ORG = "ChessTubeAnalyzer";
-const char* ThemeManager::SETTINGS_APP = "ChessTubeAnalyzer";
+const char* ThemeManager::SETTINGS_APP = "settings";
 const char* ThemeManager::SETTINGS_THEME_KEY = "themeMode";
 
 ThemeManager::ThemeManager() : currentTheme_(ThemeMode::System), settings_(nullptr) {

@@ -76,7 +76,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ENABLE_PCH "Use precompiled headers to speed up rebuilds" ON)
 option(ENABLE_UNITY_BUILD "Use CMake unity builds for faster full builds" OFF)
 option(BUILD_GUI "Build the Qt GUI target" ON)
-option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" OFF)
+option(ENABLE_QT_RUNTIME_DEPLOYMENT "Copy Qt/vcpkg runtime files after GUI builds" ON)
 option(ENABLE_SYSTEM_CUDA "Enable direct system CUDA/NPP integration when available" OFF)
 option(ENABLE_IPO "Enable interprocedural optimization in Release when supported" OFF)
 
@@ -228,17 +228,26 @@ if(BUILD_GUI)
     message(STATUS "Qt6 found, GUI will be built")
 endif()
 
-if(BUILD_GUI AND ENABLE_QT_RUNTIME_DEPLOYMENT AND WIN32 AND
-   DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+if(BUILD_GUI AND ENABLE_QT_RUNTIME_DEPLOYMENT AND WIN32)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "[Paths]\nPlugins = Qt6/plugins\n")
     function(add_runtime_deployment target_name)
         set(_qt_runtime_triplet "${VCPKG_TARGET_TRIPLET}")
+        if(_qt_runtime_triplet STREQUAL "")
+            get_filename_component(_qt_runtime_triplet "${Qt6_DIR}/../.." NAME)
+        endif()
+
         if(_qt_runtime_triplet MATCHES "-static")
             message(STATUS "Skipping Qt runtime deployment for ${target_name}: static vcpkg triplet '${VCPKG_TARGET_TRIPLET}' does not need copied Qt runtime DLLs")
             return()
         endif()
 
-        set(_qt_runtime_root "${VCPKG_INSTALLED_DIR}/${_qt_runtime_triplet}")
+        set(_qt_runtime_root "")
+        if(DEFINED VCPKG_INSTALLED_DIR AND NOT "${VCPKG_INSTALLED_DIR}" STREQUAL "")
+            set(_qt_runtime_root "${VCPKG_INSTALLED_DIR}/${_qt_runtime_triplet}")
+        elseif(Qt6_DIR MATCHES "/share/Qt6$")
+            get_filename_component(_qt_runtime_root "${Qt6_DIR}/../.." ABSOLUTE)
+        endif()
+
         if(NOT EXISTS "${_qt_runtime_root}/bin")
             message(STATUS "Skipping Qt runtime deployment for ${target_name}: '${_qt_runtime_root}' does not contain runtime binaries")
             return()
@@ -379,6 +388,10 @@ add_library(chess_extraction_core
     src/ExtractorUtils.cpp
     src/MoveValidations.cpp
     src/GPUAccelerator.cpp
+    src/BoardCache.cpp
+    src/MoveScorer.cpp
+    src/RevertManager.cpp
+    src/VideoChunkMapper.cpp
 )
 
 target_include_directories(chess_extraction_core PUBLIC
@@ -407,6 +420,8 @@ add_library(chess_analysis_core
     src/ImageWriteUtils.cpp
     src/AnalysisVideoRenderUtils.cpp
     src/FFmpegFilterGraph.cpp
+    src/OpeningFetcher.cpp
+    src/AnalysisVideoGenerator_Render.cpp
 )
 
 target_include_directories(chess_analysis_core PUBLIC
@@ -416,6 +431,10 @@ target_include_directories(chess_analysis_core PUBLIC
 target_link_libraries(chess_analysis_core PUBLIC
     chess_extraction_core
 )
+
+if(WIN32)
+    target_link_libraries(chess_analysis_core PUBLIC winhttp.lib)
+endif()
 
 enforce_project_msvc_runtime(chess_analysis_core)
 enable_msvc_parallel_pdb_safety(chess_analysis_core)
@@ -467,6 +486,8 @@ if(Qt6_FOUND AND BUILD_GUI)
         src/MainWindow.cpp
         src/MainWindow_UI.cpp
         src/MainWindow_Settings.cpp
+        src/MainWindow_Queue.cpp
+        src/MainWindow_Processing.cpp
         include/MainWindow.h
         src/SettingsDialog.cpp
         include/SettingsDialog.h

@@ -328,6 +328,16 @@ void render_main_board_arrows(cv::Mat& image,
             auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
             auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
 
+            if (move.type() == libchess::MoveType::ksc || move.type() == libchess::MoveType::qsc) {
+                if (from_sq == 4) {
+                    if (to_sq == 7 || to_sq == 6) to_sq = 6;
+                    else if (to_sq == 0 || to_sq == 2) to_sq = 2;
+                } else if (from_sq == 60) {
+                    if (to_sq == 63 || to_sq == 62) to_sq = 62;
+                    else if (to_sq == 56 || to_sq == 58) to_sq = 58;
+                }
+            }
+
             int from_row = 7 - (from_sq / 8);
             int from_col = from_sq % 8;
             int to_row = 7 - (to_sq / 8);

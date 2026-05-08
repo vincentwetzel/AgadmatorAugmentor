@@ -40,6 +40,7 @@ public:
                                  const std::vector<std::string>& fens,
                                  const std::vector<double>& timestamps,
                                  const std::vector<StockfishResult>& stockfish_results,
+                                 const std::vector<std::string>& opening_names,
                                  int arrow_thickness_pct,
                                  const VideoOverlayConfig& overlay_config,
                                  std::atomic<bool>* cancel_flag,
@@ -62,6 +63,11 @@ private:
     void render_analysis_bar(cv::Mat& image,
                              const std::optional<StockfishResult>& analysis,
                              const std::string& fen,
+                             int width,
+                             int height) const;
+
+    void render_opening_text(cv::Mat& image,
+                             const std::string& opening_name,
                              int width,
                              int height) const;
     void load_piece_assets(const std::string& assets_dir);

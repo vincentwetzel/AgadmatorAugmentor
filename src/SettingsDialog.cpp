@@ -70,13 +70,34 @@ void setThreadComboValue(QComboBox* comboBox, int threads) {
     const int index = comboBox->findData(clampedThreads);
     comboBox->setCurrentIndex(index >= 0 ? index : comboBox->count() - 1);
 }
+
+QString canonicalVideoCodec(const QString& savedValue) {
+    if (savedValue.contains("h264_nvenc") || savedValue.contains("NVIDIA GPU H.264")) return "h264_nvenc";
+    if (savedValue.contains("libx265") || savedValue.contains("HEVC CPU")) return "libx265";
+    if (savedValue.contains("hevc_nvenc") || savedValue.contains("NVIDIA GPU HEVC")) return "hevc_nvenc";
+    if (savedValue.contains("libvpx-vp9") || savedValue.contains("VP9")) return "libvpx-vp9";
+    return "libx264";
+}
+
+QString canonicalAudioCodec(const QString& savedValue) {
+    if (savedValue.contains("libopus")) return "libopus";
+    if (savedValue.contains("aac", Qt::CaseInsensitive) || savedValue.contains("AAC")) return "aac";
+    return "copy";
+}
+
+QString canonicalResolution(const QString& savedValue) {
+    if (savedValue.contains("3840") || savedValue.contains("4K")) return "4K";
+    if (savedValue.contains("1920") || savedValue.contains("1080")) return "1080p";
+    if (savedValue.contains("1280") || savedValue.contains("720")) return "720p";
+    return "Source Resolution";
+}
 } // namespace
 
 namespace cta {
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("Settings");
-    resize(650, 500);
+    resize(760, 560);
     setupUi();
 }
 
@@ -90,32 +111,36 @@ void SettingsDialog::setupUi() {
     auto* generalTab = new QWidget();
     auto* generalLayout = new QVBoxLayout(generalTab);
 
-    auto* outputDirGroup = new QGroupBox("Output Directory");
-    outputDirGroup->setToolTip("Choose where the generated output files will be saved");
+    auto* outputDirGroup = new QGroupBox("Where to Save Results");
+    outputDirGroup->setToolTip("Choose where PGN files and analysis videos will be saved.");
     auto* outputDirLayout = new QVBoxLayout(outputDirGroup);
+    outputDirLayout->addWidget(createHelpText(
+        "Choose a default folder for files created after each video finishes.",
+        "Explains how ChessTube Analyzer chooses the output folder."
+    ));
 
-    auto* sameAsSourceRadio = new QRadioButton("Save to same folder as source video");
+    auto* sameAsSourceRadio = new QRadioButton("Next to each source video");
     sameAsSourceRadio->setObjectName("sameAsSourceRadio");
     sameAsSourceRadio->setChecked(true);
-    sameAsSourceRadio->setToolTip("Save output files in the same directory as the input video file");
+    sameAsSourceRadio->setToolTip("Save each video's output files in the same folder as that input video.");
     outputDirLayout->addWidget(sameAsSourceRadio);
 
     auto* customDirHLayout = new QHBoxLayout();
-    auto* customDirRadio = new QRadioButton("Custom directory:");
+    auto* customDirRadio = new QRadioButton("One folder for all results:");
     customDirRadio->setObjectName("customDirRadio");
-    customDirRadio->setToolTip("Save output files in a custom specified directory");
+    customDirRadio->setToolTip("Save every output file to the folder you choose here.");
     customDirHLayout->addWidget(customDirRadio);
 
     auto* customDirEdit = new QLineEdit();
     customDirEdit->setObjectName("customDirEdit");
     customDirEdit->setEnabled(false);
-    customDirEdit->setToolTip("Path to the custom output directory");
+    customDirEdit->setToolTip("Folder where all generated PGNs and analysis videos will be saved.");
     customDirHLayout->addWidget(customDirEdit);
 
     auto* customDirBtn = new QPushButton("Browse...");
     customDirBtn->setObjectName("customDirBtn");
     customDirBtn->setEnabled(false);
-    customDirBtn->setToolTip("Browse for a custom output directory");
+    customDirBtn->setToolTip("Choose the folder where generated files should be saved.");
     customDirHLayout->addWidget(customDirBtn);
 
     outputDirLayout->addLayout(customDirHLayout);
@@ -138,18 +163,22 @@ void SettingsDialog::setupUi() {
     });
 
     // Generation Options
-    auto* togglesGroup = new QGroupBox("Generation Options");
-    togglesGroup->setToolTip("Enable or disable specific output files");
+    auto* togglesGroup = new QGroupBox("Files to Create");
+    togglesGroup->setToolTip("Choose which files ChessTube Analyzer should create for each video.");
     auto* togglesLayout = new QVBoxLayout(togglesGroup);
-    togglesLayout->addWidget(createToggleRow("Generate Game Moves File (PGN)", "Exports the extracted moves to a PGN file", pgnExportToggle_, true));
-    togglesLayout->addWidget(createToggleRow("Generate PGN with Stockfish Analysis", "Generates a PGN file with Stockfish evaluations", stockfishToggle_, false));
+    togglesLayout->addWidget(createHelpText(
+        "Start with the moves-only PGN. Add Stockfish or video output when you want deeper review or a shareable annotated video.",
+        "Explains the recommended output choices."
+    ));
+    togglesLayout->addWidget(createToggleRow("Moves-only PGN", "Create a compact PGN containing the extracted legal moves.", pgnExportToggle_, true));
+    togglesLayout->addWidget(createToggleRow("PGN with engine analysis", "Add Stockfish evaluations, suggested lines, and comments to the PGN.", stockfishToggle_, false));
 
     ToggleSwitch* moveAnnotationsToggle = nullptr;
-    auto* annotationsRow = createToggleRow("Generate Move Quality Annotations", "Adds chess.com style move symbols (!!, ?, etc.) and Book tags to the PGN and Video", moveAnnotationsToggle, true);
+    auto* annotationsRow = createToggleRow("Move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to engine-analyzed output.", moveAnnotationsToggle, true);
     moveAnnotationsToggle->setObjectName("moveAnnotationsToggle");
     togglesLayout->addWidget(annotationsRow);
 
-    togglesLayout->addWidget(createToggleRow("Generate Analysis Video", "Generates an Analysis Video showing the board", analysisVideoToggle_, false));
+    togglesLayout->addWidget(createToggleRow("Analysis video", "Create a new video with board, evaluation, and engine overlays.", analysisVideoToggle_, false));
     generalLayout->addWidget(togglesGroup);
 
     // Theme selector
@@ -172,71 +201,77 @@ void SettingsDialog::setupUi() {
     // === Tab 2: Video Export ===
     auto* videoExportTab = new QWidget();
     auto* videoExportLayout = new QVBoxLayout(videoExportTab);
-    auto* encodingGroup = new QGroupBox("Video Export Settings");
-    encodingGroup->setToolTip("Configure settings for the generated analysis video");
+    auto* encodingGroup = new QGroupBox("Analysis Video Export");
+    encodingGroup->setToolTip("Configure the video file created when Analysis Video is enabled.");
     auto* encodingLayout = new QVBoxLayout(encodingGroup);
+    encodingLayout->addWidget(createHelpText(
+        "Recommended: H.264, original audio, .mp4, source resolution, and Standard quality. Change these mainly for smaller files, GPU encoding, or a specific upload target.",
+        "Beginner guidance for choosing video export settings."
+    ));
 
     auto* videoCodecLayout = new QHBoxLayout();
-    videoCodecLayout->addWidget(createSettingsLabel("Video Format:", "Select the video compression format. H.264 is recommended for best compatibility."));
+    videoCodecLayout->addWidget(createSettingsLabel("Video encoding:", "Controls how the analysis video is compressed. H.264 is the safest choice for playback and uploads."));
     auto* videoCodecComboBox = new QComboBox();
     videoCodecComboBox->setObjectName("videoCodecComboBox");
-    videoCodecComboBox->addItems({
-        "libx264 (H.264 - Fast & Compatible)", 
-        "h264_nvenc (NVIDIA GPU H.264 - Fastest)", 
-        "libx265 (HEVC - High Quality)", 
-        "hevc_nvenc (NVIDIA GPU HEVC - Fastest)", 
-        "libvpx-vp9 (VP9 - Web Optimized)"
-    });
+    videoCodecComboBox->addItem("H.264 CPU (recommended compatibility)", "libx264");
+    videoCodecComboBox->addItem("H.264 NVIDIA GPU (fast if supported)", "h264_nvenc");
+    videoCodecComboBox->addItem("HEVC CPU (smaller files, less compatible)", "libx265");
+    videoCodecComboBox->addItem("HEVC NVIDIA GPU (fast, less compatible)", "hevc_nvenc");
+    videoCodecComboBox->addItem("VP9 (web-focused, slower)", "libvpx-vp9");
     videoCodecComboBox->setProperty("class", "dropdown");
-    videoCodecComboBox->setToolTip("Select the video compression format. H.264 is recommended for best compatibility.");
+    videoCodecComboBox->setToolTip("Choose the video encoder. Use H.264 CPU if you are unsure; use NVIDIA options only on systems with supported NVIDIA hardware.");
     videoCodecLayout->addWidget(videoCodecComboBox);
     videoCodecLayout->addStretch();
     encodingLayout->addLayout(videoCodecLayout);
 
     auto* audioCodecLayout = new QHBoxLayout();
-    audioCodecLayout->addWidget(createSettingsLabel("Audio Track:", "Select the audio format. 'copy' retains original audio without re-encoding."));
+    audioCodecLayout->addWidget(createSettingsLabel("Audio:", "Choose whether to keep the original audio or convert it."));
     auto* audioCodecComboBox = new QComboBox();
     audioCodecComboBox->setObjectName("audioCodecComboBox");
-    audioCodecComboBox->addItems({"copy (Original, Fastest)", "aac (Standard)"});
+    audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
+    audioCodecComboBox->addItem("AAC audio (standard)", "aac");
     audioCodecComboBox->setProperty("class", "dropdown");
-    audioCodecComboBox->setToolTip("Select the audio format. 'copy' retains original audio without re-encoding.");
+    audioCodecComboBox->setToolTip("Keeping original audio is fastest and avoids quality loss. Use AAC for broad MP4 compatibility.");
     audioCodecLayout->addWidget(audioCodecComboBox);
     audioCodecLayout->addStretch();
     encodingLayout->addLayout(audioCodecLayout);
 
     auto* extensionLayout = new QHBoxLayout();
-    extensionLayout->addWidget(createSettingsLabel("File Type:", "Select the container format for the output video file."));
+    extensionLayout->addWidget(createSettingsLabel("File type:", "Choose the file extension for the exported analysis video."));
     auto* extensionComboBox = new QComboBox();
     extensionComboBox->setObjectName("extensionComboBox");
     extensionComboBox->addItems({".mp4", ".mkv", ".avi", ".mov"});
     extensionComboBox->setProperty("class", "dropdown");
-    extensionComboBox->setToolTip("Select the container format for the output video file.");
+    extensionComboBox->setToolTip("Choose the output video container. MP4 is recommended for most users.");
     extensionLayout->addWidget(extensionComboBox);
     extensionLayout->addStretch();
     encodingLayout->addLayout(extensionLayout);
 
     auto* resolutionLayout = new QHBoxLayout();
-    resolutionLayout->addWidget(createSettingsLabel("Output Resolution:", "Select the output video resolution. Scaling down can save processing time and space."));
+    resolutionLayout->addWidget(createSettingsLabel("Size:", "Choose the exported video size. Keeping the source size preserves the original detail."));
     auto* resolutionComboBox = new QComboBox();
     resolutionComboBox->setObjectName("resolutionComboBox");
-    resolutionComboBox->addItems({"Source Resolution (No Scaling)", "4K (3840x2160)", "1080p (1920x1080)", "720p (1280x720)"});
+    resolutionComboBox->addItem("Same as source (recommended)", "Source Resolution");
+    resolutionComboBox->addItem("4K (3840x2160)", "4K");
+    resolutionComboBox->addItem("1080p (1920x1080)", "1080p");
+    resolutionComboBox->addItem("720p (1280x720)", "720p");
     resolutionComboBox->setProperty("class", "dropdown");
-    resolutionComboBox->setToolTip("Select the output video resolution. Scaling down can save processing time and space.");
+    resolutionComboBox->setToolTip("Scaling down can save time and disk space. Same as source keeps the video closest to the original.");
     resolutionLayout->addWidget(resolutionComboBox);
     resolutionLayout->addStretch();
     encodingLayout->addLayout(resolutionLayout);
 
     auto* qualityLayout = new QHBoxLayout();
-    qualityLayout->addWidget(createSettingsLabel("Video Compression (CRF):", "Controls the Constant Rate Factor (CRF) for FFmpeg video compression."));
+    qualityLayout->addWidget(createSettingsLabel("Quality vs file size:", "Controls video compression. Higher quality creates larger files; smaller files look softer."));
     auto* qualityComboBox = new QComboBox();
     qualityComboBox->setObjectName("qualityComboBox");
-    qualityComboBox->addItem("Very Low Compression (CRF 18 - Best Quality)", 18);
-    qualityComboBox->addItem("Low Compression (CRF 20 - High Quality)", 20);
-    qualityComboBox->addItem("Standard (CRF 23 - Recommended Balance)", 23);
-    qualityComboBox->addItem("High Compression (CRF 28 - Smaller File)", 28);
-    qualityComboBox->addItem("Highest Compression (CRF 35 - Lowest Quality)", 35);
+    qualityComboBox->addItem("Best quality, largest file", 18);
+    qualityComboBox->addItem("High quality", 20);
+    qualityComboBox->addItem("Standard (recommended)", 23);
+    qualityComboBox->addItem("Smaller file", 28);
+    qualityComboBox->addItem("Smallest file, visibly softer", 35);
     qualityComboBox->setProperty("class", "dropdown");
-    qualityComboBox->setToolTip("Controls the Constant Rate Factor (CRF) for FFmpeg video compression.\nLower values (18-20) produce larger, near-lossless files.\nStandard (23) provides a great sweet spot.\nHigher values (28-35) aggressively compress the video to save hard drive space, but will introduce noticeable blurriness and blocky artifacts.");
+    qualityComboBox->setToolTip("This maps to FFmpeg CRF values. Best quality uses larger files; Standard is the recommended balance; smaller-file choices can introduce blur or blockiness.");
     qualityLayout->addWidget(qualityComboBox);
     qualityLayout->addStretch();
     encodingLayout->addLayout(qualityLayout);
@@ -248,122 +283,138 @@ void SettingsDialog::setupUi() {
     // === Tab 3: Stockfish ===
     auto* stockfishTab = new QWidget();
     auto* stockfishLayout = new QVBoxLayout(stockfishTab);
-    stockfishSettingsGroup_ = new QGroupBox("Stockfish Analysis Settings");
-    stockfishSettingsGroup_->setToolTip("Choose how much engine analysis to add to PGNs and analysis videos");
+    stockfishSettingsGroup_ = new QGroupBox("Engine Analysis");
+    stockfishSettingsGroup_->setToolTip("Choose how much Stockfish analysis to add to PGNs and analysis videos.");
     auto* stockfishOptionsLayout = new QVBoxLayout(stockfishSettingsGroup_);
 
     stockfishOptionsLayout->addWidget(createHelpText(
-        "Recommended starting point: use 1-2 lines, depth 15, and leave time/nodes unlimited. Raise depth or lines only if you want stronger analysis and do not mind waiting longer.",
+        "Recommended: 1-2 lines, Normal strength, no time limit, no search limit. Increase strength or lines when accuracy matters more than waiting time.",
         "Beginner guidance for balancing Stockfish strength against processing time"
     ));
 
     ToggleSwitch* fastPreviewToggle = nullptr;
-    auto* fpRow = createToggleRow("Fast Preview Mode", "Uses a lower depth and strict time limit for much quicker engine analysis, bypassing manual limits below", fastPreviewToggle, false);
+    auto* fpRow = createToggleRow("Quick engine analysis", "Use fast, lighter Stockfish settings. Good for a first pass; manual strength and limit controls below are temporarily ignored.", fastPreviewToggle, false);
     fastPreviewToggle->setObjectName("fastPreviewToggle");
     stockfishOptionsLayout->addWidget(fpRow);
 
     connect(fastPreviewToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
-        if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setEnabled(!checked);
-        if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setEnabled(!checked);
-        if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setEnabled(!checked);
-        emit logMessage(checked ? "Fast Preview enabled (manual limits bypassed)" : "Fast Preview disabled (using manual limits)");
+        if (auto* d = findChild<QComboBox*>("depthComboBox")) d->setEnabled(!checked);
+        if (auto* t = findChild<QComboBox*>("timeComboBox")) t->setEnabled(!checked);
+        if (auto* n = findChild<QComboBox*>("nodesComboBox")) n->setEnabled(!checked);
+        emit logMessage(checked ? "Quick engine analysis enabled (manual limits bypassed)" : "Quick engine analysis disabled (using manual limits)");
         saveSettings();
     });
 
     auto* stockfishPathLayout = new QHBoxLayout();
     stockfishPathLayout->addWidget(createSettingsLabel(
-        "Stockfish App:",
-        "The Stockfish executable file ChessTube Analyzer will run for engine analysis"
+        "Stockfish location:",
+        "The Stockfish executable ChessTube Analyzer will run for engine analysis."
     ));
     auto* stockfishPathEdit = new QLineEdit();
     stockfishPathEdit->setObjectName("stockfishPathEdit");
-    stockfishPathEdit->setToolTip("Path to the Stockfish engine app. Leave blank only if Stockfish is bundled or already discoverable.");
+    stockfishPathEdit->setToolTip("Path to the Stockfish executable. Leave blank only if Stockfish is bundled with the app or already found automatically.");
     stockfishPathLayout->addWidget(stockfishPathEdit);
     auto* stockfishPathBtn = new QPushButton("Browse...");
-    stockfishPathBtn->setToolTip("Choose the Stockfish executable file manually");
+    stockfishPathBtn->setToolTip("Choose the Stockfish executable manually.");
     stockfishPathLayout->addWidget(stockfishPathBtn);
     auto* stockfishSearchBtn = new QPushButton("Auto-Find");
-    stockfishSearchBtn->setToolTip("Search common folders for a Stockfish executable");
+    stockfishSearchBtn->setToolTip("Search common install and download folders for Stockfish.");
     stockfishPathLayout->addWidget(stockfishSearchBtn);
     stockfishOptionsLayout->addLayout(stockfishPathLayout);
 
     auto* multiPvLayout = new QHBoxLayout();
     multiPvLayout->addWidget(createSettingsLabel(
-        "Best Moves to Show:",
-        "How many candidate moves Stockfish should show for each position"
+        "Engine lines:",
+        "How many suggested moves Stockfish should show for each position."
     ));
     multiPvComboBox_ = new QComboBox();
-    multiPvComboBox_->addItem("1 best move (fastest, easiest to read)", 1);
-    multiPvComboBox_->addItem("2 best moves (good for comparison)", 2);
-    multiPvComboBox_->addItem("3 best moves (more detail)", 3);
-    multiPvComboBox_->addItem("4 best moves (slowest)", 4);
+    multiPvComboBox_->addItem("1 line (fastest, clearest)", 1);
+    multiPvComboBox_->addItem("2 lines (recommended comparison)", 2);
+    multiPvComboBox_->addItem("3 lines (more alternatives)", 3);
+    multiPvComboBox_->addItem("4 lines (slowest)", 4);
     multiPvComboBox_->setProperty("class", "dropdown");
-    multiPvComboBox_->setToolTip("More best moves means richer analysis, but each position takes longer to process.");
+    multiPvComboBox_->setToolTip("More lines show alternatives, but each position takes longer to analyze.");
     multiPvLayout->addWidget(multiPvComboBox_);
     multiPvLayout->addStretch();
     stockfishOptionsLayout->addLayout(multiPvLayout);
 
     auto* depthLayout = new QHBoxLayout();
     depthLayout->addWidget(createSettingsLabel(
-        "Thinking Depth:",
-        "How many half-moves ahead Stockfish tries to calculate"
+        "Analysis strength:",
+        "How deeply Stockfish searches. Stronger analysis takes longer."
     ));
-    auto* depthSpinBox = new QSpinBox();
-    depthSpinBox->setObjectName("depthSpinBox");
-    depthSpinBox->setRange(1, 40);
-    depthSpinBox->setSuffix(" plies");
-    depthSpinBox->setToolTip("Higher depth is usually stronger, but slower. Try 15 for normal use; 20+ is better for fast CPUs.");
-    depthLayout->addWidget(depthSpinBox);
+    auto* depthComboBox = new QComboBox();
+    depthComboBox->setObjectName("depthComboBox");
+    depthComboBox->addItem("Fast (Depth 10)", 10);
+    depthComboBox->addItem("Normal (Depth 15, recommended)", 15);
+    depthComboBox->addItem("Strong (Depth 20)", 20);
+    depthComboBox->addItem("Very strong (Depth 25)", 25);
+    depthComboBox->addItem("Deep (Depth 30)", 30);
+    depthComboBox->setProperty("class", "dropdown");
+    depthComboBox->setToolTip("Normal is a good default. Strong and above can improve accuracy, but may add a lot of processing time.");
+    depthLayout->addWidget(depthComboBox);
     depthLayout->addWidget(createSettingsLabel(
-        "15 normal, 20+ strong",
-        "A simple rule of thumb for choosing Stockfish depth"
+        "Normal is the best starting point.",
+        "A simple rule of thumb for choosing Stockfish strength."
     ));
     depthLayout->addStretch();
     stockfishOptionsLayout->addLayout(depthLayout);
     
     auto* timeLayout = new QHBoxLayout();
     timeLayout->addWidget(createSettingsLabel(
-        "Time Limit per Position:",
-        "Optional cap on how long Stockfish may spend on each board position"
+        "Time cap:",
+        "Optional cap on how long Stockfish may spend on each board position."
     ));
-    auto* timeSpinBox = new QSpinBox();
-    timeSpinBox->setObjectName("timeSpinBox");
-    timeSpinBox->setRange(0, 600); // Up to 10 minutes
-    timeSpinBox->setSingleStep(1);
-    timeSpinBox->setSpecialValueText("No time limit");
-    timeSpinBox->setSuffix(" s");
-    timeSpinBox->setToolTip("Optional safety cap in seconds. 0 means Stockfish stops by depth instead of by time.");
-    timeLayout->addWidget(timeSpinBox);
+    auto* timeComboBox = new QComboBox();
+    timeComboBox->setObjectName("timeComboBox");
+    timeComboBox->addItem("No cap (use strength setting)", 0);
+    timeComboBox->addItem("1 second", 1);
+    timeComboBox->addItem("2 seconds", 2);
+    timeComboBox->addItem("5 seconds", 5);
+    timeComboBox->addItem("10 seconds", 10);
+    timeComboBox->addItem("30 seconds", 30);
+    timeComboBox->addItem("60 seconds", 60);
+    timeComboBox->setProperty("class", "dropdown");
+    timeComboBox->setToolTip("Optional safety cap per position. No cap lets Stockfish stop when it reaches the selected strength.");
+    timeLayout->addWidget(timeComboBox);
     timeLayout->addStretch();
     stockfishOptionsLayout->addLayout(timeLayout);
 
     auto* nodesLayout = new QHBoxLayout();
     nodesLayout->addWidget(createSettingsLabel(
-        "Position Limit:",
-        "Optional cap on how many possible positions Stockfish may examine"
+        "Search work limit:",
+        "Advanced cap on how many positions Stockfish may examine."
     ));
-    auto* nodesSpinBox = new QSpinBox();
-    nodesSpinBox->setObjectName("nodesSpinBox");
-    nodesSpinBox->setRange(0, 1000000000);
-    nodesSpinBox->setSingleStep(100000);
-    nodesSpinBox->setSpecialValueText("No position limit");
-    nodesSpinBox->setSuffix(" nodes");
-    nodesSpinBox->setToolTip("Advanced limit on Stockfish's search work. Most users should leave this at 0.");
-    nodesLayout->addWidget(nodesSpinBox);
+    auto* nodesComboBox = new QComboBox();
+    nodesComboBox->setObjectName("nodesComboBox");
+    nodesComboBox->addItem("No limit (recommended)", 0);
+    nodesComboBox->addItem("100,000 nodes", 100000);
+    nodesComboBox->addItem("500,000 nodes", 500000);
+    nodesComboBox->addItem("1,000,000 nodes", 1000000);
+    nodesComboBox->addItem("5,000,000 nodes", 5000000);
+    nodesComboBox->setProperty("class", "dropdown");
+    nodesComboBox->setToolTip("Advanced Stockfish limit. Leave this at No limit unless you are intentionally bounding CPU work.");
+    nodesLayout->addWidget(nodesComboBox);
     nodesLayout->addStretch();
     stockfishOptionsLayout->addLayout(nodesLayout);
 
     auto* analysisDepthLayout = new QHBoxLayout();
     analysisDepthLayout->addWidget(createSettingsLabel(
-        "Moves to Write in Each Line:",
-        "How many moves of each suggested Stockfish continuation should appear in the PGN/video text"
+        "Line length:",
+        "How many moves of each suggested Stockfish continuation should appear in PGN and video text."
     ));
-    auto* analysisDepthSpinBox = new QSpinBox();
-    analysisDepthSpinBox->setObjectName("analysisDepthSpinBox");
-    analysisDepthSpinBox->setRange(1, 10);
-    analysisDepthSpinBox->setSuffix(" moves");
-    analysisDepthSpinBox->setToolTip("Controls how long each displayed engine line is. Shorter lines are easier to read.");
-    analysisDepthLayout->addWidget(analysisDepthSpinBox);
+    auto* analysisDepthComboBox = new QComboBox();
+    analysisDepthComboBox->setObjectName("analysisDepthComboBox");
+    analysisDepthComboBox->addItem("1 move", 1);
+    analysisDepthComboBox->addItem("2 moves", 2);
+    analysisDepthComboBox->addItem("3 moves", 3);
+    analysisDepthComboBox->addItem("4 moves", 4);
+    analysisDepthComboBox->addItem("5 moves", 5);
+    analysisDepthComboBox->addItem("8 moves", 8);
+    analysisDepthComboBox->addItem("10 moves", 10);
+    analysisDepthComboBox->setProperty("class", "dropdown");
+    analysisDepthComboBox->setToolTip("Shorter lines are easier to read. Longer lines provide more engine detail.");
+    analysisDepthLayout->addWidget(analysisDepthComboBox);
     analysisDepthLayout->addStretch();
     stockfishOptionsLayout->addLayout(analysisDepthLayout);
 
@@ -374,44 +425,53 @@ void SettingsDialog::setupUi() {
     // === Tab 4: Advanced ===
     auto* advancedTab = new QWidget();
     auto* advancedLayout = new QVBoxLayout(advancedTab);
-    auto* advancedGroup = new QGroupBox("Performance & Debugging");
-    advancedGroup->setToolTip("Configure advanced performance and developer settings");
+    auto* advancedGroup = new QGroupBox("Performance and Troubleshooting");
+    advancedGroup->setToolTip("Tune processing speed, memory use, and debug output.");
     auto* advancedGroupLayout = new QVBoxLayout(advancedGroup);
+    advancedGroupLayout->addWidget(createHelpText(
+        "Most users can leave these on their defaults. Lower threads or RAM budget if your computer feels overloaded while processing.",
+        "Explains when to change advanced settings."
+    ));
 
     auto* threadLayout = new QHBoxLayout();
-    threadLayout->addWidget(createSettingsLabel("FFmpeg Decode Threads:", "Set the number of CPU threads allocated for video decoding. The maximum option uses all detected logical CPU threads."));
+    threadLayout->addWidget(createSettingsLabel("Video decoding threads:", "CPU threads used while reading video frames. More can be faster but may make the computer feel busier."));
     threadComboBox_ = new QComboBox();
     const int maxThreads = maxHardwareThreadCount();
     for (int threadCount = 1; threadCount <= maxThreads; ++threadCount) {
         const QString label = threadCount == maxThreads
-            ? QString("%1 threads (Maximum / default)").arg(threadCount)
+            ? QString("%1 threads (maximum, default)").arg(threadCount)
             : QString("%1 thread%2").arg(threadCount).arg(threadCount == 1 ? "" : "s");
         threadComboBox_->addItem(label, threadCount);
     }
     threadComboBox_->setProperty("class", "dropdown");
-    threadComboBox_->setToolTip("Set the number of CPU threads allocated for video decoding. The maximum option uses all detected logical CPU threads.");
+    threadComboBox_->setToolTip("Set the number of CPU threads used to decode video. Maximum uses all detected logical CPU threads.");
     threadLayout->addWidget(threadComboBox_);
     threadLayout->addStretch();
     advancedGroupLayout->addLayout(threadLayout);
 
     auto* debugLevelLayout = new QHBoxLayout();
-    debugLevelLayout->addWidget(createSettingsLabel("Debug Image Generation:", "Select the level of debug images to save to the disk during processing."));
+    debugLevelLayout->addWidget(createSettingsLabel("Debug images:", "Save diagnostic images while processing. Useful when checking why a move was or was not detected."));
     debugLevelComboBox_ = new QComboBox();
-    debugLevelComboBox_->addItems({"None", "Moves Only", "Full"});
+    debugLevelComboBox_->addItems({"None (recommended)", "Moves only", "Full diagnostics"});
     debugLevelComboBox_->setProperty("class", "dropdown");
-    debugLevelComboBox_->setToolTip("Select the level of debug images to save to the disk during processing.");
+    debugLevelComboBox_->setToolTip("Choose how many debug images to save. Full diagnostics can use significant disk space.");
     debugLevelLayout->addWidget(debugLevelComboBox_);
     debugLevelLayout->addStretch();
     advancedGroupLayout->addLayout(debugLevelLayout);
 
     auto* memoryLimitLayout = new QHBoxLayout();
-    memoryLimitLayout->addWidget(createSettingsLabel("Memory Limit (MB):", "Limits the number of parallel map-reduce workers to control peak RAM usage. Use 0 for unlimited."));
-    auto* memoryLimitSpinBox = new QSpinBox();
-    memoryLimitSpinBox->setObjectName("memoryLimitSpinBox");
-    memoryLimitSpinBox->setRange(0, 65536);
-    memoryLimitSpinBox->setSingleStep(512);
-    memoryLimitSpinBox->setToolTip("Limits the number of parallel map-reduce workers to control peak RAM usage.\nEach worker can hold a chunk of decoded video frames in memory.\nUse 0 for unlimited (uses all available CPU cores).");
-    memoryLimitLayout->addWidget(memoryLimitSpinBox);
+    memoryLimitLayout->addWidget(createSettingsLabel("RAM budget:", "Limit parallel video workers to control peak memory use."));
+    auto* memoryLimitComboBox = new QComboBox();
+    memoryLimitComboBox->setObjectName("memoryLimitComboBox");
+    memoryLimitComboBox->addItem("No limit (fastest)", 0);
+    memoryLimitComboBox->addItem("1 GB", 1024);
+    memoryLimitComboBox->addItem("2 GB", 2048);
+    memoryLimitComboBox->addItem("4 GB", 4096);
+    memoryLimitComboBox->addItem("8 GB", 8192);
+    memoryLimitComboBox->addItem("16 GB", 16384);
+    memoryLimitComboBox->setProperty("class", "dropdown");
+    memoryLimitComboBox->setToolTip("Caps parallel workers to reduce peak RAM use. No limit is fastest, but can use more memory on long or high-resolution videos.");
+    memoryLimitLayout->addWidget(memoryLimitComboBox);
     memoryLimitLayout->addStretch();
     advancedGroupLayout->addLayout(memoryLimitLayout);
 
@@ -420,7 +480,10 @@ void SettingsDialog::setupUi() {
     tabWidget->addTab(advancedTab, "Advanced");
 
     auto* dialogBtnBox = new QDialogButtonBox(QDialogButtonBox::Close);
-    dialogBtnBox->setToolTip("Close the settings window and apply changes");
+    dialogBtnBox->setToolTip("Close the settings window. Changes are saved automatically.");
+    if (auto* closeButton = dialogBtnBox->button(QDialogButtonBox::Close)) {
+        closeButton->setToolTip("Close Settings. Changes are saved automatically.");
+    }
     connect(dialogBtnBox, &QDialogButtonBox::rejected, this, &QDialog::accept);
     dialogLayout->addWidget(dialogBtnBox);
 
@@ -546,10 +609,10 @@ void SettingsDialog::setupUi() {
             emit logMessage("Could not automatically find Stockfish. Please browse manually.");
         }
     });
-    connect(depthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
-    connect(timeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
-    connect(nodesSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
-    connect(analysisDepthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    connect(depthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    connect(timeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    connect(nodesComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    connect(analysisDepthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(stockfishPathEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
     connect(themeComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
         saveSettings();
@@ -563,19 +626,21 @@ void SettingsDialog::setupUi() {
         });
     }
     connect(videoCodecComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, videoCodecComboBox, audioCodecComboBox, extensionComboBox]() {
-        QString vCodec = videoCodecComboBox->currentText();
-        QString currentAudio = audioCodecComboBox->currentText();
+        const QString vCodec = videoCodecComboBox->currentData().toString();
+        const QString currentAudio = audioCodecComboBox->currentData().toString();
         QString currentExt = extensionComboBox->currentText();
         audioCodecComboBox->blockSignals(true); extensionComboBox->blockSignals(true);
         audioCodecComboBox->clear(); extensionComboBox->clear();
-        if (vCodec.contains("VP9")) {
-            audioCodecComboBox->addItems({"copy (Original, Fastest)", "libopus (High Quality)"});
+        if (vCodec == "libvpx-vp9") {
+            audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
+            audioCodecComboBox->addItem("Opus audio (recommended for WebM)", "libopus");
             extensionComboBox->addItems({".webm", ".mkv"});
         } else {
-            audioCodecComboBox->addItems({"copy (Original, Fastest)", "aac (Standard)"});
+            audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
+            audioCodecComboBox->addItem("AAC audio (standard)", "aac");
             extensionComboBox->addItems({".mp4", ".mkv", ".avi", ".mov"});
         }
-        int aIdx = audioCodecComboBox->findText(currentAudio);
+        int aIdx = audioCodecComboBox->findData(currentAudio);
         if (aIdx >= 0) audioCodecComboBox->setCurrentIndex(aIdx);
         int eIdx = extensionComboBox->findText(currentExt);
         if (eIdx >= 0) extensionComboBox->setCurrentIndex(eIdx);
@@ -607,18 +672,18 @@ void SettingsDialog::loadSettings() {
     const int defaultThreads = maxHardwareThreadCount();
     setThreadComboValue(threadComboBox_, settings.value("ffmpegThreads", defaultThreads).toInt());
     
-    if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(settings.value("stockfishDepth", 15).toInt());
-    if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(settings.value("stockfishTime", 0).toInt());
-    if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(settings.value("stockfishNodes", 0).toInt());
-    if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(settings.value("stockfishAnalysisDepth", 5).toInt());
+    if (auto* d = findChild<QComboBox*>("depthComboBox")) { int idx = d->findData(settings.value("stockfishDepth", 15).toInt()); d->setCurrentIndex(idx >= 0 ? idx : d->findData(15)); }
+    if (auto* t = findChild<QComboBox*>("timeComboBox")) { int idx = t->findData(settings.value("stockfishTime", 0).toInt()); t->setCurrentIndex(idx >= 0 ? idx : t->findData(0)); }
+    if (auto* n = findChild<QComboBox*>("nodesComboBox")) { int idx = n->findData(settings.value("stockfishNodes", 0).toInt()); n->setCurrentIndex(idx >= 0 ? idx : n->findData(0)); }
+    if (auto* ad = findChild<QComboBox*>("analysisDepthComboBox")) { int idx = ad->findData(settings.value("stockfishAnalysisDepth", 5).toInt()); ad->setCurrentIndex(idx >= 0 ? idx : ad->findData(5)); }
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) p->setText(settings.value("stockfishPath", "").toString());
     
     if (auto* fp = findChild<ToggleSwitch*>("fastPreviewToggle")) {
         bool fpEnabled = settings.value("fastPreview", false).toBool();
         fp->setChecked(fpEnabled);
-        if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setEnabled(!fpEnabled);
-        if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setEnabled(!fpEnabled);
-        if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setEnabled(!fpEnabled);
+        if (auto* d = findChild<QComboBox*>("depthComboBox")) d->setEnabled(!fpEnabled);
+        if (auto* t = findChild<QComboBox*>("timeComboBox")) t->setEnabled(!fpEnabled);
+        if (auto* n = findChild<QComboBox*>("nodesComboBox")) n->setEnabled(!fpEnabled);
     }
 
     debugLevelComboBox_->setCurrentIndex(settings.value("debugLevel", 0).toInt());
@@ -630,25 +695,29 @@ void SettingsDialog::loadSettings() {
     if (auto* e = findChild<QLineEdit*>("customDirEdit")) e->setText(settings.value("outCustomDir", "").toString());
 
     if (auto* vc = findChild<QComboBox*>("videoCodecComboBox")) {
-        int vIdx = vc->findText(settings.value("videoCodec", "libx264 (H.264 - Fast & Compatible)").toString());
+        const QString videoCodec = canonicalVideoCodec(settings.value("videoCodec", "libx264").toString());
+        int vIdx = vc->findData(videoCodec);
         vc->setCurrentIndex(vIdx >= 0 ? vIdx : 0);
         
         // Ensure dependent comboboxes have the correct items for the loaded codec before setting their values
         if (auto* ac = findChild<QComboBox*>("audioCodecComboBox")) {
             if (auto* ec = findChild<QComboBox*>("extensionComboBox")) {
                 ac->clear(); ec->clear();
-                if (vc->currentText().contains("VP9")) {
-                    ac->addItems({"copy (Original, Fastest)", "libopus (High Quality)"});
+                if (vc->currentData().toString() == "libvpx-vp9") {
+                    ac->addItem("Keep original audio (fastest)", "copy");
+                    ac->addItem("Opus audio (recommended for WebM)", "libopus");
                     ec->addItems({".webm", ".mkv"});
                 } else {
-                    ac->addItems({"copy (Original, Fastest)", "aac (Standard)"});
+                    ac->addItem("Keep original audio (fastest)", "copy");
+                    ac->addItem("AAC audio (standard)", "aac");
                     ec->addItems({".mp4", ".mkv", ".avi", ".mov"});
                 }
             }
         }
     }
     if (auto* ac = findChild<QComboBox*>("audioCodecComboBox")) {
-        int aIdx = ac->findText(settings.value("audioCodec", "copy (Original, Fastest)").toString());
+        const QString audioCodec = canonicalAudioCodec(settings.value("audioCodec", "copy").toString());
+        int aIdx = ac->findData(audioCodec);
         ac->setCurrentIndex(aIdx >= 0 ? aIdx : 0);
     }
     if (auto* ec = findChild<QComboBox*>("extensionComboBox")) {
@@ -656,7 +725,8 @@ void SettingsDialog::loadSettings() {
         ec->setCurrentIndex(eIdx >= 0 ? eIdx : 0);
     }
     if (auto* rc = findChild<QComboBox*>("resolutionComboBox")) {
-        int rIdx = rc->findText(settings.value("videoResolution", "Source Resolution (No Scaling)").toString());
+        const QString resolution = canonicalResolution(settings.value("videoResolution", "Source Resolution").toString());
+        int rIdx = rc->findData(resolution);
         rc->setCurrentIndex(rIdx >= 0 ? rIdx : 0);
     }
     if (auto* q = findChild<QComboBox*>("qualityComboBox")) {
@@ -665,7 +735,7 @@ void SettingsDialog::loadSettings() {
         q->setCurrentIndex(idx >= 0 ? idx : 2);
     }
 
-    if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) m->setValue(settings.value("memoryLimitMB", 0).toInt());
+    if (auto* m = findChild<QComboBox*>("memoryLimitComboBox")) { int idx = m->findData(settings.value("memoryLimitMB", 0).toInt()); m->setCurrentIndex(idx >= 0 ? idx : m->findData(0)); }
 
     for (auto* w : widgets) w->blockSignals(false);
 }
@@ -682,10 +752,10 @@ void SettingsDialog::saveSettings() {
         settings.setValue("analysis/enableMoveAnnotations", mat->isChecked());
     }
 
-    if (auto* d = findChild<QSpinBox*>("depthSpinBox")) settings.setValue("stockfishDepth", d->value());
-    if (auto* t = findChild<QSpinBox*>("timeSpinBox")) settings.setValue("stockfishTime", t->value());
-    if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) settings.setValue("stockfishNodes", n->value());
-    if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) settings.setValue("stockfishAnalysisDepth", ad->value());
+    if (auto* d = findChild<QComboBox*>("depthComboBox")) settings.setValue("stockfishDepth", d->currentData().toInt());
+    if (auto* t = findChild<QComboBox*>("timeComboBox")) settings.setValue("stockfishTime", t->currentData().toInt());
+    if (auto* n = findChild<QComboBox*>("nodesComboBox")) settings.setValue("stockfishNodes", n->currentData().toInt());
+    if (auto* ad = findChild<QComboBox*>("analysisDepthComboBox")) settings.setValue("stockfishAnalysisDepth", ad->currentData().toInt());
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) settings.setValue("stockfishPath", p->text());
     settings.setValue("debugLevel", debugLevelComboBox_->currentIndex());
 
@@ -695,13 +765,13 @@ void SettingsDialog::saveSettings() {
 
     if (auto* ss = findChild<QRadioButton*>("sameAsSourceRadio")) settings.setValue("outSameAsSource", ss->isChecked());
     if (auto* cd = findChild<QLineEdit*>("customDirEdit")) settings.setValue("outCustomDir", cd->text());
-    if (auto* vc = findChild<QComboBox*>("videoCodecComboBox")) settings.setValue("videoCodec", vc->currentText());
-    if (auto* ac = findChild<QComboBox*>("audioCodecComboBox")) settings.setValue("audioCodec", ac->currentText());
+    if (auto* vc = findChild<QComboBox*>("videoCodecComboBox")) settings.setValue("videoCodec", vc->currentData().toString());
+    if (auto* ac = findChild<QComboBox*>("audioCodecComboBox")) settings.setValue("audioCodec", ac->currentData().toString());
     if (auto* ec = findChild<QComboBox*>("extensionComboBox")) settings.setValue("videoExtension", ec->currentText());
-    if (auto* rc = findChild<QComboBox*>("resolutionComboBox")) settings.setValue("videoResolution", rc->currentText());
+    if (auto* rc = findChild<QComboBox*>("resolutionComboBox")) settings.setValue("videoResolution", rc->currentData().toString());
     if (auto* q = findChild<QComboBox*>("qualityComboBox")) settings.setValue("videoQuality", q->currentData().toInt());
     
-    if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) settings.setValue("memoryLimitMB", m->value());
+    if (auto* m = findChild<QComboBox*>("memoryLimitComboBox")) settings.setValue("memoryLimitMB", m->currentData().toInt());
 }
 
 void SettingsDialog::populateSettings(ProcessingSettings& s) const {
@@ -710,13 +780,13 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
     s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
     s.multiPv = multiPvComboBox_->currentData().toInt();
     s.ffmpegThreads = threadComboBox_->currentData().toInt();
-    s.stockfishDepth = findChild<QSpinBox*>("depthSpinBox") ? findChild<QSpinBox*>("depthSpinBox")->value() : 15;
-    s.stockfishTime = findChild<QSpinBox*>("timeSpinBox") ? findChild<QSpinBox*>("timeSpinBox")->value() : 0;
-    s.stockfishNodes = findChild<QSpinBox*>("nodesSpinBox") ? findChild<QSpinBox*>("nodesSpinBox")->value() : 0;
-    s.stockfishAnalysisDepth = findChild<QSpinBox*>("analysisDepthSpinBox") ? findChild<QSpinBox*>("analysisDepthSpinBox")->value() : 5;
+    s.stockfishDepth = findChild<QComboBox*>("depthComboBox") ? findChild<QComboBox*>("depthComboBox")->currentData().toInt() : 15;
+    s.stockfishTime = findChild<QComboBox*>("timeComboBox") ? findChild<QComboBox*>("timeComboBox")->currentData().toInt() : 0;
+    s.stockfishNodes = findChild<QComboBox*>("nodesComboBox") ? findChild<QComboBox*>("nodesComboBox")->currentData().toInt() : 0;
+    s.stockfishAnalysisDepth = findChild<QComboBox*>("analysisDepthComboBox") ? findChild<QComboBox*>("analysisDepthComboBox")->currentData().toInt() : 5;
     s.stockfishPath = findChild<QLineEdit*>("stockfishPathEdit") ? findChild<QLineEdit*>("stockfishPathEdit")->text() : "";
     s.debugLevel = debugLevelComboBox_->currentIndex();
-    s.memoryLimitMB = findChild<QSpinBox*>("memoryLimitSpinBox") ? findChild<QSpinBox*>("memoryLimitSpinBox")->value() : 0;
+    s.memoryLimitMB = findChild<QComboBox*>("memoryLimitComboBox") ? findChild<QComboBox*>("memoryLimitComboBox")->currentData().toInt() : 0;
 
     if (auto* fp = findChild<ToggleSwitch*>("fastPreviewToggle")) {
         if (fp->isChecked()) {
@@ -734,10 +804,10 @@ void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     int idx = multiPvComboBox_->findData(settings.multiPv);
     if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
     setThreadComboValue(threadComboBox_, settings.ffmpegThreads);
-    if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(settings.stockfishDepth);
-    if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(settings.stockfishTime);
-    if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(settings.stockfishNodes);
-    if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(settings.stockfishAnalysisDepth);
+    if (auto* d = findChild<QComboBox*>("depthComboBox")) { int idx = d->findData(settings.stockfishDepth); if (idx >= 0) d->setCurrentIndex(idx); }
+    if (auto* t = findChild<QComboBox*>("timeComboBox")) { int idx = t->findData(settings.stockfishTime); if (idx >= 0) t->setCurrentIndex(idx); }
+    if (auto* n = findChild<QComboBox*>("nodesComboBox")) { int idx = n->findData(settings.stockfishNodes); if (idx >= 0) n->setCurrentIndex(idx); }
+    if (auto* ad = findChild<QComboBox*>("analysisDepthComboBox")) { int idx = ad->findData(settings.stockfishAnalysisDepth); if (idx >= 0) ad->setCurrentIndex(idx); }
     if (auto* p = findChild<QLineEdit*>("stockfishPathEdit")) p->setText(settings.stockfishPath);
     debugLevelComboBox_->setCurrentIndex(settings.debugLevel);
 }
@@ -750,11 +820,11 @@ void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int stockfishOverri
         if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
     }
     if (threads > 0) setThreadComboValue(threadComboBox_, threads);
-    if (depth > 0) { if (auto* d = findChild<QSpinBox*>("depthSpinBox")) d->setValue(depth); }
-    if (time >= 0) { if (auto* t = findChild<QSpinBox*>("timeSpinBox")) t->setValue(time); }
-    if (nodes >= 0) { if (auto* n = findChild<QSpinBox*>("nodesSpinBox")) n->setValue(nodes); }
-    if (analysisDepth > 0) { if (auto* ad = findChild<QSpinBox*>("analysisDepthSpinBox")) ad->setValue(analysisDepth); }
-    if (memoryLimit >= 0) { if (auto* m = findChild<QSpinBox*>("memoryLimitSpinBox")) m->setValue(memoryLimit); }
+    if (depth > 0) { if (auto* d = findChild<QComboBox*>("depthComboBox")) { int idx = d->findData(depth); if (idx >= 0) d->setCurrentIndex(idx); } }
+    if (time >= 0) { if (auto* t = findChild<QComboBox*>("timeComboBox")) { int idx = t->findData(time); if (idx >= 0) t->setCurrentIndex(idx); } }
+    if (nodes >= 0) { if (auto* n = findChild<QComboBox*>("nodesComboBox")) { int idx = n->findData(nodes); if (idx >= 0) n->setCurrentIndex(idx); } }
+    if (analysisDepth > 0) { if (auto* ad = findChild<QComboBox*>("analysisDepthComboBox")) { int idx = ad->findData(analysisDepth); if (idx >= 0) ad->setCurrentIndex(idx); } }
+    if (memoryLimit >= 0) { if (auto* m = findChild<QComboBox*>("memoryLimitComboBox")) { int idx = m->findData(memoryLimit); if (idx >= 0) m->setCurrentIndex(idx); } }
     if (!debugLevelStr.isEmpty() && debugLevelComboBox_) {
         if (debugLevelStr == "NONE") debugLevelComboBox_->setCurrentIndex(0);
         else if (debugLevelStr == "MOVES") debugLevelComboBox_->setCurrentIndex(1);

@@ -90,6 +90,7 @@ private:
     DraggableOverlay* boardItem_;
     DraggableOverlay* evalBarItem_;
     DraggableOverlay* pvTextItem_;
+    DraggableOverlay* openingTextItem_;
     
     QComboBox* templateCombo_;
     QPushButton* newTemplateBtn_;
@@ -101,6 +102,7 @@ private:
     QCheckBox* boardCheck_;
     QCheckBox* evalCheck_;
     QCheckBox* pvCheck_;
+    QCheckBox* openingCheck_;
 };
 
 } // namespace cta

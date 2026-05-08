@@ -90,6 +90,22 @@ bool validate_existing_file(const QString& path,
     return true;
 }
 
+bool validate_video_file(const QString& path, std::ostream& err) {
+    if (path.isEmpty()) {
+        return true;
+    }
+
+    const QFileInfo info(path);
+    const QString suffix = info.suffix().toLower();
+    if (suffix != "mp4" && suffix != "mkv" && suffix != "avi" && suffix != "mov" && suffix != "webm") {
+        err << "Positional argument must be a video file (*.mp4, *.mkv, *.avi, *.mov, *.webm): "
+            << path.toStdString() << "\n";
+        return false;
+    }
+
+    return true;
+}
+
 int max_hardware_thread_count() {
     const unsigned int hardware_threads = std::thread::hardware_concurrency();
     return std::max(1, static_cast<int>(hardware_threads));
@@ -103,7 +119,8 @@ int main(int argc, char *argv[]) {
     QApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     QApplication app(argc, argv);
     QApplication::setOrganizationName("ChessTubeAnalyzer");
-    QApplication::setApplicationName("ChessTubeAnalyzer");
+    QApplication::setApplicationName("settings");
+    QApplication::setApplicationDisplayName("ChessTube Analyzer");
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setApplicationVersion("0.3.0");
 
@@ -185,6 +202,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (!validate_existing_file(video_path, "video_path", std::cerr) ||
+        !validate_video_file(video_path, std::cerr) ||
         !validate_existing_file(board_asset, "--board-asset", std::cerr)) {
         return 1;
     }

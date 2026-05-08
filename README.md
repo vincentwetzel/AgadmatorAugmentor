@@ -19,7 +19,8 @@ Advanced extraction tuning is available through environment variables for benchm
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
 - **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
-- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, and engine arrows into an annotated MP4.
+- **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos.
+- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, and engine arrows into an annotated MP4.
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
@@ -41,7 +42,7 @@ The GUI CMake target is `analyzer_gui`; the preset still emits the application a
 
 On Windows, the project defaults to the documented `E:/vcpkg` toolchain, the `x64-windows` vcpkg triplet, and the dynamic MSVC runtime (`/MD` or `/MDd`). Keep the app and all vcpkg dependencies on the same triplet/runtime pair; mixing `x64-windows-static` (`/MT`) with a dynamic-runtime app can trigger Debug CRT heap assertions when STL/OpenCV objects cross module boundaries.
 
-For day-to-day iteration, the `vs2022-dev` preset keeps expensive packaging steps off. Use `vs2022-release-package` when you want the slower packaging-oriented build.
+For day-to-day iteration, the `vs2022-dev` preset keeps expensive packaging steps off while still copying Qt runtime files needed to launch the GUI from the build output. Use `vs2022-release-package` when you want the slower packaging-oriented build.
 
 ### Clean CMake Reconfigure
 
@@ -90,7 +91,7 @@ Multiple videos can be passed as a semicolon-separated list:
 - Each queued item is auto-matched against the template name or alternative keywords using the video filename.
 - You can override the template per queue item before processing starts.
 - The selected template is snapshotted onto the queue item right before launch, so mixed-channel batches keep the intended overlay layout per video.
-- Use **Manage Templates** to load a reference screenshot, drag/resize overlays, and choose whether engine arrows render on the analysis board, main board, both, or neither.
+- Use **Manage Templates** to load a reference screenshot, drag/resize overlays, toggle opening text, and choose whether engine arrows render on the analysis board, main board, both, or neither.
 
 Template JSON files and reference screenshots live in `%APPDATA%\ChessTubeAnalyzer\templates`. Bundled defaults are copied there automatically on first run.
 
@@ -107,6 +108,7 @@ Dependencies are managed via vcpkg on `E:\vcpkg`:
 | libchess | Legal move generation and FEN I/O |
 | Google Test | Optional tests |
 | FFmpeg | Analysis video composition and audio muxing |
+| WinHTTP | Windows Lichess Explorer opening lookups |
 
 Tesseract has been removed; clock OCR now uses the built-in Hu Moments recognizer.
 
@@ -121,6 +123,7 @@ ChessTubeAnalyzer/
 |   |-- ArrowDetector.h
 |   |-- ClockRecognizer.h
 |   |-- ChessVideoExtractor.h
+|   |-- OpeningFetcher.h
 |   |-- StockfishAnalyzer.h
 |   |-- GPUAccelerator.h
 |   `-- ScopedTimer.h
@@ -130,11 +133,17 @@ ChessTubeAnalyzer/
 |   |-- ArrowDetector.cpp
 |   |-- ClockRecognizer.cpp
 |   |-- ChessVideoExtractor.cpp
+|   |-- OpeningFetcher.cpp
 |   |-- StockfishAnalyzer.cpp
 |   |-- AnalysisVideoGenerator.cpp
+|   |-- AnalysisVideoGenerator_Render.cpp
 |   |-- AnalysisVideoRenderUtils.cpp
 |   |-- GPUAccelerator.cpp
-|   `-- main.cpp
+|   |-- MainWindow_UI.cpp
+|   |-- MainWindow_Settings.cpp
+|   |-- MainWindow_Queue.cpp
+|   |-- MainWindow_Processing.cpp
+|   `-- main_gui.cpp
 |-- tests/
 |   `-- test_ui_detectors.cpp
 |-- assets/
@@ -161,7 +170,8 @@ ChessTubeAnalyzer/
 5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, revert handling, and clock validation stay deterministic.
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
-8. **Output:** PGN is written with timestamps, clock data, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
+8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
+9. **Output:** PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
 
 ## Testing
 

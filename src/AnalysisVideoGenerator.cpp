@@ -114,230 +114,13 @@ std::string compose_ffmpeg_failure_message(int result, const std::string& detail
 
 } // namespace
 
-AnalysisVideoGenerator::AnalysisVideoGenerator(const std::string& assets_dir) {
-    std::string board_path = assets_dir + "/board/board.png";
-    board_template_ = cv::imread(board_path, cv::IMREAD_COLOR);
-    
-    if (board_template_.empty()) {
-        throw std::runtime_error("AnalysisVideoGenerator: Failed to load board asset at " + board_path);
-    }
-    
-    load_piece_assets(assets_dir);
-}
-
-void AnalysisVideoGenerator::load_piece_assets(const std::string& assets_dir) {
-    // Support both the repo's descriptive filenames and shorter legacy names.
-    std::map<char, std::vector<std::string>> piece_files = {
-        {'P', {"white/white_pawn.png", "white/P.png"}},
-        {'N', {"white/white_knight.png", "white/N.png"}},
-        {'B', {"white/white_bishop.png", "white/B.png"}},
-        {'R', {"white/white_rook.png", "white/R.png"}},
-        {'Q', {"white/white_queen.png", "white/Q.png"}},
-        {'K', {"white/white_king.png", "white/K.png"}},
-        {'p', {"black/black_pawn.png", "black/p.png"}},
-        {'n', {"black/black_knight.png", "black/n.png"}},
-        {'b', {"black/black_bishop.png", "black/b.png"}},
-        {'r', {"black/black_rook.png", "black/r.png"}},
-        {'q', {"black/black_queen.png", "black/q.png"}},
-        {'k', {"black/black_king.png", "black/k.png"}}
-    };
-
-    for (const auto& [fen_char, candidates] : piece_files) {
-        for (const auto& rel_path : candidates) {
-            std::string full_path = assets_dir + "/pieces/" + rel_path;
-            // IMREAD_UNCHANGED is vital to keep the 4th alpha channel for transparent pieces.
-            cv::Mat piece = cv::imread(full_path, cv::IMREAD_UNCHANGED);
-            if (!piece.empty()) {
-                piece_assets_[fen_char] = piece;
-                break;
-            }
-        }
-
-        if (!piece_assets_.count(fen_char)) {
-            std::cerr << "Warning: Failed to load piece asset for FEN char '" << fen_char << "'" << std::endl;
-        }
-    }
-}
-
-void AnalysisVideoGenerator::overlay_image(cv::Mat& background, const cv::Mat& foreground, cv::Point location) {
-    if (foreground.empty()) {
-        return;
-    }
-
-    cv::Rect roi(location.x, location.y, foreground.cols, foreground.rows);
-    // Boundary check
-    if (roi.x + roi.width > background.cols || roi.y + roi.height > background.rows || roi.x < 0 || roi.y < 0) {
-        return;
-    }
-    cv::Mat bg_roi = background(roi);
-
-    if (foreground.channels() == 3) {
-        // Simple copy for opaque foregrounds (like the final debug board)
-        foreground.copyTo(bg_roi);
-    } else if (foreground.channels() == 4) {
-        // Fast integer-math alpha blending
-        // Eliminates dozens of intermediate cv::Mat allocations per piece
-        for (int y = 0; y < foreground.rows; ++y) {
-            const uchar* fg_ptr = foreground.ptr<uchar>(y);
-            uchar* bg_ptr = bg_roi.ptr<uchar>(y);
-            for (int x = 0; x < foreground.cols; ++x) {
-                uchar alpha = fg_ptr[x * 4 + 3];
-                if (alpha == 255) {
-                    bg_ptr[x * 3 + 0] = fg_ptr[x * 4 + 0];
-                    bg_ptr[x * 3 + 1] = fg_ptr[x * 4 + 1];
-                    bg_ptr[x * 3 + 2] = fg_ptr[x * 4 + 2];
-                } else if (alpha > 0) {
-                    uchar inv_alpha = 255 - alpha;
-                    bg_ptr[x * 3 + 0] = (fg_ptr[x * 4 + 0] * alpha + bg_ptr[x * 3 + 0] * inv_alpha) / 255;
-                    bg_ptr[x * 3 + 1] = (fg_ptr[x * 4 + 1] * alpha + bg_ptr[x * 3 + 1] * inv_alpha) / 255;
-                    bg_ptr[x * 3 + 2] = (fg_ptr[x * 4 + 2] * alpha + bg_ptr[x * 3 + 2] * inv_alpha) / 255;
-                }
-            }
-        }
-    }
-}
-
-cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen, 
-                                                   const std::optional<StockfishResult>& analysis, 
-                                                   int arrow_thickness_pct,
-                                                   const cv::Mat& scaled_board,
-                                                   const std::map<char, cv::Mat>& scaled_pieces) {
-    cv::Mat board = scaled_board.clone();
-    double sq_w = static_cast<double>(board.cols) / 8.0;
-    double sq_h = static_cast<double>(board.rows) / 8.0;
-
-    // Draw engine arrows before pieces, matching lichess' analysis-board layering.
-    if (analysis.has_value() && !analysis->lines.empty()) {
-        try {
-            libchess::Position pos(fen);
-            
-            double best_score = ChessFenUtils::get_line_score_cp(analysis->lines.front());
-
-            // Draw worse lines first so best lines render on top
-            for (int i = static_cast<int>(analysis->lines.size()) - 1; i >= 0; --i) {
-                const auto& line = analysis->lines[i];
-                if (line.move_uci.empty() || line.move_uci == "ANNOTATION") continue;
-                
-                double line_score = ChessFenUtils::get_line_score_cp(line);
-                double diff_cp = std::max(0.0, best_score - line_score);
-                
-                AnalysisVideoRenderUtils::EngineArrowStyle style = AnalysisVideoRenderUtils::compute_engine_arrow_style(i, diff_cp, arrow_thickness_pct);
-
-                libchess::Move move = pos.parse_move(line.move_uci);
-                auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
-                auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
-
-                int from_row = 7 - (from_sq / 8);
-                int from_col = from_sq % 8;
-                int to_row = 7 - (to_sq / 8);
-                int to_col = to_sq % 8;
-
-                cv::Point start(static_cast<int>((from_col + 0.5) * sq_w), static_cast<int>((from_row + 0.5) * sq_h));
-                cv::Point end(static_cast<int>((to_col + 0.5) * sq_w), static_cast<int>((to_row + 0.5) * sq_h));
-
-                AnalysisVideoRenderUtils::blend_arrow_on_bgr(board, start, end, style, sq_w);
-            }
-        } catch(...) {
-            // Ignore errors if FEN or move is invalid, just don't draw arrows
-        }
-    }
-
-    int row = 0, col = 0;
-    for (char c : fen) {
-        if (c == ' ') break; // Stop after piece placement data
-        if (c == '/') {
-            row++;
-            col = 0;
-        } else if (std::isdigit(c)) {
-            col += (c - '0'); // Skip empty squares
-        } else {
-            auto it = scaled_pieces.find(c);
-            if (it != scaled_pieces.end()) {
-                cv::Point loc(static_cast<int>(col * sq_w), static_cast<int>(row * sq_h));
-                overlay_image(board, it->second, loc);
-            }
-            col++;
-        }
-    }
-
-    if (analysis.has_value()) {
-        for (const auto& line : analysis->lines) {
-            if (line.move_uci == "ANNOTATION") {
-                std::string uci, sym;
-                size_t uci_len = 0;
-                while (uci_len < line.pv_line.length()) {
-                    char c = line.pv_line[uci_len];
-                    if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8') || c == 'q' || c == 'r' || c == 'b' || c == 'n') uci_len++;
-                    else break;
-                }
-                uci = line.pv_line.substr(0, uci_len);
-                sym = line.pv_line.substr(uci_len);
-                AnalysisVideoRenderUtils::drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
-            }
-        }
-    }
-
-    return board;
-}
-
-void AnalysisVideoGenerator::render_analysis_text(cv::Mat& image,
-                                                  const std::optional<StockfishResult>& analysis,
-                                                  const std::string& fen,
-                                                  int width,
-                                                  int height) const {
-    image = cv::Mat::zeros(cv::Size(width, height), CV_8UC3);
-
-    if (!analysis.has_value()) {
-        return;
-    }
-
-    int text_y_pos = 30;
-    auto lines = analysis->lines;
-
-    // Check for the smuggled annotation line
-    if (!lines.empty() && lines.back().move_uci == "ANNOTATION") {
-        lines.pop_back(); // Remove it so it doesn't render as an engine line
-    }
-
-    bool first_line = true;
-    for (const auto& line : lines) {
-        std::string eval_str = ChessFenUtils::format_eval_string(line, fen);
-        std::string text = eval_str + " | " + ChessFenUtils::uci_to_san_line(line.pv_line, fen);
-
-        cv::Scalar color = first_line ? cv::Scalar(144, 238, 144) : cv::Scalar(220, 220, 220);
-        int thickness = first_line ? 2 : 1;
-
-        // Auto-adapt font size so long variations fit within the designated text area
-        double font_scale = 0.6;
-        int baseline = 0;
-        cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
-        
-        while (text_size.width > width - 30 && font_scale > 0.3) {
-            font_scale -= 0.05;
-            text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
-        }
-
-        cv::putText(image, text, cv::Point(15, text_y_pos), cv::FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv::LINE_AA);
-        text_y_pos += 25;
-        first_line = false;
-    }
-}
-
-void AnalysisVideoGenerator::render_analysis_bar(cv::Mat& image,
-                                                 const std::optional<StockfishResult>& analysis,
-                                                 const std::string& fen,
-                                                 int width,
-                                                 int height) const {
-    image = cv::Mat::zeros(cv::Size(width, height), CV_8UC3);
-    AnalysisVideoRenderUtils::drawAnalysisBar(image, cv::Rect(0, 0, width, height), ChessFenUtils::score_from_analysis(analysis, fen));
-}
-
 bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_video_path, 
                                                      const std::string& output_video_path, 
                                                      const BoardGeometry& geo,
                                                      const std::vector<std::string>& fens,
                                                      const std::vector<double>& timestamps,
                                                      const std::vector<StockfishResult>& stockfish_results,
+                                                     const std::vector<std::string>& opening_names,
                                                      int arrow_thickness_pct,
                                                      const VideoOverlayConfig& overlay_config,
                                                      std::atomic<bool>* cancel_flag,
@@ -449,6 +232,11 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     int bar_h = static_cast<int>(safe_height * eval_sy);
     bar_h += bar_h % 2;
 
+    int opening_w = static_cast<int>(800 * overlay_config.openingText.scale);
+    opening_w += opening_w % 2;
+    int opening_h = static_cast<int>(40 * overlay_config.openingText.scale);
+    opening_h += opening_h % 2;
+
     // Pre-scale assets to target resolution to avoid resizing inside the render loop
     cv::Mat scaled_board;
     cv::resize(board_template_, scaled_board, cv::Size(debug_w, debug_h), 0, 0, cv::INTER_AREA);
@@ -480,10 +268,12 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::string board_txt_path = (temp_dir / "board.txt").string();
     std::string text_txt_path = (temp_dir / "text.txt").string();
     std::string bar_txt_path = (temp_dir / "bar.txt").string();
+    std::string opening_txt_path = (temp_dir / "opening.txt").string();
 
     std::ofstream board_txt(board_txt_path);
     std::ofstream text_txt(text_txt_path);
     std::ofstream bar_txt(bar_txt_path);
+    std::ofstream opening_txt(opening_txt_path);
 
     std::string main_arrows_txt_path = (temp_dir / "main_arrows.txt").string();
     std::ofstream main_arrows_txt;
@@ -504,6 +294,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         std::string board_img = "board_" + std::to_string(i) + ".bmp";
         std::string text_img = "text_" + std::to_string(i) + ".bmp";
         std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
+        std::string opening_img = "opening_" + std::to_string(i) + ".bmp";
         std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".png";
 
         if (overlay_config.board.enabled) {
@@ -518,6 +309,10 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
             bar_txt << "file '" << bar_img << "'\n";
             bar_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
         }
+        if (overlay_config.openingText.enabled) {
+            opening_txt << "file '" << opening_img << "'\n";
+            opening_txt << "duration " << std::fixed << std::setprecision(3) << duration << "\n";
+        }
         
         if (draw_main_arrows) {
             main_arrows_txt << "file '" << main_arrows_img << "'\n";
@@ -530,6 +325,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (overlay_config.board.enabled) board_txt << "file 'board_" << last_idx << ".bmp'\n";
         if (overlay_config.pvText.enabled) text_txt << "file 'text_" << last_idx << ".bmp'\n";
         if (overlay_config.evalBar.enabled) bar_txt << "file 'bar_" << last_idx << ".bmp'\n";
+        if (overlay_config.openingText.enabled) opening_txt << "file 'opening_" << last_idx << ".bmp'\n";
         if (draw_main_arrows) {
             main_arrows_txt << "file 'main_arrows_" << last_idx << ".png'\n";
         }
@@ -538,6 +334,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     board_txt.close();
     text_txt.close();
     bar_txt.close();
+    opening_txt.close();
     if (draw_main_arrows) main_arrows_txt.close();
 
     unsigned int hw_threads = std::thread::hardware_concurrency();
@@ -590,6 +387,12 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     if (overlay_config.evalBar.enabled) {
                         render_analysis_bar(cached_bar, current_analysis, current_fen, bar_w, bar_h);
                     }
+                    
+                    cv::Mat cached_opening;
+                    if (overlay_config.openingText.enabled) {
+                        std::string op_name = (i < opening_names.size()) ? opening_names[i] : "";
+                        render_opening_text(cached_opening, op_name, opening_w, opening_h);
+                    }
 
                     // --- Render Main Arrows ---
                     cv::Mat cached_main_arrows;
@@ -600,6 +403,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     std::string board_img = "board_" + std::to_string(i) + ".bmp";
                     std::string text_img = "text_" + std::to_string(i) + ".bmp";
                     std::string bar_img = "bar_" + std::to_string(i) + ".bmp";
+                    std::string opening_img = "opening_" + std::to_string(i) + ".bmp";
                     std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".png";
 
                     bool write_ok = true;
@@ -610,6 +414,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                         if (overlay_config.board.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / board_img, cached_board);
                         if (overlay_config.pvText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / text_img, cached_text);
                         if (overlay_config.evalBar.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / bar_img, cached_bar);
+                        if (overlay_config.openingText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / opening_img, cached_opening);
                         if (write_ok && draw_main_arrows) {
                             write_ok = ImageWriteUtils::write_png_rgba(temp_dir / main_arrows_img, cached_main_arrows);
                         }
@@ -664,12 +469,17 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     int bar_y_pos = static_cast<int>(overlay_config.evalBar.y_percent * std::max(0.0, static_cast<double>(height - bar_h)));
     bar_x_pos -= bar_x_pos % 2;
     bar_y_pos -= bar_y_pos % 2;
+
+    int opening_x_pos = static_cast<int>(overlay_config.openingText.x_percent * std::max(0.0, static_cast<double>(width - opening_w)));
+    int opening_y_pos = static_cast<int>(overlay_config.openingText.y_percent * std::max(0.0, static_cast<double>(height - opening_h)));
+    opening_x_pos -= opening_x_pos % 2;
+    opening_y_pos -= opening_y_pos % 2;
     
     int safe_bx = geo.bx - (geo.bx % 2);
     int safe_by = geo.by - (geo.by % 2);
 
     int stream_idx = 1;
-    std::string board_stream, bar_stream, text_stream, arrows_stream;
+    std::string board_stream, bar_stream, text_stream, opening_stream, arrows_stream;
 
     bool has_nvidia_gpu = GPUAccelerator::is_available();
     bool has_amd_gpu = false;
@@ -695,7 +505,7 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     }
 #endif
 
-    const bool has_alpha_overlays = draw_main_arrows || overlay_config.pvText.enabled;
+    const bool has_alpha_overlays = draw_main_arrows || overlay_config.pvText.enabled || overlay_config.openingText.enabled;
     const bool use_cuda_filters = has_nvidia_gpu && !has_alpha_overlays;
     bool use_hwaccel = use_cuda_filters;
 
@@ -718,6 +528,10 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     if (overlay_config.pvText.enabled) {
         input_args_str += "-f concat -safe 0 -i \"" + text_txt_path + "\" ";
         text_stream = "[" + std::to_string(stream_idx++) + ":v]";
+    }
+    if (overlay_config.openingText.enabled) {
+        input_args_str += "-f concat -safe 0 -i \"" + opening_txt_path + "\" ";
+        opening_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
     if (draw_main_arrows) {
         input_args_str += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
@@ -746,6 +560,13 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         std::string txt_fmt = graph.add_filter(text_stream, "colorkey=black:0.01:0.5,format=bgra", "[txt_bgra]");
         graph.add_filter("[bg_box]" + txt_fmt, "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]", is_hw_overlay);
         current_bg = "[bg_txt]";
+    }
+
+    if (overlay_config.openingText.enabled) {
+        graph.add_filter(current_bg, "drawbox=x=" + std::to_string(opening_x_pos) + ":y=" + std::to_string(opening_y_pos) + ":w=" + std::to_string(opening_w) + ":h=" + std::to_string(opening_h) + ":color=black@0.6:t=fill", "[bg_op_box]");
+        std::string op_fmt = graph.add_filter(opening_stream, "colorkey=black:0.01:0.5,format=bgra", "[op_bgra]");
+        graph.add_filter("[bg_op_box]" + op_fmt, "overlay=" + std::to_string(opening_x_pos) + ":" + std::to_string(opening_y_pos), "[bg_op]", is_hw_overlay);
+        current_bg = "[bg_op]";
     }
 
     if (overlay_config.board.enabled) {
@@ -810,8 +631,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
                  "-filter_complex_threads " + std::to_string(num_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" "
-                 "-map \"[out]\" -map 0:a? "
-                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " \"" + actual_output_path + "\"";
+                 "-map \"[out]\" -map 0:a? -map 0:s? -map 0:t? "
+                 "-map_metadata 0 "
+                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " -c:s copy -c:t copy \"" + actual_output_path + "\"";
 
 #ifdef _WIN32
     SECURITY_ATTRIBUTES saAttr; 
@@ -938,6 +760,23 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
         if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail));
         return false;
     }
+}
+
+void AnalysisVideoGenerator::render_opening_text(cv::Mat& image,
+                                                 const std::string& opening_name,
+                                                 int width,
+                                                 int height) const {
+    image = cv::Mat::zeros(cv::Size(width, height), CV_8UC3);
+    if (opening_name.empty()) return;
+    
+    double font_scale = 0.8;
+    int baseline = 0;
+    cv::Size text_size = cv::getTextSize(opening_name, cv::FONT_HERSHEY_SIMPLEX, font_scale, 2, &baseline);
+    while (text_size.width > width - 20 && font_scale > 0.3) {
+        font_scale -= 0.05;
+        text_size = cv::getTextSize(opening_name, cv::FONT_HERSHEY_SIMPLEX, font_scale, 2, &baseline);
+    }
+    cv::putText(image, opening_name, cv::Point(10, height / 2 + text_size.height / 2), cv::FONT_HERSHEY_SIMPLEX, font_scale, cv::Scalar(255, 255, 255), 2, cv::LINE_AA);
 }
 
 } // namespace cta

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Opening Metadata:** Added a background Lichess Explorer fetcher with cached ECO/opening lookups for verified video FENs.
+- **Opening Overlays:** Added an optional opening-name overlay to analysis videos and the screenshot-based overlay template editor.
+- **Performance Estimate Headers:** PGN export can now include estimated Elo, ACPL, and accuracy headers derived from move-quality centipawn loss.
+
 ### Performance
 
 - **Reducer Revert Pruning:** Added a mean-hash gate before full-image revert verification so deep analysis branches perform fewer board-wide image comparisons.
@@ -29,15 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Thread Setting:** Replaced the fixed FFmpeg decode-thread spin box with a dropdown that offers every detected logical CPU thread count and defaults to the maximum detected value.
+- **Settings Presets:** Replaced several advanced numeric spin boxes with curated dropdowns for engine strength, time cap, node cap, line length, video encoding, output size, quality, and RAM budget.
+- **Runtime Deployment:** The development preset now keeps Qt runtime deployment enabled so GUI builds are runnable from the build output.
 - **Elapsed Log Prefixes:** GUI and headless logs now add elapsed-time prefixes while preserving existing extractor timestamps.
 - **Test Runner:** `tests/run_tests.py` now configures the build tree with `BUILD_TESTS=ON` before building and running `test_extract_moves`.
 - **FFmpeg Filter Graph Organization:** Moved `FFmpegFilterGraph` into `src/` and expanded it to track CPU/GPU stream state for analysis-video composition.
+
+### Refactored
+
+- **Main Window Modules:** Split queue and processing responsibilities out of `MainWindow.cpp` into focused `MainWindow_Queue.cpp` and `MainWindow_Processing.cpp` compilation units.
+- **Analysis Video Rendering:** Moved board, piece, eval bar, and text rendering helpers into `AnalysisVideoGenerator_Render.cpp`.
+- **Board Cache Location:** Moved `BoardCache` into the normal `include/` and `src/` tree so CMake no longer relies on root-level duplicate source files.
 
 ### Fixed
 
 - **FFmpeg Error Reporting:** Analysis video composition now captures the tail of FFmpeg output and reports Windows process-launch failures with the underlying system error.
 - **Analysis Video Failure Flow:** Processing now stops after PGN save or analysis-video generation failures instead of continuing as though the batch completed successfully.
 - **Analysis Video Composition:** CUDA filter paths are now disabled for alpha-overlay cases that require CPU-compatible formats, while final video mapping explicitly targets the composed output stream and preserves optional source audio.
+- **CLI Input Validation:** Headless positional input now rejects non-video extensions before processing begins.
 
 ## [0.3.0] — 2026-04-25
 

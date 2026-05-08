@@ -59,6 +59,9 @@ public:
     using ProgressCallback = std::function<void(int percent, const std::string& message)>;
     void set_progress_callback(ProgressCallback cb);
 
+    using FenDetectedCallback = std::function<void(const std::string&)>;
+    void set_fen_detected_callback(FenDetectedCallback cb) { fen_cb_ = std::move(cb); }
+
     GameData extract_moves_from_video(const std::string& video_path,
                                       const std::string& debug_label = "",
                                       std::atomic<bool>* cancel_flag = nullptr);
@@ -84,6 +87,7 @@ private:
     std::unique_ptr<libchess::Position> pos_ptr_;
     std::unique_ptr<ScratchBuffers> scratch_;
     ProgressCallback progress_callback_;
+    FenDetectedCallback fen_cb_;
 };
 
 } // namespace cta

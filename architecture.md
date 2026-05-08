@@ -100,26 +100,28 @@ When the board visually diverges from the engine state (e.g., the streamer undoe
 
 The primary output is a PGN file that contains the extracted moves, clock times, and optional Stockfish analysis. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the PGN writer.
 
+During extraction, verified video FENs can also be passed to `OpeningFetcher`, which performs a background Lichess Explorer lookup on Windows through WinHTTP. Responses are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`; lookup stops once the game reaches a likely unique position, so common opening names can be added without blocking the visual reducer.
+
 The PGN is saved alongside the source video or in a user-defined custom directory.
 
 ## 6. Overlay Templates & Layout Model
 
 Analysis-video layout is driven by a template-backed configuration model rather than a single global corner/size setting.
 
-- **Data Model:** `VideoOverlayConfig` contains three independently configurable `OverlayElement`s: `board`, `evalBar`, and `pvText`.
+- **Data Model:** `VideoOverlayConfig` contains four independently configurable `OverlayElement`s: `board`, `evalBar`, `pvText`, and `openingText`.
 - **Per-Element Controls:** Each element stores `enabled`, `x_percent`, `y_percent`, and `scale`. For elements requiring independent X and Y scaling without changing legacy data structures (like the Evaluation Bar), the `scale` float is mathematically encoded to store both dimensions (e.g., `X.XXYYYY`).
 - **Arrow Targeting:** `VideoOverlayConfig` also stores `arrowsTarget`, allowing engine arrows to render on the generated analysis board, the original board in the video, both, or neither.
 - **Template Persistence:** `TemplateManager` copies bundled template JSON files into `%APPDATA%\ChessTubeAnalyzer\templates` on first run, then loads and saves user edits from there.
 - **Auto-Detection:** When a video is added to the queue, the filename is matched against each template's exact name, falling back to its keyword list. If nothing matches, the built-in `generic` template is used.
 - **Per-Queue Overrides:** Each queue entry carries its own selected template and a serialized snapshot of that template's layout config, so mixed-channel batches can use different overlay layouts in one run even if templates are edited later.
-- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually. Elements feature 8-way sizing handles (corners and edges) for precise proportional or independent axis scaling, and the dialog exposes visibility toggles plus engine-arrow routing controls.
+- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually. Elements feature 8-way sizing handles (corners and edges) for precise proportional or independent axis scaling, and the dialog exposes visibility toggles for board, eval bar, PV text, opening text, plus engine-arrow routing controls.
 
 ## 7. Overlay Augmentation
 
 The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. 
 
 Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
-The FFmpeg composition stage conditionally includes the board, evaluation bar, PV text, and main-board engine arrows based on the active template snapshot, and maps normalized template coordinates into absolute video positions at render time. `FFmpegFilterGraph` builds the final `filter_complex`, tracks whether intermediate streams live on CPU or GPU, and only enables CUDA filters when the active overlay set can stay in hardware-compatible formats. Alpha overlays such as PV text and main-board arrows fall back to CPU filters while still allowing hardware encoders for the final MP4.
+The FFmpeg composition stage conditionally includes the board, evaluation bar, PV text, opening text, and main-board engine arrows based on the active template snapshot, and maps normalized template coordinates into absolute video positions at render time. `FFmpegFilterGraph` builds the final `filter_complex`, tracks whether intermediate streams live on CPU or GPU, and only enables CUDA filters when the active overlay set can stay in hardware-compatible formats. Alpha overlays such as PV text, opening text, and main-board arrows fall back to CPU filters while still allowing hardware encoders for the final MP4.
 
 ## 8. Source Module Organization
 
@@ -134,10 +136,12 @@ The detector code is split into three focused modules to keep files manageable (
 | Orchestrator | `ChessVideoExtractor.h/.cpp` | ~630 | Video scanning loop, move scoring, revert detection, PGN-bound game data |
 | Move Validation | `MoveValidations.h/.cpp` | 97 | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
+| Opening Fetcher | `OpeningFetcher.h/.cpp` | ~200 | Cached Lichess Explorer lookup for ECO/opening metadata |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Template Manager | `TemplateManager.h/.cpp` | ~200 | Overlay template loading, matching, persistence in AppData |
 | Overlay Editor | `OverlayEditorDialog.h/.cpp` | ~450 | Screenshot-based WYSIWYG editor for overlay template layout |
 | FFmpeg Filter Graph | `FFmpegFilterGraph.h/.cpp` | ~180 | Builds filter_complex chains and manages CPU/GPU filter transitions |
+| Main Window | `MainWindow*.cpp` | split | GUI setup, settings, queue management, and processing orchestration |
 | Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.

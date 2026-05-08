@@ -21,6 +21,8 @@ cmake --build --preset gui-release
 
 The GUI build target is named `analyzer_gui`, while the generated executable remains `ChessTube Analyzer.exe`.
 
+The `vs2022-dev` preset keeps Qt runtime deployment enabled, so the GUI should launch directly from the build output after a successful build.
+
 On Windows, use the `x64-windows` vcpkg triplet with the dynamic MSVC runtime. Avoid mixing an old `x64-windows-static` build tree with a dynamic-runtime configuration.
 
 If CMake fails after changing triplets or generator platforms, start with a clean build directory:
@@ -42,15 +44,16 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Browse or drag-and-drop one or more videos into the queue.
 - Select an output directory.
 - Toggle PGN, Stockfish analysis, move quality annotations, and analysis video generation.
-- Configure Stockfish MultiPV, depth, time, node, and variation-length limits.
+- Configure Stockfish MultiPV, analysis strength, time cap, node cap, and variation-length presets.
 - Enable Fast Preview mode for rapid processing with bounded engine limits.
 - Automatically find or manually specify the Stockfish executable.
 - Manage channel-specific overlay templates with a screenshot-based editor.
+- Toggle and position optional opening-name text in analysis videos.
 - Override the auto-detected template per queue item.
 - Reorder queued videos and mix different templates in one batch.
 - Select FFmpeg decode threads from 1 through the detected logical CPU count; the maximum detected value is the default.
 
-The queue stores the selected template configuration with each item right before processing begins. That lets mixed-channel batches keep each video's intended board, eval bar, PV text, and arrow placement.
+The queue stores the selected template configuration with each item right before processing begins. That lets mixed-channel batches keep each video's intended board, eval bar, PV text, opening text, and arrow placement.
 
 Processing logs include elapsed-time prefixes, which makes it easier to compare extraction, Stockfish, and FFmpeg composition phases across runs. If FFmpeg composition fails, the failure message includes the captured tail of FFmpeg output when available.
 
@@ -73,9 +76,9 @@ Override saved settings with command-line flags:
 
 ## Output Files
 
-The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves and clock times. If Stockfish analysis is enabled, it also includes engine variations and evaluations.
+The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves and clock times. If Stockfish analysis is enabled, it also includes engine variations, evaluations, move-quality annotations, estimated Elo/ACPL/accuracy headers, and any ECO/opening metadata found through the cached Lichess Explorer lookup.
 
-If analysis-video generation is enabled, the application also produces an annotated MP4 using the selected overlay template snapshot for that queue item.
+If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Opening-name overlays are optional and only display when opening metadata is available.
 
 ## Advanced Extraction Tuning
 

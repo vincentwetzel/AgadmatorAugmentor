@@ -7,6 +7,7 @@
 #include "BoardLocalizer.h"
 #include "libchess/position.hpp"
 #include "libchess/move.hpp"
+#include "OpeningFetcher.h"
 
 #include <QSettings>
 #include <QCoreApplication>
@@ -19,8 +20,12 @@
 #include <sstream>
 #include <cstdlib>
 #include <vector>
+#include <cmath>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -199,6 +204,11 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
         });
 
+        OpeningFetcher opening_fetcher;
+        extractor.set_fen_detected_callback([&opening_fetcher](const std::string& fen) {
+            opening_fetcher.enqueue_fen(fen);
+        });
+
         // Step 1: Extract moves from video
         GameData gameData = extractor.extract_moves_from_video(
             settings.videoPath.toStdString(),
@@ -279,6 +289,11 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         std::vector<std::string> move_annotations(gameData.moves.size(), "");
         QSettings q_settings;
         bool enableMoveAnnotations = q_settings.value("analysis/enableMoveAnnotations", true).toBool();
+        
+        int white_estimated_elo = 0;
+        int black_estimated_elo = 0;
+        double white_acpl = -1.0;
+        double black_acpl = -1.0;
 
         if (enableMoveAnnotations && (settings.enableStockfish || settings.generateAnalysisVideo)) {
             emit logMessage("Generating move quality annotations...");
@@ -375,6 +390,11 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
 
             // Annotate Main Line Moves (for PGN)
+            double total_loss_white = 0.0;
+            double total_loss_black = 0.0;
+            int moves_white = 0;
+            int moves_black = 0;
+
             if (!mainLineStockfishResults.empty() && mainLineStockfishResults.size() > gameData.moves.size()) {
                 for (size_t i = 0; i < gameData.moves.size(); ++i) {
                     const auto& fen_before = gameData.fens[i];
@@ -402,6 +422,16 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
                     int cp_loss = is_white_to_move ? (best_eval_white_pov - played_eval_white_pov) : (played_eval_white_pov - best_eval_white_pov);
                     if (cp_loss < 0) cp_loss = 0;
+
+                    // Cap centipawn loss at 1000 (10 pawns) so a single missed mate doesn't completely destroy the average
+                    int capped_loss = std::min(cp_loss, 1000);
+                    if (is_white_to_move) {
+                        total_loss_white += capped_loss;
+                        moves_white++;
+                    } else {
+                        total_loss_black += capped_loss;
+                        moves_black++;
+                    }
 
                     std::string annotation = "";
                     int full_move = 1;
@@ -443,7 +473,45 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                     
                     move_annotations[i] = annotation;
                 }
+
+                if (moves_white > 0 || moves_black > 0) {
+                    int depth = settings.stockfishDepth;
+                    // Penalize base Elo and increase CP loss impact for lower engine depths
+                    double depth_multiplier = 10.0 + std::max(0, 20 - depth) * 0.5;
+                    int base_elo = 3000 - std::max(0, 20 - depth) * 50;
+                    
+                    if (moves_white > 0) {
+                        white_acpl = total_loss_white / moves_white;
+                        white_estimated_elo = std::clamp(static_cast<int>(base_elo - white_acpl * depth_multiplier), 100, 3000);
+                    }
+                    if (moves_black > 0) {
+                        black_acpl = total_loss_black / moves_black;
+                        black_estimated_elo = std::clamp(static_cast<int>(base_elo - black_acpl * depth_multiplier), 100, 3000);
+                    }
+                    
+                    double w_acc = white_acpl >= 0 ? std::clamp(100.0 * std::exp(-0.007 * white_acpl), 0.0, 100.0) : 0.0;
+                    double b_acc = black_acpl >= 0 ? std::clamp(100.0 * std::exp(-0.007 * black_acpl), 0.0, 100.0) : 0.0;
+
+                    emit logMessage(QString("Estimated Performance:") + 
+                        QString("\n  White: ~%1 Elo | %2% Accuracy | %3 ACPL").arg(white_estimated_elo).arg(w_acc, 0, 'f', 1).arg(white_acpl >= 0 ? white_acpl : 0.0, 0, 'f', 1) +
+                        QString("\n  Black: ~%1 Elo | %2% Accuracy | %3 ACPL").arg(black_estimated_elo).arg(b_acc, 0, 'f', 1).arg(black_acpl >= 0 ? black_acpl : 0.0, 0, 'f', 1));
+                }
             }
+        }
+
+        emit logMessage("Waiting for background Lichess opening data to finish...");
+        opening_fetcher.wait_until_done();
+        
+        std::string final_eco;
+        std::string final_opening_name;
+        std::vector<std::string> video_opening_names(gameData.video_fens.size(), "");
+        for (size_t i = 0; i < gameData.video_fens.size(); ++i) {
+            LichessOpening info = opening_fetcher.get_opening(gameData.video_fens[i]);
+            if (info.found) {
+                final_eco = info.eco;
+                final_opening_name = info.name;
+            }
+            video_opening_names[i] = final_eco.empty() ? "" : (final_eco + " " + final_opening_name);
         }
 
         // Step 3: Optional PGN export
@@ -456,8 +524,29 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             pgn.add_header("Site", "Unknown");
             pgn.add_header("Date", "Unknown");
             pgn.add_header("Round", "Unknown");
-            pgn.add_header("White", "Unknown");
-            pgn.add_header("Black", "Unknown");
+            pgn.add_header("White", white_estimated_elo > 0 ? "Unknown (~" + std::to_string(white_estimated_elo) + ")" : "Unknown");
+            pgn.add_header("Black", black_estimated_elo > 0 ? "Unknown (~" + std::to_string(black_estimated_elo) + ")" : "Unknown");
+            
+            if (white_estimated_elo > 0) pgn.add_header("WhiteElo", std::to_string(white_estimated_elo));
+            if (black_estimated_elo > 0) pgn.add_header("BlackElo", std::to_string(black_estimated_elo));
+            if (!final_eco.empty()) {
+                pgn.add_header("ECO", final_eco);
+                pgn.add_header("Opening", final_opening_name);
+            }
+
+            // Add exact ACPL and an approximated Accuracy % to custom PGN headers
+            if (white_acpl >= 0) {
+                pgn.add_header("WhiteACPL", std::to_string(static_cast<int>(std::round(white_acpl))));
+                double w_acc = std::clamp(100.0 * std::exp(-0.007 * white_acpl), 0.0, 100.0);
+                char buf[16]; snprintf(buf, sizeof(buf), "%.1f", w_acc);
+                pgn.add_header("WhiteAccuracy", buf);
+            }
+            if (black_acpl >= 0) {
+                pgn.add_header("BlackACPL", std::to_string(static_cast<int>(std::round(black_acpl))));
+                double b_acc = std::clamp(100.0 * std::exp(-0.007 * black_acpl), 0.0, 100.0);
+                char buf[16]; snprintf(buf, sizeof(buf), "%.1f", b_acc);
+                pgn.add_header("BlackAccuracy", buf);
+            }
 
             // Helper to format eval comment for variations
             auto get_eval_str = [](const StockfishResult& res) -> std::string {
@@ -565,6 +654,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 gameData.video_fens,
                 gameData.video_timestamps,
                 videoStockfishResults,
+                video_opening_names,
                 15, // arrow_thickness_pct
                 settings.overlayConfig,
                 cancelFlag,

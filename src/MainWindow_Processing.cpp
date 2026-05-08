@@ -1,3 +1,4 @@
+// Processing implementation for MainWindow
 #include "MainWindow.h"
 #include "VideoProcessorWorker.h"
 #include "SettingsDialog.h"

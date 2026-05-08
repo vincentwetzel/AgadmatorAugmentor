@@ -55,6 +55,11 @@ OverlayTemplate parseTemplateJson(const nlohmann::json& j, const QString& defaul
         tpl.config.pvText.y_percent = cfg.value("pvTextY", 0.95);
         tpl.config.pvText.scale = cfg.value("pvTextScale", 1.0);
 
+        tpl.config.openingText.enabled = cfg.value("openingTextEnabled", false);
+        tpl.config.openingText.x_percent = cfg.value("openingTextX", 0.5);
+        tpl.config.openingText.y_percent = cfg.value("openingTextY", 0.05);
+        tpl.config.openingText.scale = cfg.value("openingTextScale", 1.0);
+
         tpl.config.arrowsTarget = normalizeArrowsTarget(cfg.value("arrowsTarget", "Analysis Board"));
     }
     return tpl;
@@ -236,6 +241,11 @@ bool TemplateManager::saveTemplate(const OverlayTemplate& tpl, QString* errorMes
     cfg["pvTextY"] = tpl.config.pvText.y_percent;
     cfg["pvTextScale"] = tpl.config.pvText.scale;
     cfg["arrowsTarget"] = tpl.config.arrowsTarget;
+
+    cfg["openingTextEnabled"] = tpl.config.openingText.enabled;
+    cfg["openingTextX"] = tpl.config.openingText.x_percent;
+    cfg["openingTextY"] = tpl.config.openingText.y_percent;
+    cfg["openingTextScale"] = tpl.config.openingText.scale;
 
     j["config"] = cfg;
 

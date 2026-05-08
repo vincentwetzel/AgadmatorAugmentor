@@ -33,6 +33,10 @@ QVariantMap overlayConfigToVariantMap(const cta::VideoOverlayConfig& config) {
     map.insert("pvX", config.pvText.x_percent);
     map.insert("pvY", config.pvText.y_percent);
     map.insert("pvScale", config.pvText.scale);
+    map.insert("openingEnabled", config.openingText.enabled);
+    map.insert("openingX", config.openingText.x_percent);
+    map.insert("openingY", config.openingText.y_percent);
+    map.insert("openingScale", config.openingText.scale);
     map.insert("arrowsTarget", QString::fromStdString(config.arrowsTarget));
     return map;
 }
@@ -58,6 +62,11 @@ cta::VideoOverlayConfig overlayConfigFromVariantMap(const QVariant& value) {
     config.pvText.x_percent = map.value("pvX", config.pvText.x_percent).toDouble();
     config.pvText.y_percent = map.value("pvY", config.pvText.y_percent).toDouble();
     config.pvText.scale = map.value("pvScale", config.pvText.scale).toDouble();
+
+    config.openingText.enabled = map.value("openingEnabled", config.openingText.enabled).toBool();
+    config.openingText.x_percent = map.value("openingX", config.openingText.x_percent).toDouble();
+    config.openingText.y_percent = map.value("openingY", config.openingText.y_percent).toDouble();
+    config.openingText.scale = map.value("openingScale", config.openingText.scale).toDouble();
 
     config.arrowsTarget = map.value("arrowsTarget", QString::fromStdString(config.arrowsTarget)).toString().toStdString();
     return config;

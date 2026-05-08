@@ -9,7 +9,7 @@
     {
       "name": "vs2022-dev",
       "displayName": "Visual Studio 2022 dev build",
-      "description": "Fast incremental developer build: PCH on, LTO off, runtime deployment off.",
+      "description": "Fast incremental developer build: PCH on, LTO off, runtime deployment on.",
       "generator": "Visual Studio 17 2022",
       "architecture": {
         "value": "x64",
@@ -21,7 +21,7 @@
         "ENABLE_CMAKE_AUTO_REGEN": "OFF",
         "ENABLE_IPO": "OFF",
         "ENABLE_PCH": "ON",
-        "ENABLE_QT_RUNTIME_DEPLOYMENT": "OFF",
+        "ENABLE_QT_RUNTIME_DEPLOYMENT": "ON",
         "ENABLE_VCPKG_APPLOCAL_DEPS": "OFF",
         "ENABLE_UNITY_BUILD": "OFF",
         "VCPKG_APPLOCAL_DEPS": "OFF"

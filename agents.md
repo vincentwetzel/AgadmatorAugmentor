@@ -85,7 +85,19 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Generates **move quality annotations** (e.g., `!!`, `?`, `(Book)`) by comparing played moves against engine best lines and calculating centipawn loss.
 - Outputs engine analysis directly into the generated PGN file as standard chess variations and inline evaluations.
 
-## 5. The Analysis Video Agent (Overlay & Composition) — ✅ Implemented
+## 5. The Opening Metadata Agent — ✅ Implemented
+
+**Integrated in:** `OpeningFetcher.h/.cpp`
+
+### Responsibilities
+
+- Consumes verified video FEN positions from the Verification Agent.
+- Queries Lichess Explorer in a background worker through WinHTTP on Windows.
+- Caches API responses under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`.
+- Stops once a likely unique position is reached, avoiding unnecessary API calls after the opening is known.
+- Supplies ECO/opening names for PGN headers and optional analysis-video opening overlays.
+
+## 6. The Analysis Video Agent (Overlay & Composition) — ✅ Implemented
 
 ### Responsibilities
 
@@ -95,6 +107,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
   - ✅ **Evaluation Bar:** A bar on the side of the video showing the Stockfish evaluation.
   - ✅ **Move Arrows:** Arrows on the main board indicating the best engine moves. The arrows dynamically scale in thickness and color intensity based on the evaluation difference from the principal variation.
   - ✅ **Principal Variation:** Text overlay showing the top engine line.
+  - ✅ **Opening Name:** Optional text overlay showing the detected ECO/opening name.
 - Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the final MP4.
 - Produces `output/output_with_analysis.mp4`.
 
@@ -112,8 +125,10 @@ Raw Video
         ↓                  
 [Stockfish Analysis Agent] → Engine evaluations, PV lines  (Phase 2 — Implemented)
         ↓
+[Opening Metadata Agent] → ECO/opening names from cached Lichess Explorer lookups
         ↓
-[Analysis Video Agent: Overlays] → Debug video with board, arrows, eval bar, and text (Phase 4 — Implemented)
+        ↓
+[Analysis Video Agent: Overlays] → Debug video with board, arrows, eval bar, PV text, and opening text (Phase 4 — Implemented)
     ↓
     └──→ output_with_analysis.mp4 (Phase 4 output)
 ```
@@ -130,8 +145,9 @@ Raw Video
 | Move Validation Logic | `MoveValidations.h/.cpp` |
 | Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp` |
+| Opening Metadata | `OpeningFetcher.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
-| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp` |
+| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp` |
 | Output Generation | `PgnWriter.h/.cpp`, `ImageWriteUtils.h/.cpp` |
 | GUI & Orchestration | `MainWindow*.cpp`, `VideoProcessorWorker.h/.cpp` |
 | Configuration & Templates | `SettingsDialog.h/.cpp`, `ThemeManager.h/.cpp`, `TemplateManager.h/.cpp`, `OverlayEditorDialog.h/.cpp` |

@@ -360,6 +360,9 @@ void OverlayEditorDialog::keyPressEvent(QKeyEvent* event) {
             } else if (item == pvTextItem_ && pvCheck_) {
                 pvCheck_->setChecked(false);
                 handled = true;
+            } else if (item == openingTextItem_ && openingCheck_) {
+                openingCheck_->setChecked(false);
+                handled = true;
             }
         }
         if (handled) return;
@@ -435,10 +438,13 @@ void OverlayEditorDialog::setupUi() {
     evalCheck_->setToolTip("Toggle the visibility of the evaluation bar.");
     pvCheck_ = new QCheckBox("PV Text Overlay");
     pvCheck_->setToolTip("Toggle the visibility of the principal variation engine text.");
+    openingCheck_ = new QCheckBox("Opening Text Overlay");
+    openingCheck_->setToolTip("Toggle the visibility of the opening name text.");
 
     togglesLayout->addWidget(boardCheck_);
     togglesLayout->addWidget(evalCheck_);
     togglesLayout->addWidget(pvCheck_);
+    togglesLayout->addWidget(openingCheck_);
 
     auto* arrowsLabel = new QLabel("Engine Arrows:");
     auto* arrowsCombo = new QComboBox();
@@ -454,6 +460,7 @@ void OverlayEditorDialog::setupUi() {
     connect(boardCheck_, &QCheckBox::toggled, [this](bool checked){ boardItem_->setVisible(checked); if(!checked) boardItem_->setSelected(false); onTogglesChanged(); });
     connect(evalCheck_, &QCheckBox::toggled, [this](bool checked){ evalBarItem_->setVisible(checked); if(!checked) evalBarItem_->setSelected(false); onTogglesChanged(); });
     connect(pvCheck_, &QCheckBox::toggled, [this](bool checked){ pvTextItem_->setVisible(checked); if(!checked) pvTextItem_->setSelected(false); onTogglesChanged(); });
+    connect(openingCheck_, &QCheckBox::toggled, [this](bool checked){ openingTextItem_->setVisible(checked); if(!checked) openingTextItem_->setSelected(false); onTogglesChanged(); });
     connect(arrowsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OverlayEditorDialog::onTogglesChanged);
     
     connect(templateNameEdit_, &QLineEdit::textChanged, this, [this](const QString& text){
@@ -512,13 +519,23 @@ void OverlayEditorDialog::setupOverlays() {
     pp.drawText(pvMock.rect(), Qt::AlignCenter, previewString);
     pp.end();
 
+    QPixmap openingMock(800, 40);
+    openingMock.fill(QColor(0, 0, 0, 200));
+    QPainter op(&openingMock);
+    op.setPen(Qt::white);
+    op.setFont(QFont("Arial", 16, QFont::Bold));
+    op.drawText(openingMock.rect(), Qt::AlignCenter, "C42 Petrov's Defense");
+    op.end();
+
     boardItem_ = new DraggableOverlay(boardMock, "Board");
     evalBarItem_ = new DraggableOverlay(evalMock, "EvalBar");
     pvTextItem_ = new DraggableOverlay(pvMock, "PvText");
+    openingTextItem_ = new DraggableOverlay(openingMock, "OpeningText");
 
     scene_->addItem(boardItem_);
     scene_->addItem(evalBarItem_);
     scene_->addItem(pvTextItem_);
+    scene_->addItem(openingTextItem_);
     
 }
 
@@ -539,6 +556,7 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
     boardCheck_->blockSignals(true);
     evalCheck_->blockSignals(true);
     pvCheck_->blockSignals(true);
+    openingCheck_->blockSignals(true);
     if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
         arrowsCombo->blockSignals(true);
     }
@@ -552,6 +570,7 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
     boardCheck_->setChecked(tpl.config.board.enabled);
     evalCheck_->setChecked(tpl.config.evalBar.enabled);
     pvCheck_->setChecked(tpl.config.pvText.enabled);
+    openingCheck_->setChecked(tpl.config.openingText.enabled);
     
     QString screenshotPath = cta::TemplateManager::instance().getScreenshotPath(tpl.screenshotFilename);
     QPixmap bg(screenshotPath);
@@ -567,6 +586,7 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
     boardItem_->setVideoBounds(bounds);
     evalBarItem_->setVideoBounds(bounds);
     pvTextItem_->setVideoBounds(bounds);
+    openingTextItem_->setVideoBounds(bounds);
 
     boardItem_->updateFromConfig(tpl.config.board);
     if (!tpl.config.board.enabled) boardItem_->setSelected(false);
@@ -576,6 +596,9 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
 
     pvTextItem_->updateFromConfig(tpl.config.pvText);
     if (!tpl.config.pvText.enabled) pvTextItem_->setSelected(false);
+
+    openingTextItem_->updateFromConfig(tpl.config.openingText);
+    if (!tpl.config.openingText.enabled) openingTextItem_->setSelected(false);
 
     if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
         int aIdx = arrowsCombo->findText(QString::fromStdString(tpl.config.arrowsTarget));
@@ -587,6 +610,7 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
     boardCheck_->blockSignals(false);
     evalCheck_->blockSignals(false);
     pvCheck_->blockSignals(false);
+    openingCheck_->blockSignals(false);
 }
 
 void OverlayEditorDialog::saveUiToTemplate(int index) {
@@ -601,6 +625,7 @@ void OverlayEditorDialog::saveUiToTemplate(int index) {
     boardItem_->populateConfig(tpl.config.board);
     evalBarItem_->populateConfig(tpl.config.evalBar);
     pvTextItem_->populateConfig(tpl.config.pvText);
+    openingTextItem_->populateConfig(tpl.config.openingText);
 
     if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
         tpl.config.arrowsTarget = arrowsCombo->currentText().toStdString();
@@ -677,6 +702,7 @@ void OverlayEditorDialog::onTogglesChanged() {
         templates_[currentIndex_].config.board.enabled = boardItem_ && boardItem_->isVisible();
         templates_[currentIndex_].config.evalBar.enabled = evalBarItem_ && evalBarItem_->isVisible();
         templates_[currentIndex_].config.pvText.enabled = pvTextItem_ && pvTextItem_->isVisible();
+        templates_[currentIndex_].config.openingText.enabled = openingTextItem_ && openingTextItem_->isVisible();
         if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
             templates_[currentIndex_].config.arrowsTarget = arrowsCombo->currentText().toStdString();
         }
