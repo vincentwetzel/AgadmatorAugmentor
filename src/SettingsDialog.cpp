@@ -20,6 +20,12 @@
 #include <QStandardPaths>
 #include <QDirIterator>
 #include <algorithm>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QProcess>
+#include <QTimer>
+#include <QCheckBox>
+#include <QSysInfo>
 #include <thread>
 
 namespace {
@@ -484,15 +490,64 @@ void SettingsDialog::setupUi() {
     memoryLimitLayout->addStretch();
     advancedGroupLayout->addLayout(memoryLimitLayout);
 
+    auto* loggingRow1 = new QHBoxLayout();
+    loggingRow1->addWidget(createSettingsLabel("Keep previous logs:", "How many old log files to keep in the AppData folder."));
+    auto* logRetentionSpinBox = new QSpinBox();
+    logRetentionSpinBox->setObjectName("logRetentionSpinBox");
+    logRetentionSpinBox->setRange(1, 100);
+    logRetentionSpinBox->setToolTip("Number of log files to retain during log cycling.");
+    connect(logRetentionSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() { saveSettings(); });
+    loggingRow1->addWidget(logRetentionSpinBox);
+
+    auto* compressLogsCheck = new QCheckBox("Compress rotated logs (.zip)");
+    compressLogsCheck->setObjectName("compressLogsCheck");
+    compressLogsCheck->setToolTip("Automatically zip old log files to save disk space.");
+    connect(compressLogsCheck, &QCheckBox::toggled, this, [this]() { saveSettings(); });
+    loggingRow1->addWidget(compressLogsCheck);
+    loggingRow1->addStretch();
+    advancedGroupLayout->addLayout(loggingRow1);
+    
+    auto* loggingRow2 = new QHBoxLayout();
+    auto* openLogsBtn = new QPushButton("Open Logs");
+    openLogsBtn->setToolTip("Open the folder containing application log files.");
+    connect(openLogsBtn, &QPushButton::clicked, this, []() {
+        QString logDirStr = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).absoluteFilePath("logs");
+        QDir().mkpath(logDirStr);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(logDirStr));
+    });
+    loggingRow2->addWidget(openLogsBtn);
+
+    auto* logsStatusLabel = new QLabel("");
+    logsStatusLabel->setObjectName("logsStatusLabel");
+
+    auto* clearLogsBtn = new QPushButton("Clear Logs");
+    clearLogsBtn->setToolTip("Delete all current log files to free up space.");
+    connect(clearLogsBtn, &QPushButton::clicked, this, [this, logsStatusLabel]() {
+        QString logDirStr = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).absoluteFilePath("logs");
+        QDir logDir(logDirStr);
+        QFileInfoList fileList = logDir.entryInfoList(QStringList() << "log_*.txt" << "log_*.zip", QDir::Files | QDir::NoSymLinks);
+        int deleted = 0;
+        for (const QFileInfo& fileInfo : fileList) {
+            if (QFile::remove(fileInfo.absoluteFilePath())) {
+                deleted++;
+            }
+        }
+        logsStatusLabel->setText(QString("✓ Cleared %1 file(s)").arg(deleted));
+        QTimer::singleShot(4000, logsStatusLabel, [logsStatusLabel]() { logsStatusLabel->setText(""); });
+        emit logMessage(QString("Cleared %1 log file(s).").arg(deleted));
+    });
+    loggingRow2->addWidget(clearLogsBtn);
+    loggingRow2->addWidget(logsStatusLabel);
+
+    loggingRow2->addStretch();
+    advancedGroupLayout->addLayout(loggingRow2);
+
     advancedLayout->addWidget(advancedGroup);
     advancedLayout->addStretch();
     tabWidget->addTab(advancedTab, "Advanced");
 
     auto* dialogBtnBox = new QDialogButtonBox(QDialogButtonBox::Close);
     dialogBtnBox->setToolTip("Close the settings window. Changes are saved automatically.");
-    if (auto* closeButton = dialogBtnBox->button(QDialogButtonBox::Close)) {
-        closeButton->setToolTip("Close Settings. Changes are saved automatically.");
-    }
     connect(dialogBtnBox, &QDialogButtonBox::rejected, this, &QDialog::accept);
     dialogLayout->addWidget(dialogBtnBox);
 
@@ -523,155 +578,148 @@ void SettingsDialog::setupUi() {
     }
     connect(threadComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(multiPvComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(stockfishPathBtn, &QPushButton::clicked, this, [this]() {
-        QSettings settings;
-        QString lastDir = settings.value("lastStockfishDir", QDir::homePath()).toString();
-        QString filter = "All Files (*)";
+    
+    if (auto* stockfishPathBtn = findChild<QPushButton*>("stockfishPathBtn")) {
+        connect(stockfishPathBtn, &QPushButton::clicked, this, [this]() {
+            QSettings settings;
+            QString lastDir = settings.value("lastStockfishDir", QDir::homePath()).toString();
+            QString filter = "All Files (*)";
 #ifdef _WIN32
-        filter = "Executables (*.exe);;All Files (*)";
+            filter = "Executables (*.exe);;All Files (*)";
 #endif
-        QString fileName = QFileDialog::getOpenFileName(this, "Select Stockfish Executable", lastDir, filter);
-        if (!fileName.isEmpty()) {
-            auto* pEdit = findChild<QLineEdit*>("stockfishPathEdit");
-            if (pEdit) pEdit->setText(fileName);
-            settings.setValue("lastStockfishDir", QFileInfo(fileName).absolutePath());
-            saveSettings();
-        }
-    });
-    connect(stockfishSearchBtn, &QPushButton::clicked, this, [this]() {
-        emit logMessage("Searching for Stockfish executable...");
-        QCoreApplication::processEvents();
-        QString foundPath;
-        QString appDir = QCoreApplication::applicationDirPath();
-        QString execName = "stockfish";
+            QString fileName = QFileDialog::getOpenFileName(this, "Select Stockfish Executable", lastDir, filter);
+            if (!fileName.isEmpty()) {
+                auto* pEdit = findChild<QLineEdit*>("stockfishPathEdit");
+                if (pEdit) pEdit->setText(fileName);
+                settings.setValue("lastStockfishDir", QFileInfo(fileName).absolutePath());
+                saveSettings();
+            }
+        });
+    }
+    
+    if (auto* stockfishSearchBtn = findChild<QPushButton*>("stockfishSearchBtn")) {
+        connect(stockfishSearchBtn, &QPushButton::clicked, this, [this]() {
+            emit logMessage("Searching for Stockfish executable...");
+            QCoreApplication::processEvents();
+            QString foundPath;
+            QString appDir = QCoreApplication::applicationDirPath();
+            QString execName = "stockfish";
 #ifdef _WIN32
-        execName = "stockfish.exe";
+            execName = "stockfish.exe";
 #endif
-        const QStringList exePatterns = {
+            const QStringList exePatterns = {
 #ifdef _WIN32
-            "stockfish.exe",
-            "stockfish-*.exe",
+                "stockfish.exe",
+                "stockfish-*.exe",
 #else
-            "stockfish",
-            "stockfish-*",
+                "stockfish",
+                "stockfish-*",
 #endif
-        };
+            };
 
-        auto findMatchingExecutable = [&exePatterns](const QString& directoryPath) -> QString {
-            QDir dir(directoryPath);
-            if (!dir.exists()) {
+            auto findMatchingExecutable = [&exePatterns](const QString& directoryPath) -> QString {
+                QDir dir(directoryPath);
+                if (!dir.exists()) return {};
+                for (const QString& pattern : exePatterns) {
+                    const QFileInfoList files = dir.entryInfoList(QStringList() << pattern, QDir::Files | QDir::Executable | QDir::NoSymLinks);
+                    if (!files.isEmpty()) return files.first().absoluteFilePath();
+                }
                 return {};
-            }
+            };
 
-            for (const QString& pattern : exePatterns) {
-                const QFileInfoList files = dir.entryInfoList(
-                    QStringList() << pattern,
-                    QDir::Files | QDir::Executable | QDir::NoSymLinks
-                );
-                if (!files.isEmpty()) {
-                    return files.first().absoluteFilePath();
+            QStringList candidatePaths = {
+                appDir + "/stockfish/" + execName, appDir + "/../stockfish/" + execName,
+                appDir + "/../../stockfish/" + execName, appDir + "/" + execName
+            };
+            for (const QString& p : candidatePaths) {
+                if (QFileInfo::exists(p)) { foundPath = QFileInfo(p).absoluteFilePath(); break; }
+            }
+            if (foundPath.isEmpty()) {
+                const QStringList candidateDirs = {
+                    appDir, appDir + "/stockfish", appDir + "/../stockfish", appDir + "/../../stockfish",
+                    "C:/stockfish", "C:/stockfish/stockfish", "C:/stockfish-windows-x86-64-avx2", "C:/stockfish-windows-x86-64-avx2/stockfish"
+                };
+                for (const QString& dirPath : candidateDirs) {
+                    foundPath = findMatchingExecutable(dirPath);
+                    if (!foundPath.isEmpty()) break;
                 }
             }
-
-            return {};
-        };
-
-        QStringList candidatePaths = {
-            appDir + "/stockfish/" + execName, appDir + "/../stockfish/" + execName,
-            appDir + "/../../stockfish/" + execName, appDir + "/" + execName
-        };
-        for (const QString& p : candidatePaths) {
-            if (QFileInfo::exists(p)) { foundPath = QFileInfo(p).absoluteFilePath(); break; }
-        }
-        if (foundPath.isEmpty()) {
-            const QStringList candidateDirs = {
-                appDir,
-                appDir + "/stockfish",
-                appDir + "/../stockfish",
-                appDir + "/../../stockfish",
-                "C:/stockfish",
-                "C:/stockfish/stockfish",
-                "C:/stockfish-windows-x86-64-avx2",
-                "C:/stockfish-windows-x86-64-avx2/stockfish"
-            };
-            for (const QString& dirPath : candidateDirs) {
-                foundPath = findMatchingExecutable(dirPath);
-                if (!foundPath.isEmpty()) {
-                    break;
-                }
-            }
-        }
-        if (foundPath.isEmpty()) {
-            QStringList baseDirs = {
-                QDir::rootPath(),
-                "C:/",
-                QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
-            };
-            for (const QString& base : baseDirs) {
-                QDir dir(base);
-                if (!dir.exists()) continue;
-                QFileInfoList subdirs = dir.entryInfoList(QStringList() << "*stockfish*", QDir::Dirs | QDir::NoDotAndDotDot);
-                for (const QFileInfo& sInfo : subdirs) {
-                    QDirIterator it(sInfo.absoluteFilePath(), exePatterns, QDir::Files | QDir::Executable, QDirIterator::Subdirectories);
-                    if (it.hasNext()) {
-                        foundPath = it.next();
-                        break;
+            if (foundPath.isEmpty()) {
+                QStringList baseDirs = { QDir::rootPath(), "C:/", QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) };
+                for (const QString& base : baseDirs) {
+                    QDir dir(base);
+                    if (!dir.exists()) continue;
+                    QFileInfoList subdirs = dir.entryInfoList(QStringList() << "*stockfish*", QDir::Dirs | QDir::NoDotAndDotDot);
+                    for (const QFileInfo& sInfo : subdirs) {
+                        QDirIterator it(sInfo.absoluteFilePath(), exePatterns, QDir::Files | QDir::Executable, QDirIterator::Subdirectories);
+                        if (it.hasNext()) { foundPath = it.next(); break; }
                     }
+                    if (!foundPath.isEmpty()) break;
                 }
-                if (!foundPath.isEmpty()) break;
             }
-        }
-        if (!foundPath.isEmpty()) {
-            auto* pEdit = findChild<QLineEdit*>("stockfishPathEdit");
-            if (pEdit) pEdit->setText(QDir::toNativeSeparators(foundPath));
-            emit logMessage("Found Stockfish at: " + QDir::toNativeSeparators(foundPath));
-            saveSettings();
-        } else {
-            emit logMessage("Could not automatically find Stockfish. Please browse manually.");
-        }
-    });
-    connect(depthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(timeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(nodesComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(analysisDepthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(stockfishPathEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
+            if (!foundPath.isEmpty()) {
+                auto* pEdit = findChild<QLineEdit*>("stockfishPathEdit");
+                if (pEdit) pEdit->setText(QDir::toNativeSeparators(foundPath));
+                emit logMessage("Found Stockfish at: " + QDir::toNativeSeparators(foundPath));
+                saveSettings();
+            } else {
+                emit logMessage("Could not automatically find Stockfish. Please browse manually.");
+            }
+        });
+    }
+
+    if (auto* depthComboBox = findChild<QComboBox*>("depthComboBox")) connect(depthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* timeComboBox = findChild<QComboBox*>("timeComboBox")) connect(timeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* nodesComboBox = findChild<QComboBox*>("nodesComboBox")) connect(nodesComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* analysisDepthComboBox = findChild<QComboBox*>("analysisDepthComboBox")) connect(analysisDepthComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* stockfishPathEdit = findChild<QLineEdit*>("stockfishPathEdit")) connect(stockfishPathEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
+    
     connect(themeComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
         saveSettings();
         emit logMessage("Theme changed to: " + themeComboBox_->currentText());
         emit themeChanged();
     });
+    
     if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
         connect(mat, &ToggleSwitch::toggled, this, [this](bool checked) {
             emit logMessage(checked ? "Move quality annotations enabled" : "Move quality annotations disabled");
             saveSettings();
         });
     }
-    connect(videoCodecComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, videoCodecComboBox, audioCodecComboBox, extensionComboBox]() {
-        const QString vCodec = videoCodecComboBox->currentData().toString();
-        const QString currentAudio = audioCodecComboBox->currentData().toString();
-        QString currentExt = extensionComboBox->currentText();
-        audioCodecComboBox->blockSignals(true); extensionComboBox->blockSignals(true);
-        audioCodecComboBox->clear(); extensionComboBox->clear();
-        if (vCodec == "libvpx-vp9") {
-            audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
-            audioCodecComboBox->addItem("Opus audio (recommended for WebM)", "libopus");
-            extensionComboBox->addItems({".webm", ".mkv"});
-        } else {
-            audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
-            audioCodecComboBox->addItem("AAC audio (standard)", "aac");
-            extensionComboBox->addItems({".mp4", ".mkv", ".avi", ".mov"});
+    
+    if (auto* videoCodecComboBox = findChild<QComboBox*>("videoCodecComboBox")) {
+        auto* audioCodecComboBox = findChild<QComboBox*>("audioCodecComboBox");
+        auto* extensionComboBox = findChild<QComboBox*>("extensionComboBox");
+        if (audioCodecComboBox && extensionComboBox) {
+            connect(videoCodecComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, videoCodecComboBox, audioCodecComboBox, extensionComboBox]() {
+                const QString vCodec = videoCodecComboBox->currentData().toString();
+                const QString currentAudio = audioCodecComboBox->currentData().toString();
+                QString currentExt = extensionComboBox->currentText();
+                audioCodecComboBox->blockSignals(true); extensionComboBox->blockSignals(true);
+                audioCodecComboBox->clear(); extensionComboBox->clear();
+                if (vCodec == "libvpx-vp9") {
+                    audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
+                    audioCodecComboBox->addItem("Opus audio (recommended for WebM)", "libopus");
+                    extensionComboBox->addItems({".webm", ".mkv"});
+                } else {
+                    audioCodecComboBox->addItem("Keep original audio (fastest)", "copy");
+                    audioCodecComboBox->addItem("AAC audio (standard)", "aac");
+                    extensionComboBox->addItems({".mp4", ".mkv", ".avi", ".mov"});
+                }
+                int aIdx = audioCodecComboBox->findData(currentAudio);
+                if (aIdx >= 0) audioCodecComboBox->setCurrentIndex(aIdx);
+                int eIdx = extensionComboBox->findText(currentExt);
+                if (eIdx >= 0) extensionComboBox->setCurrentIndex(eIdx);
+                audioCodecComboBox->blockSignals(false); extensionComboBox->blockSignals(false);
+                saveSettings();
+            });
         }
-        int aIdx = audioCodecComboBox->findData(currentAudio);
-        if (aIdx >= 0) audioCodecComboBox->setCurrentIndex(aIdx);
-        int eIdx = extensionComboBox->findText(currentExt);
-        if (eIdx >= 0) extensionComboBox->setCurrentIndex(eIdx);
-        audioCodecComboBox->blockSignals(false); extensionComboBox->blockSignals(false);
-        saveSettings();
-    });
-    connect(audioCodecComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(extensionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(resolutionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
-    connect(qualityComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    }
+    
+    if (auto* audioCodecComboBox = findChild<QComboBox*>("audioCodecComboBox")) connect(audioCodecComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* extensionComboBox = findChild<QComboBox*>("extensionComboBox")) connect(extensionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* resolutionComboBox = findChild<QComboBox*>("resolutionComboBox")) connect(resolutionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    if (auto* qualityComboBox = findChild<QComboBox*>("qualityComboBox")) connect(qualityComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(debugLevelComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
 }
 
@@ -758,6 +806,14 @@ void SettingsDialog::loadSettings() {
 
     if (auto* m = findChild<QComboBox*>("memoryLimitComboBox")) { int idx = m->findData(settings.value("memoryLimitMB", 0).toInt()); m->setCurrentIndex(idx >= 0 ? idx : m->findData(0)); }
 
+    if (auto* spin = findChild<QSpinBox*>("logRetentionSpinBox")) {
+        spin->setValue(settings.value("logRetentionCount", 10).toInt());
+    }
+
+    if (auto* cb = findChild<QCheckBox*>("compressLogsCheck")) {
+        cb->setChecked(settings.value("compressOldLogs", false).toBool());
+    }
+
     if (auto* rot = findChild<ToggleSwitch*>("removeOriginalToggle")) {
         rot->setChecked(settings.value("removeOriginalVideo", false).toBool());
     }
@@ -800,6 +856,12 @@ void SettingsDialog::saveSettings() {
     if (auto* q = findChild<QComboBox*>("qualityComboBox")) settings.setValue("videoQuality", q->currentData().toInt());
     
     if (auto* m = findChild<QComboBox*>("memoryLimitComboBox")) settings.setValue("memoryLimitMB", m->currentData().toInt());
+    if (auto* spin = findChild<QSpinBox*>("logRetentionSpinBox")) {
+        settings.setValue("logRetentionCount", spin->value());
+    }
+    if (auto* cb = findChild<QCheckBox*>("compressLogsCheck")) {
+        settings.setValue("compressOldLogs", cb->isChecked());
+    }
 }
 
 void SettingsDialog::populateSettings(ProcessingSettings& s) const {

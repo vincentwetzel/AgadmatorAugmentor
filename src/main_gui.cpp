@@ -7,6 +7,14 @@
 #include <QFileInfo>
 #include <QMetaType>
 #include <QSettings>
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
+#include <QStandardPaths>
+#include <QDir>
+#include <QMutex>
+#include <QProcess>
+#include <QSysInfo>
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -111,6 +119,99 @@ int max_hardware_thread_count() {
     return std::max(1, static_cast<int>(hardware_threads));
 }
 
+const qint64 MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB per log file
+QFile* g_logFile = nullptr;
+QMutex g_logMutex;
+
+void cycleLogsIfNeeded() {
+    QString logDirStr = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).absoluteFilePath("logs");
+    QDir logDir(logDirStr);
+    if (!logDir.exists()) {
+        logDir.mkpath(".");
+    }
+
+    QSettings settings;
+    int retainCount = settings.value("logRetentionCount", 10).toInt();
+    if (retainCount < 1) retainCount = 1;
+    bool compressLogs = settings.value("compressOldLogs", false).toBool();
+
+    if (compressLogs) {
+        QFileInfoList txtFiles = logDir.entryInfoList(QStringList() << "log_*.txt", QDir::Files | QDir::NoSymLinks, QDir::Name);
+        for (const QFileInfo& fi : txtFiles) {
+            QString zipName = fi.completeBaseName() + ".zip";
+            QProcess process;
+            process.setWorkingDirectory(logDir.absolutePath());
+            process.start("tar", QStringList() << "-a" << "-c" << "-f" << zipName << fi.fileName());
+            if (process.waitForFinished() && process.exitCode() == 0) {
+                (void)QFile::remove(fi.absoluteFilePath());
+            }
+        }
+    }
+
+    QFileInfoList fileList = logDir.entryInfoList(QStringList() << "log_*.txt" << "log_*.zip", QDir::Files | QDir::NoSymLinks, QDir::Name);
+    while (fileList.size() >= retainCount) {
+        (void)QFile::remove(fileList.first().absoluteFilePath());
+        fileList.removeFirst();
+    }
+}
+
+void setupLogging() {
+    cycleLogsIfNeeded();
+    QString logDirStr = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).absoluteFilePath("logs");
+    QString currentDateTime = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
+    QString logFilePath = QDir(logDirStr).absoluteFilePath(QString("log_%1.txt").arg(currentDateTime));
+
+    g_logFile = new QFile(logFilePath);
+    if (g_logFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        qInstallMessageHandler([](QtMsgType type, const QMessageLogContext& context, const QString& msg) {
+            Q_UNUSED(context);
+            QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz");
+            QString consoleLogLine = msg + "\n";
+            QString fileLogLine = QString("[%1] %2\n").arg(timestamp, msg);
+
+            if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) {
+                fprintf(stderr, "%s", consoleLogLine.toLocal8Bit().constData());
+                fflush(stderr);
+            } else {
+                fprintf(stdout, "%s", consoleLogLine.toLocal8Bit().constData());
+                fflush(stdout);
+            }
+
+            QMutexLocker lock(&g_logMutex);
+            if (g_logFile && g_logFile->isOpen()) {
+                g_logFile->write(fileLogLine.toUtf8());
+                g_logFile->flush();
+
+                // Automatically cycle the active log file if it exceeds the maximum size boundary
+                if (g_logFile->size() > MAX_LOG_SIZE) {
+                    g_logFile->close();
+                    delete g_logFile;
+                    g_logFile = nullptr;
+
+                    cycleLogsIfNeeded();
+                    QString logDir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).absoluteFilePath("logs");
+                    QString newDateTime = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
+                    g_logFile = new QFile(QDir(logDir).absoluteFilePath(QString("log_%1.txt").arg(newDateTime)));
+                    (void)g_logFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+                }
+            }
+
+            if (type == QtFatalMsg) {
+                abort();
+            }
+        });
+    }
+}
+
+void cleanupLogging() {
+    QMutexLocker lock(&g_logMutex);
+    if (g_logFile) {
+        g_logFile->close();
+        delete g_logFile;
+        g_logFile = nullptr;
+    }
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -124,6 +225,25 @@ int main(int argc, char *argv[]) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setApplicationVersion("0.3.0");
 
+    setupLogging();
+
+    QStringList launchArgs;
+    for (int i = 0; i < argc; ++i) {
+        launchArgs << argv[i];
+    }
+    qInfo() << "=== ChessTube Analyzer Launched ===";
+    qInfo() << "Launch arguments:" << launchArgs.join(" ");
+
+    QString sysInfo = QString("OS: %1 | CPU Arch: %2").arg(QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture());
+#ifdef _WIN32
+    MEMORYSTATUSEX memInfo;
+    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&memInfo)) {
+        sysInfo += QString(" | Total RAM: %1 MB").arg(memInfo.ullTotalPhys / (1024 * 1024));
+    }
+#endif
+    qInfo() << "System Info:" << sysInfo;
+
     QCommandLineParser parser;
     parser.setApplicationDescription("ChessTube Analyzer GUI - Process chess videos with optional headless mode");
     parser.addHelpOption();
@@ -134,8 +254,7 @@ int main(int argc, char *argv[]) {
     QCommandLineOption debug_level_option("debug-level", "Debug image generation (NONE, MOVES, FULL).", "level");
     QCommandLineOption pgn_option("pgn", "Enable PGN file generation.");
     QCommandLineOption analysis_video_option("analysis-video", "Enable analysis video generation.");
-    QCommandLineOption move_labels_option("move-labels", "Enable Stockfish-backed move quality labels.");
-    QCommandLineOption no_move_labels_option("no-move-labels", "Disable move quality labels.");
+    QCommandLineOption move_labels_option("move-labels", "Enable move quality labels (runs Stockfish).");
     QCommandLineOption multi_pv_option("multi-pv", "Number of best lines for Stockfish (1-4).", "count");
     QCommandLineOption depth_option("depth", "Stockfish search depth (1-24).", "depth");
     QCommandLineOption time_option("time", "Stockfish max time per move in seconds (0 = no limit).", "s");
@@ -156,7 +275,6 @@ int main(int argc, char *argv[]) {
     parser.addOption(pgn_option);
     parser.addOption(analysis_video_option);
     parser.addOption(move_labels_option);
-    parser.addOption(no_move_labels_option);
     parser.addOption(multi_pv_option);
     parser.addOption(depth_option);
     parser.addOption(time_option);
@@ -166,10 +284,16 @@ int main(int argc, char *argv[]) {
     parser.addOption(memory_limit_option);
     parser.addPositionalArgument("video_path", "Path to the input video file (enables headless mode).");
 
-    parser.process(app);
+    if (!parser.parse(QCoreApplication::arguments())) {
+        std::cerr << parser.errorText().toStdString() << "\n\n"
+                  << parser.helpText().toStdString();
+        cleanupLogging();
+        return 1;
+    }
 
     if (parser.isSet(version_option)) {
         std::cout << "ChessTube Analyzer v0.3.0" << std::endl;
+        cleanupLogging();
         return 0;
     }
 
@@ -181,6 +305,7 @@ int main(int argc, char *argv[]) {
     if (positional_arguments.size() > 1) {
         std::cerr << "Only one positional video_path is supported.\n\n"
                   << parser.helpText().toStdString();
+        cleanupLogging();
         return 1;
     }
 
@@ -198,30 +323,31 @@ int main(int argc, char *argv[]) {
         !parse_int_option(parser, "analysis-depth", 1, 20, analysis_depth, std::cerr) ||
         !parse_int_option(parser, "threads", 1, max_threads, threads, std::cerr) ||
         !parse_int_option(parser, "memory-limit", 0, 65536, memory_limit, std::cerr)) {
+        cleanupLogging();
         return 1;
     }
 
     if (!validate_existing_file(video_path, "video_path", std::cerr) ||
         !validate_video_file(video_path, std::cerr) ||
         !validate_existing_file(board_asset, "--board-asset", std::cerr)) {
-        return 1;
-    }
-
-    if (parser.isSet(move_labels_option) && parser.isSet(no_move_labels_option)) {
-        std::cerr << "--move-labels and --no-move-labels cannot be used together.\n";
+        cleanupLogging();
         return 1;
     }
 
     int pgn_override = parser.isSet(pgn_option) ? 1 : -1;
     int analysis_video_override = parser.isSet(analysis_video_option) ? 1 : -1;
-    int move_labels_override = parser.isSet(move_labels_option) ? 1 : (parser.isSet(no_move_labels_option) ? 0 : -1);
+    int move_labels_override = parser.isSet(move_labels_option) ? 1 : -1;
 
     cta::MainWindow main_window;
-    
+    int result = 0;
+
     if (!video_path.isEmpty()) {
-        return main_window.processHeadless(video_path, pgn_override, analysis_video_override, move_labels_override, multi_pv, threads, depth, time, nodes, analysis_depth, debug_level_str, output, board_asset, memory_limit);
+        result = main_window.processHeadless(video_path, pgn_override, analysis_video_override, move_labels_override, multi_pv, threads, depth, time, nodes, analysis_depth, debug_level_str, output, board_asset, memory_limit);
+    } else {
+        main_window.show();
+        result = app.exec();
     }
 
-    main_window.show();
-    return app.exec();
+    cleanupLogging();
+    return result;
 }

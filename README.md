@@ -17,12 +17,11 @@ Advanced extraction tuning is available through environment variables for benchm
 - **UI Detection:** Detect yellow highlights, red emphasis marks, yellow arrows, clocks, hover boxes, and piece-count changes.
 - **Clock Recognition:** Hu Moments digit OCR with no Tesseract dependency.
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
-- **PGN Export:** Generate PGN with extracted moves, clock tags, optional quality annotations, and Stockfish variations when labels are enabled.
-- **Move Subtitles:** Optionally embed synced SAN move subtitles into generated analysis videos.
+- **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
 - **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos.
-- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, optional embedded subtitles, and engine arrows into an annotated video.
-- **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, a resizable queue/log split view, optional source-video cleanup, and a screenshot-based overlay template editor.
+- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, and engine arrows into an annotated MP4.
+- **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
 
@@ -77,8 +76,7 @@ Headless:
 
 ```cmd
 cd build\Release
-"ChessTube Analyzer.exe" "path\to\video.mp4" --pgn --move-labels --multi-pv 3
-"ChessTube Analyzer.exe" "path\to\video.mp4" --analysis-video --no-move-labels
+"ChessTube Analyzer.exe" "path\to\video.mp4" --move-labels --multi-pv 3 --pgn
 ```
 
 Multiple videos can be passed as a semicolon-separated list:
@@ -173,7 +171,7 @@ ChessTubeAnalyzer/
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
-9. **Output:** PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg, embeds optional move subtitles, preserves source audio/subtitle/attachment streams where possible, and falls back to CPU encoding if a hardware encoder fails.
+9. **Output:** PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
 
 ## Testing
 
@@ -181,7 +179,7 @@ ChessTubeAnalyzer/
 python tests\run_tests.py
 ```
 
-The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. The short-game integration test derives its expected UCI moves from the sample PGN, so it no longer depends on a separate generated JSON golden file. You can still run the target manually with CMake when you need lower-level control.
+The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. You can still run the target manually with CMake when you need lower-level control.
 
 ## Performance Snapshot
 

@@ -104,8 +104,6 @@ The system is designed for **high accuracy** rather than speed — it treats the
 |----|-------------|
 | OF-1 | Output must primarily be a PGN file named after the video (`<video_basename>.pgn`). |
 | OF-2 | The PGN must contain the extracted moves, clock times via `[%clk ...]` tags, and optionally Stockfish engine analysis variations and evaluations bounded by configured depth, time, or node limits. The intermediate JSON representation is no longer required to be written to disk. |
-| OF-3 | When move subtitles are enabled, the system must write an SRT file named after the selected output basename. Subtitle cue text must use SAN notation with move numbers, and cue timing must come from verified move timestamps. |
-| OF-4 | When delete-original cleanup is enabled, the source video must only be removed after the queue item completes successfully. |
 
 ---
 
@@ -123,7 +121,6 @@ The system is designed for **high accuracy** rather than speed — it treats the
 | NF-8 | CPU scoring must remain the precision reference path. Optional GPU acceleration may assist with video decoding, but move scoring must preserve deterministic CPU-side validation behavior (NPP `absdiff` is currently disabled). |
 | NF-9 | The system must compile with vcpkg-managed dependencies: OpenCV, nlohmann_json, CLI11. |
 | NF-10 | A comprehensive test suite using Google Test must be maintained, with integration tests printing a summary table after each run. |
-| NF-11 | Stockfish executable validation must happen before extraction when engine analysis is enabled, and missing engines must produce an actionable settings error. Analysis-video generation alone must not require Stockfish. |
 
 ---
 

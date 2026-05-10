@@ -67,7 +67,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
     if (!cap.isOpened()) { map_failed_ = true; std::lock_guard<std::mutex> lock(results_mutex_); results_cv_.notify_all(); return; }
 
     auto round_t = [](double val) { return std::round(val * 100.0) / 100.0; };
-    constexpr double fine_step = 0.2, quiet_coarse_step = 1.0, quiet_before_coarse_scan = 2.0;
+    constexpr double fine_step = 0.1, quiet_coarse_step = 1.0, quiet_before_coarse_scan = 2.0;
 
     while (true) {
         int chunk_idx = next_chunk_to_map_.fetch_add(1);
@@ -113,6 +113,8 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
         };
 
         cv::Mat frame, prev_gray, board_gray, motion_diff, thresh;
+        cv::Mat prev_frame, prev_board_bgr_view;
+        double prev_local_t = 0.0, last_emit_t = 0.0;
         bool emitted_initial = false, has_pending_motion = false;
         double quiet_seconds = 0.0;
         
@@ -122,15 +124,51 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
             cv::cvtColor(board_bgr_view, board_gray, cv::COLOR_BGR2GRAY);
 
             bool has_motion = true;
+            bool motion_spike = false;
             if (!prev_gray.empty()) {
                 cv::absdiff(board_gray, prev_gray, motion_diff); cv::threshold(motion_diff, thresh, 25.0, 255, cv::THRESH_BINARY);
-                if (cv::countNonZero(thresh) < static_cast<int>(board_gray.total() * 0.005)) has_motion = false;
+                int changed_pixels = cv::countNonZero(thresh);
+                if (changed_pixels < static_cast<int>(board_gray.total() * 0.005)) {
+                    has_motion = false;
+                } else if (changed_pixels > static_cast<int>(board_gray.total() * 0.045)) {
+                    // A >4.5% instant shift is massive (highlights fading/appearing equals 4 squares or 6.25%).
+                    // This is a UI snap/premove, not a smooth sliding piece.
+                    motion_spike = true;
+                }
             }
-            board_gray.copyTo(prev_gray);
 
-            if (!emitted_initial) { emit_candidate(local_t, frame, board_bgr_view, board_gray); emitted_initial = true; }
-            else if (has_motion) has_pending_motion = true;
-            else if (has_pending_motion) { emit_candidate(local_t, frame, board_bgr_view, board_gray); has_pending_motion = false; }
+            if (!emitted_initial) { 
+                emit_candidate(local_t, frame, board_bgr_view, board_gray); 
+                emitted_initial = true; 
+                last_emit_t = local_t;
+            }
+            else if (motion_spike && has_pending_motion && prev_local_t > 0.0) {
+                // Back-to-back bullet moves detected. Instantly emit the frame from *before* the spike 
+                // so the reducer has a chance to see the settled state of the first move!
+                if (prev_local_t > last_emit_t + 0.02) {
+                    emit_candidate(prev_local_t, prev_frame, prev_board_bgr_view, prev_gray);
+                    last_emit_t = prev_local_t;
+                }
+                has_pending_motion = true;
+            }
+            else if (has_motion) { 
+                has_pending_motion = true; 
+                // Cap burst durations to 0.3s so slow drags don't hide mid-animation states indefinitely.
+                if (local_t - last_emit_t > 0.3) {
+                    emit_candidate(local_t, frame, board_bgr_view, board_gray);
+                    last_emit_t = local_t;
+                }
+            }
+            else if (has_pending_motion) { 
+                emit_candidate(local_t, frame, board_bgr_view, board_gray); 
+                has_pending_motion = false; 
+                last_emit_t = local_t;
+            }
+
+            board_gray.copyTo(prev_gray);
+            frame.copyTo(prev_frame);
+            board_bgr_view.copyTo(prev_board_bgr_view);
+            prev_local_t = local_t;
 
             double scan_step = (quiet_seconds >= quiet_before_coarse_scan && !has_pending_motion) ? quiet_coarse_step : fine_step;
             int frame_skip = std::max(0, static_cast<int>(std::round(v_fps * scan_step)) - 1);

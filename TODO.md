@@ -1,7 +1,7 @@
 # TODO & Roadmap
 
 ## Remaining to v1.0.0
-- [ ] **Extraction Performance Push** - Use the recent agadmator trace as the benchmark case and make the reducer faster before adding more features.
+- [x] **Extraction Performance Push** - Use the recent agadmator trace as the benchmark case and make the reducer faster before adding more features.
   - [x] Add a second-stage hash gate before full-image revert verification so most historical plies never run board-wide `absdiff`.
   - [x] Make map-reduce waits cancellation-aware in short intervals so Cancel does not wait behind chunk lookahead or next-chunk settle waits.
   - [x] Add lightweight per-stage timing counters for map candidates, reducer candidates, revert checks, clock OCR, and move scoring.
@@ -9,7 +9,7 @@
   - [x] Add adaptive scan cadence: coarse scan through long no-motion stretches, then temporarily drop to 0.1-0.2s around motion/yellow-highlight windows.
   - [x] Avoid cloning full board/color ROIs for mapper candidates until reducer confidence passes the cheap gray diff stage.
   - [x] Add a rolling candidate coalescer so animation frames that describe the same visual move produce one reducer candidate instead of several.
-  - [ ] Benchmark chunk size and lookahead defaults against HDD, SSD, and network-drive videos; expose advanced overrides if one default cannot fit all.
+  - [x] Benchmark chunk size and lookahead defaults against HDD, SSD, and network-drive videos; expose advanced overrides if one default cannot fit all.
 - [ ] **Multi-Game Video Support** - Architecture now detects FEN resets to prevent history revert collisions. Extraction must still be updated to output `std::vector<GameData>` and PGN/Video generation to support multiple game trees.
 - [ ] **GPU-Disabled Build Test** - Ensure the project builds and runs with no CUDA/NPP installed or with `ENABLE_SYSTEM_CUDA=OFF`.
 - [ ] **CUDA-Present Build Test** - Ensure CUDA/NPP headers and libraries compile without relying on unavailable NPP symbols.
@@ -33,13 +33,6 @@
 | UI Tooltips | ✅ All elements have hover hints |
 | Overlay Templates | ✅ Built-in + custom templates with queue-level selection |
 
-Additional completed status:
-
-| Component | Status |
-|-----------|--------|
-| Move Subtitles | Implemented optional synced SRT export |
-| Source Cleanup | Implemented optional delete-original-after-success setting |
-
 ## Completed Milestones
 
 ### Application & UI Features
@@ -50,9 +43,7 @@ Additional completed status:
 - **WYSIWYG Overlay Editor** — Interactive drag-and-drop `QGraphicsView` canvas with 8-way sizing handles.
 - **Channel-Specific Overlay Templates** — Auto-selection via filename keywords, storing templates in `%APPDATA%`.
 - **Analysis Video Agent** — Advanced overlay rendering, dynamic engine evaluation arrows, and FFmpeg video compositing.
-- **Feature Toggles & Settings** - Controls for output directory, theming (Light/Dark/System), PGN export, Stockfish analysis (MultiPV, limits), CPU threads, and memory limits.
-- **Move Subtitle Export** - Optional SRT generation with SAN move text synchronized to verified move timestamps.
-- **Source Video Cleanup** - Optional setting to delete source videos after successful queue-item completion.
+- **Feature Toggles & Settings** — Controls for output directory, theming (Light/Dark/System), PGN export, Stockfish analysis (MultiPV, limits), CPU threads, and memory limits.
 - **Fast Preview Mode** — Added a strict time and depth cap toggle for extremely rapid processing when deep analysis isn't required.
 - **CLI Mode / Headless Execution** — Allow users to process videos directly from the command line with persistent settings.
 - **NSIS Installer Architecture** — Centralize configuration to `%APPDATA%` and generated outputs to `Documents`.
@@ -102,7 +93,7 @@ Additional completed status:
 "ChessTube Analyzer.exe" path/to/video.mp4
 
 # Full control with CLI flags
-"ChessTube Analyzer.exe" video.mp4 --stockfish --multi-pv 3 --threads 8 --pgn --time 1000 --nodes 500000
+"ChessTube Analyzer.exe" video.mp4 --move-labels --multi-pv 3 --threads 8 --pgn --time 1000 --nodes 500000
 
 # Show version
 "ChessTube Analyzer.exe" --version

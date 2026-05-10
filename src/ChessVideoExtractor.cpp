@@ -330,7 +330,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // ── Profiling counters ────────────────────────────────────────────────
     int frame_count = 0;
 
-    constexpr double fine_step = 0.2;
+    constexpr double fine_step = 0.1;
     constexpr double quiet_coarse_step = 1.0;
     constexpr double quiet_before_coarse_scan = 2.0;
     double t = 0.0;
@@ -415,7 +415,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     long long clock_activity_us = 0;
     long long clock_ocr_us = 0;
     bool exhaustive_revert_fallback = read_env_int("CTA_REVERT_EXHAUSTIVE_FALLBACK", 0) > 0;
-    bool trace_rejects = read_env_int("CTA_TRACE_REJECTS", 0) > 0;
     int revert_generation = 0;
 
     // Static block allocation prevents workers from hopping around the video and
@@ -491,9 +490,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         }
 
         if (max_sd < 15.0) {
-            if (trace_rejects) {
-                log_info("    " + utils::ts(elapsed()) + " [Trace] " + std::to_string(t) + "s rejected (max square diff too low: " + std::to_string(std::round(max_sd)) + ")");
-            }
             continue;
         }
 
@@ -556,9 +552,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         ++score_calls;
         score_us += std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - score_start).count();
-        if (trace_rejects && !(best.score > 25.0 && best.from_sq >= 0)) {
-            log_info("    " + utils::ts(elapsed()) + " [Trace] " + std::to_string(t) + "s rejected (no scored legal move, best=" + std::to_string(std::round(best.score)) + ")");
-        }
         if (best.score > 25.0 && best.from_sq >= 0) {
             const char* from_name = utils::sq_name(best.from_sq);
             const char* to_name = utils::sq_name(best.to_sq);
@@ -670,9 +663,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             if (!move_valid) {
-                if (trace_rejects) {
-                    log_info("    " + utils::ts(elapsed()) + " [Trace] " + std::to_string(t) + "s: " + move_uci + " rejected (illegal in current position)");
-                }
                 continue;
             }
 
@@ -682,30 +672,19 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             
             // Elastic threshold: allow one square to dip to 25.0 if the other is strong, requiring a combined score of 70.0
             if (y_from < 25.0 || y_to < 25.0 || (y_from + y_to) < 70.0) {
-                if (debug_level_ != DebugLevel::None || trace_rejects) {
+                if (debug_level_ != DebugLevel::None) {
                     log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Missing yellow highlights: from=" + std::to_string(std::round(y_from)) + ", to=" + std::to_string(std::round(y_to)) + ")");
                 }
                 continue;
             }
 
             // ── Validation 2: Hover box rejection ────────────────────────────
-            const bool visually_decisive =
-                best.score >= 70.0 &&
-                y_from >= 35.0 &&
-                y_to >= 35.0 &&
-                (y_from + y_to) >= 90.0;
-
             if (!scratch_) scratch_ = std::make_unique<ScratchBuffers>();
             if (validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name)) {
-                if (!visually_decisive) {
-                    if (debug_level_ != DebugLevel::None || trace_rejects) {
-                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
-                    }
-                    continue;
+                if (debug_level_ != DebugLevel::None) {
+                    log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
                 }
-                if (debug_level_ != DebugLevel::None || trace_rejects) {
-                    log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " accepted despite hover box (strong visual evidence)");
-                }
+                continue;
             }
 
             // ── Validation 3: Clock turn check ───────────────────────────────
@@ -722,14 +701,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             if (!active_clock_player.empty()) {
                 std::string expected = (pos_ptr_->turn() == libchess::Side::White) ? "black" : "white";
                 if (active_clock_player != expected) {
-                    if (!visually_decisive) {
-                        if (debug_level_ != DebugLevel::None || trace_rejects)
-                            log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Waiting for clock to flip)");
-                        continue;
-                    }
-                    if (debug_level_ != DebugLevel::None || trace_rejects) {
-                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " accepted before clock flip (strong visual evidence)");
-                    }
+                    if (debug_level_ != DebugLevel::None)
+                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Waiting for clock to flip)");
+                    continue;
                 }
             }
 
