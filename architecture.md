@@ -100,9 +100,11 @@ When the board visually diverges from the engine state (e.g., the streamer undoe
 
 The primary output is a PGN file that contains the extracted moves, clock times, and optional Stockfish analysis. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the PGN writer.
 
+When enabled, `VideoProcessorWorker` also writes a synced SRT subtitle file beside the configured output path. Subtitle cues are generated from verified move timestamps and converted from UCI to SAN with move numbers, so players and video editors can enable a lightweight move track without rendering a full analysis overlay.
+
 During extraction, verified video FENs can also be passed to `OpeningFetcher`, which performs a background Lichess Explorer lookup on Windows through WinHTTP. Responses are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`; lookup stops once the game reaches a likely unique position, so common opening names can be added without blocking the visual reducer.
 
-The PGN is saved alongside the source video or in a user-defined custom directory.
+The PGN is saved alongside the source video or in a user-defined custom directory. A GUI cleanup option can delete the source video after a queue item finishes successfully; failed and cancelled items keep the original file.
 
 ## 6. Overlay Templates & Layout Model
 
@@ -114,7 +116,7 @@ Analysis-video layout is driven by a template-backed configuration model rather 
 - **Template Persistence:** `TemplateManager` copies bundled template JSON files into `%APPDATA%\ChessTubeAnalyzer\templates` on first run, then loads and saves user edits from there.
 - **Auto-Detection:** When a video is added to the queue, the filename is matched against each template's exact name, falling back to its keyword list. If nothing matches, the built-in `generic` template is used.
 - **Per-Queue Overrides:** Each queue entry carries its own selected template and a serialized snapshot of that template's layout config, so mixed-channel batches can use different overlay layouts in one run even if templates are edited later.
-- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually. Elements feature 8-way sizing handles (corners and edges) for precise proportional or independent axis scaling, and the dialog exposes visibility toggles for board, eval bar, PV text, opening text, plus engine-arrow routing controls.
+- **Editor Workflow:** `OverlayEditorDialog` uses a reference screenshot as the background canvas and draggable/resizable mock overlays to edit positions visually. Its board preview prefers the bundled board asset and falls back to a generated checkerboard if the asset is unavailable. Elements feature 8-way sizing handles (corners and edges) for precise proportional or independent axis scaling, and the dialog exposes visibility toggles for board, eval bar, PV text, opening text, plus engine-arrow routing controls.
 
 ## 7. Overlay Augmentation
 

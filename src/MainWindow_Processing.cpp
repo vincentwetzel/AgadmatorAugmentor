@@ -12,6 +12,8 @@
 #include <QFileInfo>
 #include <QPushButton>
 #include <QStringList>
+#include <QSettings>
+#include <QFile>
 
 #ifdef _WIN32
 #include <stdlib.h>
@@ -196,6 +198,18 @@ void MainWindow::processingFinished() {
         appendLog("Processing finished successfully for: " + finishedVideo);
         setItemProgress(finishedItem, 100);
         setItemStatus(finishedItem, QueueItemStatus::Completed);
+
+        QSettings settings;
+        if (settings.value("removeOriginalVideo", false).toBool()) {
+            QFile videoFile(finishedVideo);
+            if (videoFile.exists()) {
+                if (videoFile.remove()) {
+                    appendLog("Deleted original video: " + finishedVideo);
+                } else {
+                    appendLog("Warning: Failed to delete original video: " + finishedVideo);
+                }
+            }
+        }
     }
 
     if (hasQueuedItems()) {

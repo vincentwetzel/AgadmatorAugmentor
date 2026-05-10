@@ -18,10 +18,11 @@ Advanced extraction tuning is available through environment variables for benchm
 - **Clock Recognition:** Hu Moments digit OCR with no Tesseract dependency.
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
 - **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
+- **Move Subtitles:** Optionally generate a synced `.srt` subtitle file with SAN move text at each detected video timestamp.
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
 - **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos.
 - **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, and engine arrows into an annotated MP4.
-- **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
+- **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, a resizable queue/log split view, optional source-video cleanup, and a screenshot-based overlay template editor.
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
 
@@ -171,7 +172,7 @@ ChessTubeAnalyzer/
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
-9. **Output:** PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
+9. **Output:** PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Optional synced SRT subtitles can be written next to the selected output file. Analysis video generation composites static overlays through FFmpeg.
 
 ## Testing
 

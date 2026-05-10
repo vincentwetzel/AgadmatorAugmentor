@@ -15,12 +15,16 @@
 #include <fstream>
 #include <QDir>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <algorithm>
 #include <map>
 #include <sstream>
+#include <iomanip>
 #include <cstdlib>
 #include <vector>
 #include <cmath>
+#include <thread>
+#include <chrono>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -54,7 +58,7 @@ namespace { // Anonymous namespace for helper function
         char target_piece = board[to_sq];
         bool is_pawn = (piece == 'P' || piece == 'p');
         bool is_capture = (target_piece != ' ') || (is_pawn && (from_sq % 8) != (to_sq % 8) && target_piece == ' ');
-        
+
         if (move.type() == libchess::MoveType::ksc) return "O-O";
         if (move.type() == libchess::MoveType::qsc) return "O-O-O";
         if ((piece == 'K' || piece == 'k') && std::abs((from_sq % 8) - (to_sq % 8)) == 2) {
@@ -125,6 +129,39 @@ namespace { // Anonymous namespace for helper function
         return clockStr; // Already in h:mm:ss format
     }
 
+    std::string format_srt_timestamp(double seconds) {
+        if (seconds < 0.0) {
+            seconds = 0.0;
+        }
+
+        const long long total_ms = static_cast<long long>(std::llround(seconds * 1000.0));
+        const long long ms = total_ms % 1000;
+        const long long total_seconds = total_ms / 1000;
+        const long long s = total_seconds % 60;
+        const long long total_minutes = total_seconds / 60;
+        const long long m = total_minutes % 60;
+        const long long h = total_minutes / 60;
+
+        std::ostringstream out;
+        out << std::setfill('0')
+            << std::setw(2) << h << ":"
+            << std::setw(2) << m << ":"
+            << std::setw(2) << s << ","
+            << std::setw(3) << ms;
+        return out.str();
+    }
+
+    std::string move_to_subtitle_text(size_t ply_index, const std::string& san_move) {
+        std::ostringstream out;
+        const size_t move_number = (ply_index / 2) + 1;
+        if (ply_index % 2 == 0) {
+            out << move_number << ". " << san_move;
+        } else {
+            out << move_number << "... " << san_move;
+        }
+        return out.str();
+    }
+
     bool is_ffmpeg_available() {
 #ifdef _WIN32
         STARTUPINFOA si;
@@ -182,6 +219,44 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
         }
 
+        if (settings.enableStockfish) {
+            emit logMessage("Verifying Stockfish installation...");
+            QString sfPath = settings.stockfishPath;
+            bool sfFound = false;
+
+            if (!sfPath.isEmpty()) {
+                if (QFileInfo(sfPath).isExecutable()) {
+                    sfFound = true;
+                } else if (!QStandardPaths::findExecutable(sfPath).isEmpty()) {
+                    sfFound = true;
+                }
+            } else {
+                QString execName = "stockfish";
+#ifdef _WIN32
+                execName = "stockfish.exe";
+#endif
+                QStringList pathsToCheck = {
+                    "stockfish/" + execName,
+                    "../stockfish/" + execName,
+                    "../../stockfish/" + execName
+                };
+                for (const QString& p : pathsToCheck) {
+                    if (QFileInfo(p).isExecutable()) {
+                        sfFound = true;
+                        break;
+                    }
+                }
+
+                if (!sfFound && !QStandardPaths::findExecutable(execName).isEmpty()) {
+                    sfFound = true;
+                }
+            }
+
+            if (!sfFound) {
+                throw std::runtime_error("Stockfish executable is required but was not found. Please specify its location in Settings -> Stockfish -> Stockfish location.");
+            }
+        }
+
         emit logMessage("Initializing extractor for: " + settings.videoPath);
 
         ChessVideoExtractor extractor(
@@ -226,7 +301,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         std::vector<StockfishResult> videoStockfishResults;
         std::map<std::string, StockfishResult> fenAnalysisCache;
 
-        if ((settings.enableStockfish || settings.generateAnalysisVideo) && !gameData.fens.empty()) {
+        if (settings.enableStockfish && !gameData.fens.empty()) {
             // 1. Gather all unique FENs from the video timeline
             std::vector<std::string> unique_fens;
             for (const auto& fen : gameData.video_fens) {
@@ -295,7 +370,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         double white_acpl = -1.0;
         double black_acpl = -1.0;
 
-        if (enableMoveAnnotations && (settings.enableStockfish || settings.generateAnalysisVideo)) {
+        if (enableMoveAnnotations && settings.enableStockfish) {
             emit logMessage("Generating move quality annotations...");
             
             auto calculate_material = [](const std::string& fen) {
@@ -500,7 +575,53 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         }
 
         emit logMessage("Waiting for background Lichess opening data to finish...");
+
+        std::atomic<bool> fetcher_done{false};
+        std::thread monitor_thread([this, &fetcher_done, cancelFlag, &opening_fetcher, &gameData]() {
+            int elapsed_ms = 0;
+            size_t fen_idx = 0;
+            int last_reported_s = 0;
+
+            while (!fetcher_done) {
+                // Sleep in small increments to respond quickly to fetcher_done or cancellation
+                for (int i = 0; i < 5 && !fetcher_done; ++i) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    elapsed_ms += 100;
+                    if (cancelFlag && *cancelFlag) break;
+                }
+                if (fetcher_done || (cancelFlag && *cancelFlag)) break;
+
+                // Look for newly completed queries in the OpeningFetcher cache
+                while (fen_idx < gameData.video_fens.size()) {
+                    LichessOpening info = opening_fetcher.get_opening(gameData.video_fens[fen_idx]);
+                    if (info.total_games == -1) break; // Not fetched yet
+
+                    QString move_str = (fen_idx < gameData.video_moves.size()) ? QString::fromStdString(gameData.video_moves[fen_idx]) : QString("FEN %1").arg(fen_idx);
+
+                    if (info.api_success || info.total_games > 0) {
+                        emit logMessage(QString("Lichess checked %1 -> %2 hits").arg(move_str).arg(info.total_games));
+                    } else {
+                        emit logMessage(QString("Lichess checked %1 -> API request failed").arg(move_str));
+                    }
+
+                    fen_idx++;
+                    if (info.total_games <= 1 && info.api_success) break; // Unique game reached, fetcher stopped
+                }
+
+                int elapsed_s = elapsed_ms / 1000;
+                if (elapsed_s >= last_reported_s + 5) {
+                    QString waiting_on = (fen_idx < gameData.video_moves.size()) ? QString::fromStdString(gameData.video_moves[fen_idx]) : "completion";
+                    emit logMessage(QString("Still fetching Lichess opening data... (%1s elapsed, waiting on %2)").arg(elapsed_s).arg(waiting_on));
+                    last_reported_s = elapsed_s;
+                }
+            }
+        });
+
         opening_fetcher.wait_until_done();
+        fetcher_done = true;
+        if (monitor_thread.joinable()) {
+            monitor_thread.join();
+        }
         
         std::string final_eco;
         std::string final_opening_name;
@@ -628,6 +749,50 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 emit error(QString("Failed to save PGN to: %1").arg(outPath));
                 return;
             }
+        }
+
+        if (settings.generateSubtitles) {
+            emit logMessage("Generating synced move subtitles...");
+
+            QFileInfo outInfo(settings.outputPath);
+            const QString subtitlePath = outInfo.absoluteDir().filePath(outInfo.completeBaseName() + ".srt");
+            QDir().mkpath(outInfo.absolutePath());
+
+            std::ofstream srtFile(subtitlePath.toStdString());
+            if (!srtFile.is_open()) {
+                emit error(QString("Failed to save subtitles to: %1").arg(subtitlePath));
+                return;
+            }
+
+            libchess::Position subtitlePos;
+            const size_t cueCount = std::min(gameData.moves.size(), gameData.timestamps.size());
+            for (size_t i = 0; i < cueCount; ++i) {
+                const std::string& uci = gameData.moves[i];
+                std::string san = uci;
+
+                try {
+                    libchess::Move move = subtitlePos.parse_move(uci);
+                    san = build_san(subtitlePos, move, uci);
+                    subtitlePos.makemove(move);
+                } catch (const std::exception& e) {
+                    emit logMessage(QString("Warning: subtitle notation fallback for %1: %2")
+                                        .arg(QString::fromStdString(uci))
+                                        .arg(e.what()));
+                }
+
+                const double start = gameData.timestamps[i];
+                double end = start + 2.5;
+                if (i + 1 < gameData.timestamps.size()) {
+                    end = std::max(start + 0.75, gameData.timestamps[i + 1]);
+                }
+
+                srtFile << (i + 1) << "\n"
+                        << format_srt_timestamp(start) << " --> " << format_srt_timestamp(end) << "\n"
+                        << move_to_subtitle_text(i, san) << "\n\n";
+            }
+
+            srtFile.close();
+            emit logMessage("Saved synced move subtitles to: " + subtitlePath);
         }
 
         // Step 4: Optional Analysis Video Generation

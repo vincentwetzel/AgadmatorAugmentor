@@ -18,6 +18,9 @@
 #include <QResizeEvent>
 #include <QSettings>
 #include <QStringList>
+#include <QCoreApplication>
+#include <QFileInfo>
+#include <QDir>
 
 namespace cta {
 
@@ -485,13 +488,20 @@ void OverlayEditorDialog::setupUi() {
 
 void OverlayEditorDialog::setupOverlays() {
     // Generate mock visual representations for the overlays
-    QPixmap boardMock(600, 600);
-    boardMock.fill(Qt::white);
-    QPainter bp(&boardMock);
-    bp.setBrush(QColor("#779556"));
-    bp.setPen(Qt::NoPen);
-    for(int r=0; r<8; ++r) { for(int c=0; c<8; ++c) { if((r+c)%2) bp.drawRect(c*75, r*75, 75, 75); } }
-    bp.end();
+    QString assetPath = "assets/board/board.png";
+    if (!QFileInfo::exists(assetPath)) {
+        assetPath = QDir(QCoreApplication::applicationDirPath()).filePath("../../assets/board/board.png");
+    }
+    QPixmap boardMock(assetPath);
+    if (boardMock.isNull()) {
+        boardMock = QPixmap(1080, 1080);
+        boardMock.fill(Qt::white);
+        QPainter bp(&boardMock);
+        bp.setBrush(QColor("#779556"));
+        bp.setPen(Qt::NoPen);
+        for(int r=0; r<8; ++r) { for(int c=0; c<8; ++c) { if((r+c)%2) bp.drawRect(c*(1080/8), r*(1080/8), 1080/8, 1080/8); } }
+        bp.end();
+    }
 
     QPixmap evalMock(40, 600);
     evalMock.fill(Qt::black);

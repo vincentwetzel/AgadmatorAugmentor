@@ -44,6 +44,8 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Browse or drag-and-drop one or more videos into the queue.
 - Select an output directory.
 - Toggle PGN, Stockfish analysis, move quality annotations, and analysis video generation.
+- Toggle synced move subtitles, which write an `.srt` file with SAN move text at each detected video timestamp.
+- Enable optional cleanup that deletes the original source video after that queue item completes successfully.
 - Configure Stockfish MultiPV, analysis strength, time cap, node cap, and variation-length presets.
 - Enable Fast Preview mode for rapid processing with bounded engine limits.
 - Automatically find or manually specify the Stockfish executable.
@@ -55,7 +57,7 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 
 The queue stores the selected template configuration with each item right before processing begins. That lets mixed-channel batches keep each video's intended board, eval bar, PV text, opening text, and arrow placement.
 
-Processing logs include elapsed-time prefixes, which makes it easier to compare extraction, Stockfish, and FFmpeg composition phases across runs. If FFmpeg composition fails, the failure message includes the captured tail of FFmpeg output when available.
+Processing logs include elapsed-time prefixes, which makes it easier to compare extraction, Stockfish, Lichess opening lookup, and FFmpeg composition phases across runs. If FFmpeg composition fails, the failure message includes the captured tail of FFmpeg output when available.
 
 ## Headless Mode
 
@@ -78,7 +80,11 @@ Override saved settings with command-line flags:
 
 The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves and clock times. If Stockfish analysis is enabled, it also includes engine variations, evaluations, move-quality annotations, estimated Elo/ACPL/accuracy headers, and any ECO/opening metadata found through the cached Lichess Explorer lookup.
 
+If move subtitles are enabled, the analyzer also writes `<video_name>.srt` in the selected output directory. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next move or a short default duration.
+
 If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Opening-name overlays are optional and only display when opening metadata is available.
+
+Stockfish is required only when PGN engine analysis is enabled. In that mode the worker validates the configured executable path, nearby bundled `stockfish` folders, and `PATH` before extraction begins so missing engine installs fail early with a settings-focused error.
 
 ## Advanced Extraction Tuning
 

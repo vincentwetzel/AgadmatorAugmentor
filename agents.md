@@ -49,7 +49,7 @@ Acts as the game logic authority and state machine filter.
 
 ### Output
 
-Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN and Analysis Video). The intermediate JSON file is no longer written to disk.
+Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN, optional SRT subtitles, and Analysis Video). The intermediate JSON file is no longer written to disk.
 
 ## 3. The Commentary Agent — 🔜 Future
 
@@ -84,6 +84,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Handles edge cases (checkmate, stalemate) gracefully.
 - Generates **move quality annotations** (e.g., `!!`, `?`, `(Book)`) by comparing played moves against engine best lines and calculating centipawn loss.
 - Outputs engine analysis directly into the generated PGN file as standard chess variations and inline evaluations.
+- Is required only when PGN engine analysis is enabled; analysis-video generation can run without forcing Stockfish analysis.
 
 ## 5. The Opening Metadata Agent — ✅ Implemented
 

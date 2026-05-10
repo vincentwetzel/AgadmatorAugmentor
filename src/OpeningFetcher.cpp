@@ -74,7 +74,9 @@ LichessOpening OpeningFetcher::get_opening(const std::string& fen) {
     if (it != cache_.end()) {
         return it->second;
     }
-    return {};
+    LichessOpening missing;
+    missing.total_games = -1; // Use -1 to distinguish "not in cache" from "fetched but failed"
+    return missing;
 }
 
 void OpeningFetcher::wait_until_done() {

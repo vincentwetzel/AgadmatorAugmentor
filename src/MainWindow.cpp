@@ -91,9 +91,14 @@ const char* MainWindow::SETTINGS_ORG = "ChessTubeAnalyzer";
 const char* MainWindow::SETTINGS_APP = "settings";
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+    QCoreApplication::setOrganizationName(SETTINGS_ORG);
+    QCoreApplication::setApplicationName(SETTINGS_ORG);
+
     setWindowTitle("ChessTube Analyzer");
     resize(800, 600);
     logTimer_.start();
+
+    TemplateManager::instance().initialize();
 
     setupUi();
     setupWorker();

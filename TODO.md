@@ -33,6 +33,13 @@
 | UI Tooltips | ✅ All elements have hover hints |
 | Overlay Templates | ✅ Built-in + custom templates with queue-level selection |
 
+Additional completed status:
+
+| Component | Status |
+|-----------|--------|
+| Move Subtitles | Implemented optional synced SRT export |
+| Source Cleanup | Implemented optional delete-original-after-success setting |
+
 ## Completed Milestones
 
 ### Application & UI Features
@@ -43,7 +50,9 @@
 - **WYSIWYG Overlay Editor** — Interactive drag-and-drop `QGraphicsView` canvas with 8-way sizing handles.
 - **Channel-Specific Overlay Templates** — Auto-selection via filename keywords, storing templates in `%APPDATA%`.
 - **Analysis Video Agent** — Advanced overlay rendering, dynamic engine evaluation arrows, and FFmpeg video compositing.
-- **Feature Toggles & Settings** — Controls for output directory, theming (Light/Dark/System), PGN export, Stockfish analysis (MultiPV, limits), CPU threads, and memory limits.
+- **Feature Toggles & Settings** - Controls for output directory, theming (Light/Dark/System), PGN export, Stockfish analysis (MultiPV, limits), CPU threads, and memory limits.
+- **Move Subtitle Export** - Optional SRT generation with SAN move text synchronized to verified move timestamps.
+- **Source Video Cleanup** - Optional setting to delete source videos after successful queue-item completion.
 - **Fast Preview Mode** — Added a strict time and depth cap toggle for extremely rapid processing when deep analysis isn't required.
 - **CLI Mode / Headless Execution** — Allow users to process videos directly from the command line with persistent settings.
 - **NSIS Installer Architecture** — Centralize configuration to `%APPDATA%` and generated outputs to `Documents`.

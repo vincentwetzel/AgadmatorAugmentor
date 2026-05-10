@@ -143,18 +143,18 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
     bool drawBook = false;
     bool drawThumbsUp = false;
     
-    if (clean_sym == "!!") bgColor = cv::Scalar(80, 175, 75);      // Green (OpenCV uses BGR)
-    else if (clean_sym == "!") bgColor = cv::Scalar(215, 130, 40); // Blue
-    else if (clean_sym == "*") { bgColor = cv::Scalar(80, 175, 75); drawStar = true; } // Green Star
-    else if (clean_sym == "(Good)") { bgColor = cv::Scalar(80, 175, 75); drawThumbsUp = true; } // Green Thumbs Up
-    else if (clean_sym == "?") bgColor = cv::Scalar(50, 200, 240); // Yellow
-    else if (clean_sym == "X") bgColor = cv::Scalar(100, 100, 255); // Light red
-    else if (clean_sym == "??") bgColor = cv::Scalar(40, 40, 200);  // Darker red
-    else if (clean_sym == "(Book)") { bgColor = cv::Scalar(150, 180, 200); drawBook = true; } // Tan Book
+    if (clean_sym == "!!") bgColor = cv::Scalar(80, 175, 75, 255);      // Green (OpenCV uses BGR)
+    else if (clean_sym == "!") bgColor = cv::Scalar(215, 130, 40, 255); // Blue
+    else if (clean_sym == "*") { bgColor = cv::Scalar(80, 175, 75, 255); drawStar = true; } // Green Star
+    else if (clean_sym == "(Good)") { bgColor = cv::Scalar(80, 175, 75, 255); drawThumbsUp = true; } // Green Thumbs Up
+    else if (clean_sym == "?") bgColor = cv::Scalar(50, 200, 240, 255); // Yellow
+    else if (clean_sym == "X") bgColor = cv::Scalar(100, 100, 255, 255); // Light red
+    else if (clean_sym == "??") bgColor = cv::Scalar(40, 40, 200, 255);  // Darker red
+    else if (clean_sym == "(Book)") { bgColor = cv::Scalar(150, 180, 200, 255); drawBook = true; } // Tan Book
     else return; 
 
     cv::circle(img, cv::Point(ax, ay), radius, bgColor, cv::FILLED, cv::LINE_AA);
-    cv::circle(img, cv::Point(ax, ay), radius, cv::Scalar(20, 20, 20), 1, cv::LINE_AA); // Dark outline
+    cv::circle(img, cv::Point(ax, ay), radius, cv::Scalar(20, 20, 20, 255), 1, cv::LINE_AA); // Dark outline
 
     if (drawStar) {
         std::vector<cv::Point> star_pts;
@@ -165,7 +165,7 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
             double r = (i % 2 == 0) ? out_r : in_r;
             star_pts.push_back(cv::Point(static_cast<int>(ax + r * std::cos(angle)), static_cast<int>(ay + r * std::sin(angle))));
         }
-        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{star_pts}, cv::Scalar(255, 255, 255), cv::LINE_AA);
+        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{star_pts}, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
     } else if (drawBook) {
         std::vector<cv::Point> left_page = {
             cv::Point(ax - radius*0.5, ay - radius*0.25),
@@ -179,8 +179,8 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
             cv::Point(ax + radius*0.05, ay + radius*0.4),
             cv::Point(ax + radius*0.5, ay + radius*0.25)
         };
-        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{left_page, right_page}, cv::Scalar(255, 255, 255), cv::LINE_AA);
-        cv::line(img, cv::Point(ax, ay - radius*0.1), cv::Point(ax, ay + radius*0.4), cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
+        cv::fillPoly(img, std::vector<std::vector<cv::Point>>{left_page, right_page}, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
+        cv::line(img, cv::Point(ax, ay - radius*0.1), cv::Point(ax, ay + radius*0.4), cv::Scalar(200, 200, 200, 255), 1, cv::LINE_AA);
     } else if (drawThumbsUp) {
         // Rounded silhouette styled to read closer to the chess.com "Good" badge
         // at very small sizes: chunky palm, upright thumb, and soft finger bumps.
@@ -196,7 +196,7 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
             cv::Point(static_cast<int>(ax - radius * 0.28), static_cast<int>(ay + radius * 0.02)),
             cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.18))
         };
-        cv::fillConvexPoly(img, palm, cv::Scalar(255, 255, 255), cv::LINE_AA);
+        cv::fillConvexPoly(img, palm, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
 
         std::vector<cv::Point> thumb = {
             cv::Point(static_cast<int>(ax - radius * 0.24), static_cast<int>(ay - radius * 0.05)),
@@ -206,18 +206,18 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
             cv::Point(static_cast<int>(ax - radius * 0.32), static_cast<int>(ay - radius * 0.56)),
             cv::Point(static_cast<int>(ax - radius * 0.35), static_cast<int>(ay - radius * 0.18))
         };
-        cv::fillConvexPoly(img, thumb, cv::Scalar(255, 255, 255), cv::LINE_AA);
+        cv::fillConvexPoly(img, thumb, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
 
         cv::circle(img, cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.60)),
-                   std::max(1, static_cast<int>(radius * 0.11)), cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+                   std::max(1, static_cast<int>(radius * 0.11)), cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
 
         const int fingerRadius = std::max(1, static_cast<int>(radius * 0.12));
         cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.23), static_cast<int>(ay - radius * 0.14)),
-                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+                   fingerRadius, cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
         cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.16), static_cast<int>(ay + radius * 0.03)),
-                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+                   fingerRadius, cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
         cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.07), static_cast<int>(ay + radius * 0.17)),
-                   fingerRadius, cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
+                   fingerRadius, cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
 
         cv::line(img,
                  cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.02)),
@@ -236,7 +236,7 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
         cv::Size textSize = cv::getTextSize(txt, fontFace, fontScale, thickness, &baseline);
         
         cv::Point textOrg(ax - textSize.width / 2, ay + textSize.height / 2 - 1);
-        cv::putText(img, txt, textOrg, fontFace, fontScale, cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
+        cv::putText(img, txt, textOrg, fontFace, fontScale, cv::Scalar(255, 255, 255, 255), thickness, cv::LINE_AA);
     }
 }
 

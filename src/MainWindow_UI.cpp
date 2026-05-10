@@ -35,6 +35,7 @@
 #include <QStackedLayout>
 #include <QShortcut>
 #include <QKeySequence>
+#include <QSplitter>
 
 namespace {
 
@@ -104,6 +105,13 @@ void MainWindow::setupUi() {
 
     auto* rootLayout = new QVBoxLayout(centralWidget);
 
+    auto* splitter = new QSplitter(Qt::Vertical);
+    splitter->setChildrenCollapsible(false);
+
+    auto* topContainer = new QWidget();
+    auto* topLayout = new QVBoxLayout(topContainer);
+    topLayout->setContentsMargins(0, 0, 0, 0);
+
     // Top layout (Queue summary + controls)
     auto* fileLayout = new QHBoxLayout();
     browseBtn_ = new QPushButton("Add Video(s)...");
@@ -139,12 +147,12 @@ void MainWindow::setupUi() {
     settingsBtn_->setIconSize(QSize(20, 20));
     fileLayout->addWidget(settingsBtn_);
 
-    rootLayout->addLayout(fileLayout);
+    topLayout->addLayout(fileLayout);
 
     queueHelperLabel_ = new QLabel("Drag and drop video files into the queue below, or click Add Video(s). Completed and failed items stay visible here.");
     queueHelperLabel_->setWordWrap(true);
     queueHelperLabel_->setToolTip("Shows the two supported ways to add videos to the queue: drag and drop files into the queue area, or browse for them.");
-    rootLayout->addWidget(queueHelperLabel_);
+    topLayout->addWidget(queueHelperLabel_);
 
     queueList_ = new QListWidget();
     queueList_->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -166,7 +174,9 @@ void MainWindow::setupUi() {
 
     queueAreaLayout->addWidget(queueList_);
     queueAreaLayout->addWidget(queueEmptyStateLabel_);
-    rootLayout->addWidget(queueAreaWidget);
+    topLayout->addWidget(queueAreaWidget);
+
+    splitter->addWidget(topContainer);
 
     deleteSelectionShortcut_ = new QShortcut(QKeySequence::Delete, queueList_);
     deleteSelectionShortcut_->setContext(Qt::WidgetShortcut);
@@ -179,7 +189,11 @@ void MainWindow::setupUi() {
     logOutput_->setReadOnly(true);
     logOutput_->setToolTip("Processing log output showing progress and messages");
     logOutput_->setMinimumHeight(140);
-    rootLayout->addWidget(logOutput_);
+    splitter->addWidget(logOutput_);
+
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 0);
+    rootLayout->addWidget(splitter);
 
     // Start row
     auto* bottomLayout = new QHBoxLayout();

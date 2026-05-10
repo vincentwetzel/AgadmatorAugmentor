@@ -11,6 +11,7 @@ struct ProcessingSettings {
     QString boardAssetPath;
     QString assetsPath;
     bool generatePgn = true;
+    bool generateSubtitles = false;
     bool enableStockfish = false;
     bool generateAnalysisVideo = false;
     int multiPv = 3;

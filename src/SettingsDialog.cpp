@@ -171,6 +171,7 @@ void SettingsDialog::setupUi() {
         "Explains the recommended output choices."
     ));
     togglesLayout->addWidget(createToggleRow("Moves-only PGN", "Create a compact PGN containing the extracted legal moves.", pgnExportToggle_, true));
+    togglesLayout->addWidget(createToggleRow("Move subtitles", "Create a synced SRT subtitle file showing each move at its video timestamp.", subtitlesToggle_, false));
     togglesLayout->addWidget(createToggleRow("PGN with engine analysis", "Add Stockfish evaluations, suggested lines, and comments to the PGN.", stockfishToggle_, false));
 
     ToggleSwitch* moveAnnotationsToggle = nullptr;
@@ -180,6 +181,15 @@ void SettingsDialog::setupUi() {
 
     togglesLayout->addWidget(createToggleRow("Analysis video", "Create a new video with board, evaluation, and engine overlays.", analysisVideoToggle_, false));
     generalLayout->addWidget(togglesGroup);
+
+    auto* cleanupGroup = new QGroupBox("Cleanup");
+    cleanupGroup->setToolTip("Options for cleaning up files after processing.");
+    auto* cleanupLayout = new QVBoxLayout(cleanupGroup);
+    ToggleSwitch* removeOriginalToggle = nullptr;
+    auto* removeRow = createToggleRow("Delete original video", "Delete the source video file after successful processing.", removeOriginalToggle, false);
+    removeOriginalToggle->setObjectName("removeOriginalToggle");
+    cleanupLayout->addWidget(removeRow);
+    generalLayout->addWidget(cleanupGroup);
 
     // Theme selector
     auto* themeGroup = new QGroupBox("Appearance");
@@ -492,6 +502,10 @@ void SettingsDialog::setupUi() {
         emit logMessage(checked ? "PGN export enabled" : "PGN export disabled");
         saveSettings();
     });
+    connect(subtitlesToggle_, &ToggleSwitch::toggled, this, [this](bool checked) {
+        emit logMessage(checked ? "Move subtitles enabled" : "Move subtitles disabled");
+        saveSettings();
+    });
     connect(stockfishToggle_, &ToggleSwitch::toggled, this, [this](bool checked) {
         emit logMessage(checked ? "PGN with Stockfish analysis enabled" : "PGN with Stockfish analysis disabled");
         saveSettings();
@@ -500,6 +514,12 @@ void SettingsDialog::setupUi() {
         emit logMessage(checked ? "Analysis Video generation enabled" : "Analysis Video generation disabled");
         saveSettings(); 
     });
+    if (auto* rot = findChild<ToggleSwitch*>("removeOriginalToggle")) {
+        connect(rot, &ToggleSwitch::toggled, this, [this](bool checked) {
+            emit logMessage(checked ? "Original video will be deleted after processing" : "Original video will be kept after processing");
+            saveSettings();
+        });
+    }
     connect(threadComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(multiPvComboBox_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(stockfishPathBtn, &QPushButton::clicked, this, [this]() {
@@ -660,6 +680,7 @@ void SettingsDialog::loadSettings() {
     for (auto* w : widgets) w->blockSignals(true);
 
     pgnExportToggle_->setChecked(settings.value("generatePgn", true).toBool());
+    subtitlesToggle_->setChecked(settings.value("generateSubtitles", false).toBool());
     stockfishToggle_->setChecked(settings.value("enableStockfish", false).toBool());
     analysisVideoToggle_->setChecked(settings.value("generateAnalysisVideo", false).toBool());
     if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
@@ -737,12 +758,17 @@ void SettingsDialog::loadSettings() {
 
     if (auto* m = findChild<QComboBox*>("memoryLimitComboBox")) { int idx = m->findData(settings.value("memoryLimitMB", 0).toInt()); m->setCurrentIndex(idx >= 0 ? idx : m->findData(0)); }
 
+    if (auto* rot = findChild<ToggleSwitch*>("removeOriginalToggle")) {
+        rot->setChecked(settings.value("removeOriginalVideo", false).toBool());
+    }
+
     for (auto* w : widgets) w->blockSignals(false);
 }
 
 void SettingsDialog::saveSettings() {
     QSettings settings;
     settings.setValue("generatePgn", pgnExportToggle_->isChecked());
+    settings.setValue("generateSubtitles", subtitlesToggle_->isChecked());
     settings.setValue("enableStockfish", stockfishToggle_->isChecked());
     settings.setValue("generateAnalysisVideo", analysisVideoToggle_->isChecked());
     settings.setValue("multiPv", multiPvComboBox_->currentData().toInt());
@@ -750,6 +776,9 @@ void SettingsDialog::saveSettings() {
     settings.setValue("themeMode", themeComboBox_->currentIndex());
     if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
         settings.setValue("analysis/enableMoveAnnotations", mat->isChecked());
+    }
+    if (auto* rot = findChild<ToggleSwitch*>("removeOriginalToggle")) {
+        settings.setValue("removeOriginalVideo", rot->isChecked());
     }
 
     if (auto* d = findChild<QComboBox*>("depthComboBox")) settings.setValue("stockfishDepth", d->currentData().toInt());
@@ -776,6 +805,7 @@ void SettingsDialog::saveSettings() {
 
 void SettingsDialog::populateSettings(ProcessingSettings& s) const {
     s.generatePgn = pgnExportToggle_->isChecked() || stockfishToggle_->isChecked();
+    s.generateSubtitles = subtitlesToggle_->isChecked();
     s.enableStockfish = stockfishToggle_->isChecked();
     s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
     s.multiPv = multiPvComboBox_->currentData().toInt();
@@ -799,6 +829,7 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
 
 void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     pgnExportToggle_->setChecked(settings.generatePgn);
+    subtitlesToggle_->setChecked(settings.generateSubtitles);
     stockfishToggle_->setChecked(settings.enableStockfish);
     analysisVideoToggle_->setChecked(settings.generateAnalysisVideo);
     int idx = multiPvComboBox_->findData(settings.multiPv);

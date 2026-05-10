@@ -65,6 +65,7 @@ private:
     void setupUi();
 
     ToggleSwitch* pgnExportToggle_;
+    ToggleSwitch* subtitlesToggle_;
     ToggleSwitch* stockfishToggle_;
     ToggleSwitch* analysisVideoToggle_;
     QComboBox* multiPvComboBox_;

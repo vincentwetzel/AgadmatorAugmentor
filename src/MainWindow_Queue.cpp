@@ -112,14 +112,19 @@ MainWindow::QueueItemStatus MainWindow::itemStatus(const QListWidgetItem* item) 
 
 void MainWindow::setItemStatus(QListWidgetItem* item, QueueItemStatus status) {
     if (!item) return;
-    item->setData(StatusRole, static_cast<int>(status));
-    refreshQueueItem(item);
+    if (itemStatus(item) != status) {
+        item->setData(StatusRole, static_cast<int>(status));
+        refreshQueueItem(item);
+    }
 }
 
 void MainWindow::setItemProgress(QListWidgetItem* item, int percentage) {
     if (!item) return;
-    item->setData(ProgressRole, qBound(0, percentage, 100));
-    refreshQueueItem(item);
+    int bounded = qBound(0, percentage, 100);
+    if (item->data(ProgressRole).toInt() != bounded) {
+        item->setData(ProgressRole, bounded);
+        refreshQueueItem(item);
+    }
 }
 
 void MainWindow::applyTemplateToItem(QListWidgetItem* item, const QString& templateId) const {
@@ -284,10 +289,14 @@ void MainWindow::refreshQueueItem(QListWidgetItem* item) {
 
     if (status == QueueItemStatus::Completed) {
         progress = 100;
-        item->setData(ProgressRole, progress);
+        if (item->data(ProgressRole).toInt() != progress) {
+            item->setData(ProgressRole, progress);
+        }
     } else if ((status == QueueItemStatus::Failed || status == QueueItemStatus::Cancelled) && progress == 100) {
         progress = 0;
-        item->setData(ProgressRole, progress);
+        if (item->data(ProgressRole).toInt() != progress) {
+            item->setData(ProgressRole, progress);
+        }
     }
 
     item->setToolTip(path + "\nStatus: " + queueStatusText(status));
@@ -334,7 +343,10 @@ void MainWindow::refreshQueueItem(QListWidgetItem* item) {
         int w = queueList_->viewport()->width();
         if (w < 100) w = 400; // Safe fallback before layout
         int h = existingWidget->heightForWidth(w);
-        item->setSizeHint(QSize(10, h > 0 ? h : existingWidget->sizeHint().height()));
+        QSize newSizeHint(10, h > 0 ? h : existingWidget->sizeHint().height());
+        if (item->sizeHint() != newSizeHint) {
+            item->setSizeHint(newSizeHint);
+        }
     } else {
         QWidget* newWidget = createQueueItemWidget(item);
         int w = queueList_->viewport()->width();
