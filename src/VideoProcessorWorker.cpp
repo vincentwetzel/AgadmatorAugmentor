@@ -143,6 +143,7 @@ namespace { // Anonymous namespace for helper function
         const long long h = total_minutes / 60;
 
         std::ostringstream out;
+        out.imbue(std::locale::classic());
         out << std::setfill('0')
             << std::setw(2) << h << ":"
             << std::setw(2) << m << ":"
@@ -193,6 +194,18 @@ namespace { // Anonymous namespace for helper function
 
 void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atomic<bool>* cancelFlag) {
     try {
+        std::string arrows_target = settings.overlayConfig.arrowsTarget;
+        if (arrows_target.empty()) arrows_target = "Analysis Board";
+        if (arrows_target == "Debug Board") arrows_target = "Analysis Board";
+
+        const bool analysisVideoNeedsEngine =
+            settings.generateAnalysisVideo &&
+            (settings.overlayConfig.evalBar.enabled ||
+             settings.overlayConfig.pvText.enabled ||
+             ((settings.overlayConfig.board.enabled || arrows_target == "Main Board" || arrows_target == "Both") &&
+              (arrows_target == "Analysis Board" || arrows_target == "Main Board" || arrows_target == "Both")));
+        const bool runStockfishAnalysis = settings.enableMoveAnnotations || analysisVideoNeedsEngine;
+
         emit logMessage(
             QString("Overlay config: board(enabled=%1, x=%2, y=%3, scale=%4), "
                     "eval(enabled=%5, x=%6, y=%7, scale=%8), "
@@ -212,6 +225,10 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 .arg(QString::fromStdString(settings.overlayConfig.arrowsTarget))
         );
 
+        if (analysisVideoNeedsEngine && !settings.enableMoveAnnotations) {
+            emit logMessage("Analysis Video overlays require engine data; running Stockfish analysis for video overlays.");
+        }
+
         if (settings.generateAnalysisVideo) {
             emit logMessage("Verifying FFmpeg installation...");
             if (!is_ffmpeg_available()) {
@@ -219,7 +236,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
         }
 
-        if (settings.enableStockfish) {
+        if (runStockfishAnalysis) {
             emit logMessage("Verifying Stockfish installation...");
             QString sfPath = settings.stockfishPath;
             bool sfFound = false;
@@ -301,7 +318,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         std::vector<StockfishResult> videoStockfishResults;
         std::map<std::string, StockfishResult> fenAnalysisCache;
 
-        if (settings.enableStockfish && !gameData.fens.empty()) {
+        if (runStockfishAnalysis && !gameData.fens.empty()) {
             // 1. Gather all unique FENs from the video timeline
             std::vector<std::string> unique_fens;
             for (const auto& fen : gameData.video_fens) {
@@ -362,15 +379,12 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
         // Step 2a: Optional move quality annotation based on Stockfish analysis
         std::vector<std::string> move_annotations(gameData.moves.size(), "");
-        QSettings q_settings;
-        bool enableMoveAnnotations = q_settings.value("analysis/enableMoveAnnotations", true).toBool();
-        
         int white_estimated_elo = 0;
         int black_estimated_elo = 0;
         double white_acpl = -1.0;
         double black_acpl = -1.0;
 
-        if (enableMoveAnnotations && settings.enableStockfish) {
+        if (settings.enableMoveAnnotations && runStockfishAnalysis) {
             emit logMessage("Generating move quality annotations...");
             
             auto calculate_material = [](const std::string& fen) {
@@ -464,13 +478,13 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
             }
 
-            // Annotate Main Line Moves (for PGN)
-            double total_loss_white = 0.0;
-            double total_loss_black = 0.0;
-            int moves_white = 0;
-            int moves_black = 0;
+            // Annotate Main Line Moves (for PGN) only when engine PGN output was requested.
+            if (settings.generatePgn && settings.enableMoveAnnotations && !mainLineStockfishResults.empty() && mainLineStockfishResults.size() > gameData.moves.size()) {
+                double total_loss_white = 0.0;
+                double total_loss_black = 0.0;
+                int moves_white = 0;
+                int moves_black = 0;
 
-            if (!mainLineStockfishResults.empty() && mainLineStockfishResults.size() > gameData.moves.size()) {
                 for (size_t i = 0; i < gameData.moves.size(); ++i) {
                     const auto& fen_before = gameData.fens[i];
                     bool is_white_to_move = (fen_before.find(" w ") != std::string::npos);
@@ -601,7 +615,8 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                     if (info.api_success || info.total_games > 0) {
                         emit logMessage(QString("Lichess checked %1 -> %2 hits").arg(move_str).arg(info.total_games));
                     } else {
-                        emit logMessage(QString("Lichess checked %1 -> API request failed").arg(move_str));
+                        QString detail = info.error.empty() ? "API request failed" : QString::fromStdString(info.error);
+                        emit logMessage(QString("Lichess checked %1 -> %2").arg(move_str, detail));
                     }
 
                     fen_idx++;
@@ -659,14 +674,18 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             if (white_acpl >= 0) {
                 pgn.add_header("WhiteACPL", std::to_string(static_cast<int>(std::round(white_acpl))));
                 double w_acc = std::clamp(100.0 * std::exp(-0.007 * white_acpl), 0.0, 100.0);
-                char buf[16]; snprintf(buf, sizeof(buf), "%.1f", w_acc);
-                pgn.add_header("WhiteAccuracy", buf);
+                std::ostringstream ss;
+                ss.imbue(std::locale::classic());
+                ss << std::fixed << std::setprecision(1) << w_acc;
+                pgn.add_header("WhiteAccuracy", ss.str());
             }
             if (black_acpl >= 0) {
                 pgn.add_header("BlackACPL", std::to_string(static_cast<int>(std::round(black_acpl))));
                 double b_acc = std::clamp(100.0 * std::exp(-0.007 * black_acpl), 0.0, 100.0);
-                char buf[16]; snprintf(buf, sizeof(buf), "%.1f", b_acc);
-                pgn.add_header("BlackAccuracy", buf);
+                std::ostringstream ss;
+                ss.imbue(std::locale::classic());
+                ss << std::fixed << std::setprecision(1) << b_acc;
+                pgn.add_header("BlackAccuracy", ss.str());
             }
 
             // Helper to format eval comment for variations
@@ -681,9 +700,10 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
                 double eval_cp = best.centipawns / 100.0;
                 if (is_black_to_move) eval_cp = -eval_cp;
-                char buf[32];
-                snprintf(buf, sizeof(buf), "%+.2f", eval_cp);
-                return std::string(buf);
+                std::ostringstream ss;
+                ss.imbue(std::locale::classic());
+                ss << std::showpos << std::fixed << std::setprecision(2) << eval_cp;
+                return ss.str();
             };
 
             // Add moves with clock info
@@ -703,7 +723,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
                 
                 std::string main_eval_str = "";
-                if (settings.enableStockfish && !mainLineStockfishResults.empty() && i + 1 < mainLineStockfishResults.size()) {
+                if (settings.generatePgn && settings.enableMoveAnnotations && !mainLineStockfishResults.empty() && i + 1 < mainLineStockfishResults.size()) {
                     main_eval_str = get_eval_str(mainLineStockfishResults[i + 1]);
                 }
 
@@ -725,7 +745,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                             }
                             
                             std::string eval_str = "";
-                            if (settings.enableStockfish && j + 1 < var_data.fens.size()) {
+                            if (settings.generatePgn && settings.enableMoveAnnotations && j + 1 < var_data.fens.size()) {
                                 auto cache_it = fenAnalysisCache.find(var_data.fens[j + 1]);
                                 if (cache_it != fenAnalysisCache.end()) {
                                     eval_str = get_eval_str(cache_it->second);
@@ -751,12 +771,23 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
         }
 
+        QFileInfo pgnInfo(settings.outputPath);
+        
+        QSettings q_settings_vid;
+        QString vCodec = q_settings_vid.value("videoCodec", "libx264").toString();
+        QString aCodec = q_settings_vid.value("audioCodec", "copy").toString();
+        QString resolution = q_settings_vid.value("videoResolution", "Source Resolution").toString();
+        QString crf = q_settings_vid.value("videoQuality", "23").toString();
+        QString extension = q_settings_vid.value("videoExtension", ".mp4").toString();
+
+        QString outPath = QDir(pgnInfo.absolutePath()).filePath(QFileInfo(settings.videoPath).completeBaseName() + "_analysis" + extension);
+        QString subtitlePath;
+
         if (settings.generateSubtitles) {
             emit logMessage("Generating synced move subtitles...");
 
-            QFileInfo outInfo(settings.outputPath);
-            const QString subtitlePath = outInfo.absoluteDir().filePath(outInfo.completeBaseName() + ".srt");
-            QDir().mkpath(outInfo.absolutePath());
+            QDir().mkpath(pgnInfo.absolutePath());
+            subtitlePath = outPath + ".srt";
 
             std::ofstream srtFile(subtitlePath.toStdString());
             if (!srtFile.is_open()) {
@@ -764,7 +795,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 return;
             }
 
-            libchess::Position subtitlePos;
+            libchess::Position subtitlePos(gameData.fens.empty() ? "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1" : gameData.fens.front());
             const size_t cueCount = std::min(gameData.moves.size(), gameData.timestamps.size());
             for (size_t i = 0; i < cueCount; ++i) {
                 const std::string& uci = gameData.moves[i];
@@ -792,7 +823,6 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
 
             srtFile.close();
-            emit logMessage("Saved synced move subtitles to: " + subtitlePath);
         }
 
         // Step 4: Optional Analysis Video Generation
@@ -800,9 +830,6 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             emit logMessage("Generating Analysis Video...");
             AnalysisVideoGenerator video_gen(settings.assetsPath.toStdString());
             
-            QFileInfo pgnInfo(settings.outputPath);
-            QString outPath = pgnInfo.absolutePath() + "/" + QFileInfo(settings.videoPath).completeBaseName() + "_analysis.mp4";
-
             auto progress_cb = [this](int percent, const std::string& message) {
                 if (percent >= 0) {
                     emit progressUpdated(percent);
@@ -812,9 +839,10 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 }
             };
 
-            const bool videoGenerated = video_gen.generate_analysis_video(
+            QString outPathWithArgs = outPath + "|" + vCodec + "|" + aCodec + "|" + resolution + "|" + crf;
+            bool videoGenerated = video_gen.generate_analysis_video(
                 settings.videoPath.toStdString(),
-                outPath.toStdString(),
+                outPathWithArgs.toStdString(),
                 *extractor.get_board_geometry(),
                 gameData.video_fens,
                 gameData.video_timestamps,
@@ -826,6 +854,33 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
                 progress_cb
             );
 
+            // Automatic fallback to CPU encoder if GPU hardware acceleration fails
+            if (!videoGenerated && !(cancelFlag && *cancelFlag) && vCodec != "libx264" && vCodec != "libx265" && vCodec != "libvpx-vp9") {
+                emit logMessage("Hardware accelerated composition failed. Retrying with H.264 CPU encoder (libx264)...");
+                outPathWithArgs = outPath + "|libx264|" + aCodec + "|" + resolution + "|" + crf;
+                videoGenerated = video_gen.generate_analysis_video(
+                    settings.videoPath.toStdString(),
+                    outPathWithArgs.toStdString(),
+                    *extractor.get_board_geometry(),
+                    gameData.video_fens,
+                    gameData.video_timestamps,
+                    videoStockfishResults,
+                    video_opening_names,
+                    15,
+                    settings.overlayConfig,
+                    cancelFlag,
+                    progress_cb
+                );
+                
+                if (!videoGenerated && !(cancelFlag && *cancelFlag)) {
+                    emit logMessage("Error: Software CPU encoder fallback also failed. Please check the logs above.");
+                }
+            }
+
+            if (settings.generateSubtitles) {
+                QFile::remove(subtitlePath);
+            }
+
             if (!videoGenerated) {
                 if (cancelFlag && *cancelFlag) {
                     emit finished();
@@ -836,6 +891,9 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
 
             emit logMessage("Analysis Video generation complete: " + outPath);
+        } else if (settings.generateSubtitles) {
+            // Cleanup stray temp subtitle files if video generation was bypassed programmatically
+            QFile::remove(subtitlePath);
         }
 
         emit progressUpdated(100);

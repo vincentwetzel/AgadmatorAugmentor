@@ -58,7 +58,8 @@ public:
      * 
      * @param videoPath Semicolon-separated list of video file paths to process.
      * @param pgnOverride Override flag for PGN generation (-1 to use saved settings).
-     * @param stockfishOverride Override flag for Stockfish analysis (-1 to use saved settings).
+     * @param analysisVideoOverride Override flag for analysis video generation (-1 to use saved settings).
+     * @param moveLabelsOverride Override flag for move quality labels (-1 to use saved settings).
      * @param multiPv Override for the number of principal variations to compute.
      * @param threads Override for the number of FFmpeg decode threads.
      * @param depth Override for Stockfish search depth.
@@ -70,7 +71,7 @@ public:
      * 
      * @return int 0 on success, non-zero on failure.
      */
-    int processHeadless(const QString& videoPath, int pgnOverride = -1, int stockfishOverride = -1, int multiPv = 0, int threads = 0, int depth = 0, int time = 0, int nodes = 0, int analysisDepth = 0, const QString& debugLevelStr = "", const QString& outputOverride = "", const QString& boardAssetOverride = "", int memoryLimit = -1);
+    int processHeadless(const QString& videoPath, int pgnOverride = -1, int analysisVideoOverride = -1, int moveLabelsOverride = -1, int multiPv = 0, int threads = 0, int depth = 0, int time = 0, int nodes = 0, int analysisDepth = 0, const QString& debugLevelStr = "", const QString& outputOverride = "", const QString& boardAssetOverride = "", int memoryLimit = -1);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;

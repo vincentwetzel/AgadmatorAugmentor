@@ -12,7 +12,10 @@ namespace cta {
 struct LichessOpening {
     std::string eco;
     std::string name;
+    std::string error;
     int total_games = 0;
+    int http_status = 0;
+    unsigned long winhttp_error = 0;
     bool found = false;
     bool api_success = false;
 };
@@ -38,6 +41,7 @@ private:
     std::atomic<bool> stop_;
     std::atomic<bool> unique_game_reached_;
     std::atomic<bool> done_;
+    bool active_request_ = false;
     std::string cache_path_;
 };
 

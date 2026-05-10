@@ -52,7 +52,7 @@ public:
     /**
      * @brief Applies CLI-provided overrides directly to the active configuration state.
      */
-    void applyHeadlessOverrides(int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit);
+    void applyHeadlessOverrides(int pgnOverride, int analysisVideoOverride, int moveLabelsOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit);
 
 signals:
     /// @brief Emitted when the settings dialog needs to append a message to the main application log.
@@ -66,7 +66,6 @@ private:
 
     ToggleSwitch* pgnExportToggle_;
     ToggleSwitch* subtitlesToggle_;
-    ToggleSwitch* stockfishToggle_;
     ToggleSwitch* analysisVideoToggle_;
     QComboBox* multiPvComboBox_;
     QComboBox* themeComboBox_;

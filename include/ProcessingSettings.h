@@ -13,6 +13,7 @@ struct ProcessingSettings {
     bool generatePgn = true;
     bool generateSubtitles = false;
     bool enableStockfish = false;
+    bool enableMoveAnnotations = true;
     bool generateAnalysisVideo = false;
     int multiPv = 3;
     int ffmpegThreads = 4;

@@ -6,6 +6,7 @@ build_cpu/
 build_dyn/
 build_tmp/
 build_zero_copy/
+build_codex*
 out/
 temp/
 bin/

@@ -103,12 +103,12 @@ void MainWindow::finishProcessingSession() {
     QCoreApplication::processEvents();
 }
 
-int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride, int memoryLimit) {
+int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int analysisVideoOverride, int moveLabelsOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, const QString& outputOverride, const QString& boardAssetOverride, int memoryLimit) {
     logTimer_.restart();
     addVideosToQueue(videoPath.split(";", Qt::SkipEmptyParts));
     
     settingsDialog_->loadSettings();
-    settingsDialog_->applyHeadlessOverrides(pgnOverride, stockfishOverride, multiPv, threads, depth, time, nodes, analysisDepth, debugLevelStr, memoryLimit);
+    settingsDialog_->applyHeadlessOverrides(pgnOverride, analysisVideoOverride, moveLabelsOverride, multiPv, threads, depth, time, nodes, analysisDepth, debugLevelStr, memoryLimit);
 
     set_ffmpeg_threads(gatherSettings().ffmpegThreads);
 
@@ -164,7 +164,7 @@ void MainWindow::onStartCancelClicked() {
     } else {
         if (!hasQueuedItems()) { appendLog("Error: Please add at least one queued video to process."); return; }
         auto settings = gatherSettings();
-        if (!settings.generatePgn && !settings.enableStockfish && !settings.generateAnalysisVideo) { appendLog("Error: No output options selected. Please select at least one of the generation modes."); return; }
+        if (!settings.generatePgn && !settings.generateAnalysisVideo) { appendLog("Error: No output options selected. Please select at least one of the generation modes."); return; }
 
         isProcessing_ = true;
         cancelRequested_ = false;

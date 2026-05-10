@@ -105,7 +105,19 @@ std::string compose_ffmpeg_failure_message(int result, const std::string& detail
     }
     oss << ".";
     if (!details.empty()) {
-        oss << " Last FFmpeg output:\n" << details;
+        oss << " Last FFmpeg output:\n";
+        std::istringstream iss(details);
+        std::string line;
+        while (std::getline(iss, line)) {
+            // Ignore benign FFmpeg verbosity that isn't the root cause of failure
+            if (line.find("Past duration too large") != std::string::npos ||
+                line.find("More than 1000 frames duplicated") != std::string::npos ||
+                line.find("Qavg:") != std::string::npos ||
+                line.empty()) {
+                continue;
+            }
+            oss << line << "\n";
+        }
     } else {
         oss << " No FFmpeg output was captured. Check that ffmpeg is in PATH.";
     }
@@ -278,6 +290,14 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     std::string main_arrows_txt_path = (temp_dir / "main_arrows.txt").string();
     std::ofstream main_arrows_txt;
     if (draw_main_arrows) main_arrows_txt.open(main_arrows_txt_path);
+
+    // Ensure classical locale so floating point durations are written with a dot (.), 
+    // preventing FFmpeg parsing failures in locales that use commas (,).
+    board_txt.imbue(std::locale::classic());
+    text_txt.imbue(std::locale::classic());
+    bar_txt.imbue(std::locale::classic());
+    opening_txt.imbue(std::locale::classic());
+    if (draw_main_arrows) main_arrows_txt.imbue(std::locale::classic());
 
     size_t num_states = timestamps.size() + 1;
     std::vector<size_t> states_to_render;
@@ -515,7 +535,8 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     }
 
     std::string hwaccel_arg = use_hwaccel ? "-hwaccel auto " : "";
-    std::string input_args_str = "-y " + hw_init_args + hwaccel_arg + "-i \"" + input_video_path + "\" ";
+    // Standardize all inputs to generic_string (forward slashes) to prevent escaping bugs in FFmpeg's CLI parser
+    std::string input_args_str = "-y " + hw_init_args + hwaccel_arg + "-i \"" + std::filesystem::path(input_video_path).generic_string() + "\" ";
 
     if (overlay_config.board.enabled) {
         input_args_str += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
@@ -536,6 +557,14 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     if (draw_main_arrows) {
         input_args_str += "-f concat -safe 0 -i \"" + main_arrows_txt_path + "\" ";
         arrows_stream = "[" + std::to_string(stream_idx++) + ":v]";
+    }
+
+    std::string srt_path = std::filesystem::path(actual_output_path + ".srt").generic_string();
+    bool has_srt = std::filesystem::exists(srt_path);
+    int srt_stream_idx = -1;
+    if (has_srt) {
+        input_args_str += "-i \"" + srt_path + "\" ";
+        srt_stream_idx = stream_idx++;
     }
 
     HardwareAccelerationType hw_type = HardwareAccelerationType::None;
@@ -628,12 +657,27 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Fallback to copy if codec isn't set
     if (aCodec.empty()) aCodec = "copy";
 
+    std::string map_args = "-map \"[out]\" -map 0:a? ";
+    if (has_srt) {
+        map_args += "-map " + std::to_string(srt_stream_idx) + ":s ";
+    }
+    map_args += "-map 0:s? -map 0:t? -map_metadata 0 ";
+
+    std::string subtitle_codecs = "-c:s copy";
+    if (has_srt) {
+        std::string srt_codec = "copy";
+        if (actual_output_path.find(".mp4") != std::string::npos || actual_output_path.find(".mov") != std::string::npos) srt_codec = "mov_text";
+        else if (actual_output_path.find(".webm") != std::string::npos) srt_codec = "webvtt";
+        else srt_codec = "srt";
+        
+        subtitle_codecs = "-c:s copy -c:s:0 " + srt_codec;
+    }
+
     ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
                  "-filter_complex_threads " + std::to_string(num_threads) + " " +
-                 "-filter_complex \"" + filter_complex + "\" "
-                 "-map \"[out]\" -map 0:a? -map 0:s? -map 0:t? "
-                 "-map_metadata 0 "
-                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " -c:s copy -c:t copy \"" + actual_output_path + "\"";
+                 "-filter_complex \"" + filter_complex + "\" " +
+                 map_args +
+                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs + " -c:t copy \"" + std::filesystem::path(actual_output_path).generic_string() + "\"";
 
 #ifdef _WIN32
     SECURITY_ATTRIBUTES saAttr; 
@@ -754,9 +798,17 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 #endif
 
     if (result == 0) {
+        std::error_code ec;
+        if (!std::filesystem::exists(actual_output_path, ec) || std::filesystem::file_size(actual_output_path, ec) == 0) {
+            std::filesystem::remove(actual_output_path, ec);
+            if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail + "\nError: FFmpeg exited successfully but output file is missing or empty."));
+            return false;
+        }
         if (progress_callback) progress_callback(100, "Analysis video composition complete.");
         return true;
     } else {
+        std::error_code ec;
+        std::filesystem::remove(actual_output_path, ec);
         if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail));
         return false;
     }

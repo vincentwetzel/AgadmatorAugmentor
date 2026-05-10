@@ -167,15 +167,14 @@ void SettingsDialog::setupUi() {
     togglesGroup->setToolTip("Choose which files ChessTube Analyzer should create for each video.");
     auto* togglesLayout = new QVBoxLayout(togglesGroup);
     togglesLayout->addWidget(createHelpText(
-        "Start with the moves-only PGN. Add Stockfish or video output when you want deeper review or a shareable annotated video.",
+        "Start with the moves-only PGN. Move labels and engine-backed video overlays will run Stockfish automatically.",
         "Explains the recommended output choices."
     ));
     togglesLayout->addWidget(createToggleRow("Moves-only PGN", "Create a compact PGN containing the extracted legal moves.", pgnExportToggle_, true));
-    togglesLayout->addWidget(createToggleRow("Move subtitles", "Create a synced SRT subtitle file showing each move at its video timestamp.", subtitlesToggle_, false));
-    togglesLayout->addWidget(createToggleRow("PGN with engine analysis", "Add Stockfish evaluations, suggested lines, and comments to the PGN.", stockfishToggle_, false));
+    togglesLayout->addWidget(createToggleRow("Move subtitles", "Embed synced move subtitles into the analysis video.", subtitlesToggle_, false));
 
     ToggleSwitch* moveAnnotationsToggle = nullptr;
-    auto* annotationsRow = createToggleRow("Move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to engine-analyzed output.", moveAnnotationsToggle, true);
+    auto* annotationsRow = createToggleRow("Move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to the PGN and video text. This runs Stockfish automatically.", moveAnnotationsToggle, true);
     moveAnnotationsToggle->setObjectName("moveAnnotationsToggle");
     togglesLayout->addWidget(annotationsRow);
 
@@ -504,14 +503,16 @@ void SettingsDialog::setupUi() {
     });
     connect(subtitlesToggle_, &ToggleSwitch::toggled, this, [this](bool checked) {
         emit logMessage(checked ? "Move subtitles enabled" : "Move subtitles disabled");
-        saveSettings();
-    });
-    connect(stockfishToggle_, &ToggleSwitch::toggled, this, [this](bool checked) {
-        emit logMessage(checked ? "PGN with Stockfish analysis enabled" : "PGN with Stockfish analysis disabled");
+        if (checked && !analysisVideoToggle_->isChecked()) {
+            analysisVideoToggle_->setChecked(true);
+        }
         saveSettings();
     });
     connect(analysisVideoToggle_, &ToggleSwitch::toggled, this, [this](bool checked) { 
         emit logMessage(checked ? "Analysis Video generation enabled" : "Analysis Video generation disabled");
+        if (!checked && subtitlesToggle_->isChecked()) {
+            subtitlesToggle_->setChecked(false);
+        }
         saveSettings(); 
     });
     if (auto* rot = findChild<ToggleSwitch*>("removeOriginalToggle")) {
@@ -681,7 +682,6 @@ void SettingsDialog::loadSettings() {
 
     pgnExportToggle_->setChecked(settings.value("generatePgn", true).toBool());
     subtitlesToggle_->setChecked(settings.value("generateSubtitles", false).toBool());
-    stockfishToggle_->setChecked(settings.value("enableStockfish", false).toBool());
     analysisVideoToggle_->setChecked(settings.value("generateAnalysisVideo", false).toBool());
     if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
         mat->setChecked(settings.value("analysis/enableMoveAnnotations", true).toBool());
@@ -769,7 +769,6 @@ void SettingsDialog::saveSettings() {
     QSettings settings;
     settings.setValue("generatePgn", pgnExportToggle_->isChecked());
     settings.setValue("generateSubtitles", subtitlesToggle_->isChecked());
-    settings.setValue("enableStockfish", stockfishToggle_->isChecked());
     settings.setValue("generateAnalysisVideo", analysisVideoToggle_->isChecked());
     settings.setValue("multiPv", multiPvComboBox_->currentData().toInt());
     settings.setValue("ffmpegThreads", threadComboBox_->currentData().toInt());
@@ -804,10 +803,15 @@ void SettingsDialog::saveSettings() {
 }
 
 void SettingsDialog::populateSettings(ProcessingSettings& s) const {
-    s.generatePgn = pgnExportToggle_->isChecked() || stockfishToggle_->isChecked();
+    const bool enableMoveAnnotations = findChild<ToggleSwitch*>("moveAnnotationsToggle")
+        ? findChild<ToggleSwitch*>("moveAnnotationsToggle")->isChecked()
+        : true;
+
+    s.generatePgn = pgnExportToggle_->isChecked();
     s.generateSubtitles = subtitlesToggle_->isChecked();
-    s.enableStockfish = stockfishToggle_->isChecked();
-    s.generateAnalysisVideo = analysisVideoToggle_->isChecked();
+    s.enableMoveAnnotations = enableMoveAnnotations;
+    s.enableStockfish = enableMoveAnnotations;
+    s.generateAnalysisVideo = analysisVideoToggle_->isChecked() || subtitlesToggle_->isChecked();
     s.multiPv = multiPvComboBox_->currentData().toInt();
     s.ffmpegThreads = threadComboBox_->currentData().toInt();
     s.stockfishDepth = findChild<QComboBox*>("depthComboBox") ? findChild<QComboBox*>("depthComboBox")->currentData().toInt() : 15;
@@ -830,7 +834,9 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
 void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     pgnExportToggle_->setChecked(settings.generatePgn);
     subtitlesToggle_->setChecked(settings.generateSubtitles);
-    stockfishToggle_->setChecked(settings.enableStockfish);
+    if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
+        mat->setChecked(settings.enableMoveAnnotations);
+    }
     analysisVideoToggle_->setChecked(settings.generateAnalysisVideo);
     int idx = multiPvComboBox_->findData(settings.multiPv);
     if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);
@@ -843,9 +849,14 @@ void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     debugLevelComboBox_->setCurrentIndex(settings.debugLevel);
 }
 
-void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int stockfishOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit) {
+void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int analysisVideoOverride, int moveLabelsOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit) {
     if (pgnOverride != -1) pgnExportToggle_->setChecked(pgnOverride != 0);
-    if (stockfishOverride != -1) stockfishToggle_->setChecked(stockfishOverride != 0);
+    if (analysisVideoOverride != -1) analysisVideoToggle_->setChecked(analysisVideoOverride != 0);
+    if (moveLabelsOverride != -1) {
+        if (auto* mat = findChild<ToggleSwitch*>("moveAnnotationsToggle")) {
+            mat->setChecked(moveLabelsOverride != 0);
+        }
+    }
     if (multiPv > 0) {
         int idx = multiPvComboBox_->findData(multiPv);
         if (idx >= 0) multiPvComboBox_->setCurrentIndex(idx);

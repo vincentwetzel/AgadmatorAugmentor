@@ -17,6 +17,7 @@ std::string ts(double elapsed) {
     int s = (total_ms % 60000) / 1000;
     int ms = total_ms % 1000;
     std::ostringstream oss;
+    oss.imbue(std::locale::classic());
     if (h > 0) oss << h << ":" << std::setfill('0') << std::setw(2);
     oss << m << ":" << std::setfill('0') << std::setw(2) << s << "." << std::setfill('0') << std::setw(3) << ms;
     return "[" + oss.str() + "]";

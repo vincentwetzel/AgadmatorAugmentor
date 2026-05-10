@@ -43,8 +43,8 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 
 - Browse or drag-and-drop one or more videos into the queue.
 - Select an output directory.
-- Toggle PGN, Stockfish analysis, move quality annotations, and analysis video generation.
-- Toggle synced move subtitles, which write an `.srt` file with SAN move text at each detected video timestamp.
+- Toggle PGN export, move quality annotations, analysis video generation, and synced move subtitles.
+- Embed synced SAN move subtitles into the generated analysis video.
 - Enable optional cleanup that deletes the original source video after that queue item completes successfully.
 - Configure Stockfish MultiPV, analysis strength, time cap, node cap, and variation-length presets.
 - Enable Fast Preview mode for rapid processing with bounded engine limits.
@@ -71,20 +71,21 @@ cd build\Release
 Override saved settings with command-line flags:
 
 ```cmd
-"ChessTube Analyzer.exe" "C:\videos\game.mp4" --stockfish --multi-pv 3 --threads 8 --pgn --memory-limit 4096
+"ChessTube Analyzer.exe" "C:\videos\game.mp4" --pgn --move-labels --multi-pv 3 --threads 8 --memory-limit 4096
+"ChessTube Analyzer.exe" "C:\videos\game.mp4" --analysis-video --no-move-labels
 "ChessTube Analyzer.exe" --help
 "ChessTube Analyzer.exe" --version
 ```
 
 ## Output Files
 
-The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves and clock times. If Stockfish analysis is enabled, it also includes engine variations, evaluations, move-quality annotations, estimated Elo/ACPL/accuracy headers, and any ECO/opening metadata found through the cached Lichess Explorer lookup.
+The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves and clock times. If move quality labels are enabled, Stockfish runs automatically and the PGN also includes engine variations, evaluations, move-quality annotations, estimated Elo/ACPL/accuracy headers, and any ECO/opening metadata found through the cached Lichess Explorer lookup.
 
-If move subtitles are enabled, the analyzer also writes `<video_name>.srt` in the selected output directory. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next move or a short default duration.
+If move subtitles are enabled, the analyzer creates a temporary SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next move or a short default duration.
 
-If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Opening-name overlays are optional and only display when opening metadata is available.
+If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Engine-backed overlays such as eval bars, PV text, and engine arrows run Stockfish automatically. Opening-name overlays are optional and only display when opening metadata is available. If hardware-accelerated video composition fails, the worker retries with the CPU H.264 encoder before reporting failure.
 
-Stockfish is required only when PGN engine analysis is enabled. In that mode the worker validates the configured executable path, nearby bundled `stockfish` folders, and `PATH` before extraction begins so missing engine installs fail early with a settings-focused error.
+Stockfish is required only when the requested output needs engine data. In that mode the worker validates the configured executable path, nearby bundled `stockfish` folders, and `PATH` before extraction begins so missing engine installs fail early with a settings-focused error.
 
 ## Advanced Extraction Tuning
 
@@ -92,6 +93,7 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 
 - `CTA_CHUNK_SECONDS`: chunk duration in seconds, clamped to 30-300.
 - `CTA_MAX_CHUNK_LOOKAHEAD`: maximum number of mapped chunks allowed ahead of the reducer.
+- `CTA_TRACE_REJECTS`: set to `1` to log detailed reasons rejected move candidates were filtered.
 
 ## Testing
 
@@ -101,4 +103,4 @@ Unit tests are opt-in so the default application build does not need to download
 python tests\run_tests.py
 ```
 
-The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`.
+The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. The short-game integration test reads expected moves from the sample PGN rather than a separate golden JSON artifact.

@@ -133,7 +133,9 @@ int main(int argc, char *argv[]) {
     QCommandLineOption output_option("output", "Path to save the extracted data (PGN/Video).", "path");
     QCommandLineOption debug_level_option("debug-level", "Debug image generation (NONE, MOVES, FULL).", "level");
     QCommandLineOption pgn_option("pgn", "Enable PGN file generation.");
-    QCommandLineOption stockfish_option("stockfish", "Enable Stockfish engine analysis.");
+    QCommandLineOption analysis_video_option("analysis-video", "Enable analysis video generation.");
+    QCommandLineOption move_labels_option("move-labels", "Enable Stockfish-backed move quality labels.");
+    QCommandLineOption no_move_labels_option("no-move-labels", "Disable move quality labels.");
     QCommandLineOption multi_pv_option("multi-pv", "Number of best lines for Stockfish (1-4).", "count");
     QCommandLineOption depth_option("depth", "Stockfish search depth (1-24).", "depth");
     QCommandLineOption time_option("time", "Stockfish max time per move in seconds (0 = no limit).", "s");
@@ -152,7 +154,9 @@ int main(int argc, char *argv[]) {
     parser.addOption(output_option);
     parser.addOption(debug_level_option);
     parser.addOption(pgn_option);
-    parser.addOption(stockfish_option);
+    parser.addOption(analysis_video_option);
+    parser.addOption(move_labels_option);
+    parser.addOption(no_move_labels_option);
     parser.addOption(multi_pv_option);
     parser.addOption(depth_option);
     parser.addOption(time_option);
@@ -162,11 +166,7 @@ int main(int argc, char *argv[]) {
     parser.addOption(memory_limit_option);
     parser.addPositionalArgument("video_path", "Path to the input video file (enables headless mode).");
 
-    if (!parser.parse(QCoreApplication::arguments())) {
-        std::cerr << parser.errorText().toStdString() << "\n\n"
-                  << parser.helpText().toStdString();
-        return 1;
-    }
+    parser.process(app);
 
     if (parser.isSet(version_option)) {
         std::cout << "ChessTube Analyzer v0.3.0" << std::endl;
@@ -207,13 +207,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if (parser.isSet(move_labels_option) && parser.isSet(no_move_labels_option)) {
+        std::cerr << "--move-labels and --no-move-labels cannot be used together.\n";
+        return 1;
+    }
+
     int pgn_override = parser.isSet(pgn_option) ? 1 : -1;
-    int stockfish_override = parser.isSet(stockfish_option) ? 1 : -1;
+    int analysis_video_override = parser.isSet(analysis_video_option) ? 1 : -1;
+    int move_labels_override = parser.isSet(move_labels_option) ? 1 : (parser.isSet(no_move_labels_option) ? 0 : -1);
 
     cta::MainWindow main_window;
     
     if (!video_path.isEmpty()) {
-        return main_window.processHeadless(video_path, pgn_override, stockfish_override, multi_pv, threads, depth, time, nodes, analysis_depth, debug_level_str, output, board_asset, memory_limit);
+        return main_window.processHeadless(video_path, pgn_override, analysis_video_override, move_labels_override, multi_pv, threads, depth, time, nodes, analysis_depth, debug_level_str, output, board_asset, memory_limit);
     }
 
     main_window.show();

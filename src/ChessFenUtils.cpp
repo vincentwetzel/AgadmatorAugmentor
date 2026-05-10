@@ -119,6 +119,7 @@ namespace ChessFenUtils {
         }
 
         std::ostringstream ss;
+        ss.imbue(std::locale::classic());
         ss << std::fixed << std::setprecision(2);
         double eval_cp = line.centipawns / 100.0;
         if (is_black_to_move) eval_cp = -eval_cp;

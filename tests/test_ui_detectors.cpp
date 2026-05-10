@@ -9,7 +9,12 @@
 #include <chrono>
 #include <iomanip>
 #include <fstream>
+#include <sstream>
+#include <array>
+#include <cctype>
 #include <nlohmann/json.hpp>
+#include <libchess/position.hpp>
+#include <libchess/move.hpp>
 #include "BoardLocalizer.h"
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
@@ -35,14 +40,14 @@ static std::vector<IntegrationTestResult> g_test_results;
 // Unit tests (detector accuracy on sample images):
 #define TEST_LOCATE_BOARD         1
 #define TEST_DRAW_GRID            1
-#define TEST_YELLOW_SQUARES       0
-#define TEST_PIECE_COUNTS         0
-#define TEST_RED_SQUARES          0
+#define TEST_YELLOW_SQUARES       1
+#define TEST_PIECE_COUNTS         1
+#define TEST_RED_SQUARES          1
 #define TEST_YELLOW_ARROWS        1
 #define TEST_MISALIGNED_PIECE     1
 #define TEST_GAME_CLOCKS          1
-#define TEST_MEMORY_LIMIT         0
-#define TEST_CACHE_CORRECTNESS    0
+#define TEST_MEMORY_LIMIT         1
+#define TEST_CACHE_CORRECTNESS    1
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   1
@@ -74,6 +79,162 @@ static std::string find_assets_dir() {
         return "ChessTubeAnalyzer/assets";
     }
     return ""; // Not found
+}
+
+static std::string normalize_san_token(std::string san) {
+    san.erase(std::remove(san.begin(), san.end(), '+'), san.end());
+    san.erase(std::remove(san.begin(), san.end(), '#'), san.end());
+    san.erase(std::remove(san.begin(), san.end(), '!'), san.end());
+    san.erase(std::remove(san.begin(), san.end(), '?'), san.end());
+    return san;
+}
+
+static std::array<char, 64> expand_fen_board_for_test(const std::string& fen) {
+    std::array<char, 64> board;
+    board.fill(' ');
+    int sq = 56;
+    for (char c : fen) {
+        if (c == ' ') break;
+        if (c == '/') sq -= 16;
+        else if (c >= '1' && c <= '8') sq += (c - '0');
+        else board[sq++] = c;
+    }
+    return board;
+}
+
+static std::string build_san_for_test(const libchess::Position& pos, const libchess::Move& move, const std::string& uci) {
+    auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
+    auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
+    std::array<char, 64> board = expand_fen_board_for_test(pos.get_fen());
+    char piece = board[from_sq];
+    char target_piece = board[to_sq];
+    bool is_pawn = (piece == 'P' || piece == 'p');
+    bool is_capture = (target_piece != ' ') || (is_pawn && (from_sq % 8) != (to_sq % 8) && target_piece == ' ');
+
+    if (move.type() == libchess::MoveType::ksc) return "O-O";
+    if (move.type() == libchess::MoveType::qsc) return "O-O-O";
+
+    std::string san;
+    if (!is_pawn) {
+        san += static_cast<char>(std::toupper(piece));
+        bool file_conflict = false;
+        bool rank_conflict = false;
+        bool need_disambiguation = false;
+        for (const auto& alt_move : pos.legal_moves()) {
+            auto alt_from = static_cast<int>(static_cast<unsigned int>(alt_move.from()));
+            auto alt_to = static_cast<int>(static_cast<unsigned int>(alt_move.to()));
+            if (alt_from != from_sq && alt_to == to_sq && board[alt_from] == piece) {
+                need_disambiguation = true;
+                if (alt_from % 8 == from_sq % 8) file_conflict = true;
+                if (alt_from / 8 == from_sq / 8) rank_conflict = true;
+            }
+        }
+        if (need_disambiguation) {
+            if (!file_conflict) san += static_cast<char>('a' + (from_sq % 8));
+            else if (!rank_conflict) san += static_cast<char>('1' + (from_sq / 8));
+            else {
+                san += static_cast<char>('a' + (from_sq % 8));
+                san += static_cast<char>('1' + (from_sq / 8));
+            }
+        }
+    } else if (is_capture) {
+        san += static_cast<char>('a' + (from_sq % 8));
+    }
+
+    if (is_capture) san += "x";
+    san += static_cast<char>('a' + (to_sq % 8));
+    san += static_cast<char>('1' + (to_sq / 8));
+    if (uci.length() >= 5) {
+        san += "=";
+        san += static_cast<char>(std::toupper(uci[4]));
+    }
+
+    libchess::Position next_pos = pos;
+    next_pos.makemove(move);
+    if (next_pos.is_checkmate()) san += "#";
+    else if (next_pos.in_check()) san += "+";
+    return san;
+}
+
+static std::string strip_pgn_markup(const std::string& pgn) {
+    std::string out;
+    out.reserve(pgn.size());
+    int brace_depth = 0;
+    int variation_depth = 0;
+    bool in_header = false;
+
+    for (char c : pgn) {
+        if (c == '[' && brace_depth == 0 && variation_depth == 0) {
+            in_header = true;
+            continue;
+        }
+        if (in_header) {
+            if (c == ']') in_header = false;
+            continue;
+        }
+        if (c == '{') {
+            ++brace_depth;
+            continue;
+        }
+        if (c == '}' && brace_depth > 0) {
+            --brace_depth;
+            continue;
+        }
+        if (brace_depth > 0) continue;
+
+        if (c == '(') {
+            ++variation_depth;
+            continue;
+        }
+        if (c == ')' && variation_depth > 0) {
+            --variation_depth;
+            continue;
+        }
+        if (variation_depth > 0) continue;
+
+        out += c;
+    }
+    return out;
+}
+
+static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::string& pgn_path) {
+    std::ifstream ifs(pgn_path);
+    if (!ifs.is_open()) {
+        throw std::runtime_error("Could not open PGN: " + pgn_path);
+    }
+
+    std::stringstream buffer;
+    buffer << ifs.rdbuf();
+
+    std::vector<std::string> moves;
+    libchess::Position pos("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    std::istringstream iss(strip_pgn_markup(buffer.str()));
+    std::string token;
+
+    while (iss >> token) {
+        if (token == "*" || token == "1-0" || token == "0-1" || token == "1/2-1/2") continue;
+        if (token.find('.') != std::string::npos) continue;
+        if (token.rfind("$", 0) == 0) continue;
+
+        const std::string wanted_san = normalize_san_token(token);
+        bool matched = false;
+        for (const auto& legal_move : pos.legal_moves()) {
+            const std::string uci = static_cast<std::string>(legal_move);
+            const std::string legal_san = normalize_san_token(build_san_for_test(pos, legal_move, uci));
+            if (legal_san == wanted_san) {
+                moves.push_back(uci);
+                pos.makemove(legal_move);
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched) {
+            throw std::runtime_error("Could not convert PGN SAN token to UCI: " + token);
+        }
+    }
+
+    return moves;
 }
 
 static std::vector<std::string> list_files(const std::string& dir,
@@ -541,29 +702,11 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    const std::string golden_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "golden_7_plies.json").string();
-    
-    std::vector<std::string> expected_moves;
-    if (std::filesystem::exists(golden_path)) {
-        std::ifstream ifs(golden_path);
-        nlohmann::json j;
-        ifs >> j;
-        expected_moves = j["moves"].get<std::vector<std::string>>();
-        
-        std::vector<std::string> expected_fens = j["fens"].get<std::vector<std::string>>();
-        EXPECT_EQ(data.fens, expected_fens) << "FENs do not match golden file!";
-        
-        std::cout << "  Loaded expected baseline from golden file.\n";
-    } else {
-        expected_moves = {"d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3"};
-        nlohmann::json j;
-        j["moves"] = data.moves;
-        j["fens"] = data.fens;
-        j["timestamps"] = data.timestamps;
-        std::ofstream ofs(golden_path);
-        ofs << j.dump(4);
-        std::cout << "  Generated new golden file: " << golden_path << "\n";
-    }
+    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.pgn").string();
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
+
+    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    std::cout << "  Loaded expected baseline from PGN.\n";
 
     result.plies_expected = static_cast<int>(expected_moves.size());
 
