@@ -14,8 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Opening Metadata:** Added a background Lichess Explorer fetcher with cached ECO/opening lookups for verified video FENs.
 - **Opening Overlays:** Added an optional opening-name overlay to analysis videos and the screenshot-based overlay template editor.
 - **Performance Estimate Headers:** PGN export can now include estimated Elo, ACPL, and accuracy headers derived from move-quality centipawn loss.
-- **Move Subtitles:** Added optional SAN move subtitles synchronized to verified video timestamps and embedded into analysis-video output.
-- **Source Cleanup Option:** Added a cleanup setting that deletes the original video only after successful processing.
 
 ### Performance
 
@@ -42,11 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Elapsed Log Prefixes:** GUI and headless logs now add elapsed-time prefixes while preserving existing extractor timestamps.
 - **Test Runner:** `tests/run_tests.py` now configures the build tree with `BUILD_TESTS=ON` before building and running `test_extract_moves`.
 - **FFmpeg Filter Graph Organization:** Moved `FFmpegFilterGraph` into `src/` and expanded it to track CPU/GPU stream state for analysis-video composition.
-- **Engine Requirement Scope:** Stockfish is now validated before extraction only when requested output needs engine data, including move quality labels or engine-backed analysis-video overlays.
-- **Headless Output Flags:** Replaced the old `--stockfish` flag with `--move-labels`, `--no-move-labels`, and `--analysis-video` so CLI output choices match the GUI.
-- **Subtitle Output Flow:** Move subtitles are now embedded into generated analysis videos instead of being left as standalone SRT sidecar files.
-- **PGN-Backed Test Baseline:** The short-game integration test now derives expected UCI moves from the sample PGN, allowing the generated JSON golden artifact to be removed.
-- **Queue UI Layout:** The queue and processing log now live in a vertical splitter, and queue item refreshes avoid redundant widget updates.
 
 ### Refactored
 
@@ -60,10 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Analysis Video Failure Flow:** Processing now stops after PGN save or analysis-video generation failures instead of continuing as though the batch completed successfully.
 - **Analysis Video Composition:** CUDA filter paths are now disabled for alpha-overlay cases that require CPU-compatible formats, while final video mapping explicitly targets the composed output stream and preserves optional source audio.
 - **CLI Input Validation:** Headless positional input now rejects non-video extensions before processing begins.
-- **Overlay Annotation Alpha:** Analysis-video move quality badges now draw with explicit alpha values so overlay composition preserves annotation opacity.
-- **Overlay Editor Preview:** The overlay editor board mock now uses the bundled board asset when available and keeps a generated fallback for missing assets.
-- **FFmpeg Composition Robustness:** Analysis-video composition filters noisy FFmpeg tail output, uses locale-stable decimal formatting, normalizes paths for FFmpeg, removes empty failed outputs, and retries hardware encoder failures with CPU H.264.
-- **Opening Lookup Robustness:** Lichess Explorer requests now URL-encode FENs, report HTTP/WinHTTP errors, handle rate limits, and wait for active requests before shutdown.
+- **Move Scoring:** Fixed a false positive where normal rook moves (e.g., `Rc1`) were misidentified as castling (`O-O-O`) due to visual noise accumulation on the king's squares. Applied a baseline penalty to multi-square moves to ensure all involved squares actually changed.
 
 ## [0.3.0] — 2026-04-25
 

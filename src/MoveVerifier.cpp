@@ -20,15 +20,19 @@ double MoveVerifier::score_move(const libchess::Move& move, const std::vector<do
         if (move.to() == libchess::Square::G1) { // White kingside
             score += square_diffs[static_cast<int>(libchess::Square::H1)];
             score += square_diffs[static_cast<int>(libchess::Square::F1)];
+            score -= 20.0;
         } else if (move.to() == libchess::Square::C1) { // White queenside
             score += square_diffs[static_cast<int>(libchess::Square::A1)];
             score += square_diffs[static_cast<int>(libchess::Square::D1)];
+            score -= 20.0;
         } else if (move.to() == libchess::Square::G8) { // Black kingside
             score += square_diffs[static_cast<int>(libchess::Square::H8)];
             score += square_diffs[static_cast<int>(libchess::Square::F8)];
+            score -= 20.0;
         } else if (move.to() == libchess::Square::C8) { // Black queenside
             score += square_diffs[static_cast<int>(libchess::Square::A8)];
             score += square_diffs[static_cast<int>(libchess::Square::D8)];
+            score -= 20.0;
         }
     }
     // Special handling for en passant: include captured pawn's square
@@ -40,7 +44,7 @@ double MoveVerifier::score_move(const libchess::Move& move, const std::vector<do
             captured_pawn_sq = move.to() + 8; // White pawn was on rank 4, so 1 rank above destination
         }
         if (captured_pawn_sq < 64) {
-            score += square_diffs[static_cast<int>(captured_pawn_sq)];
+            score += square_diffs[static_cast<int>(captured_pawn_sq)] - 10.0;
         }
     }
 

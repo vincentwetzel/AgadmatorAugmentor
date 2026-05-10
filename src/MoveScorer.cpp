@@ -60,13 +60,15 @@ ExtractedMoveScore MoveScorer::score_moves_for_board(const libchess::Position& p
             else if (to_sq == 2) { rook_from = 0; rook_to = 3; }
             else if (to_sq == 58) { rook_from = 56; rook_to = 59; }
             
-            if (rook_from != -1) score += sq_diffs[rook_from] + sq_diffs[rook_to];
+            // Subtract a baseline penalty (20.0) for the extra squares to prevent fake castling 
+            // (e.g. a normal rook move a1c1) from always beating the rook move due to noise accumulation.
+            if (rook_from != -1) score += sq_diffs[rook_from] + sq_diffs[rook_to] - 20.0;
         }
 
         // En passant: captured pawn on adjacent file, same rank as moving pawn
         if (move.type() == libchess::MoveType::enpassant) {
             int captured_pawn_sq = (to_sq & 7) | (from_sq & 0x38);
-            score += sq_diffs[captured_pawn_sq];
+            score += sq_diffs[captured_pawn_sq] - 10.0;
         }
 
         char move_promo = '\0';

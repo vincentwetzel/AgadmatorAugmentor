@@ -112,10 +112,11 @@ void log_top_candidates(const std::vector<double>& sq_diffs,
             else if (to == 2) { r_f = 0; r_t = 3; }
             else if (to == 58) { r_f = 56; r_t = 59; }
             
-            if (r_f != -1) s += sq_diffs[r_f] + sq_diffs[r_t];
+            // Subtract penalty to prevent false castling logging
+            if (r_f != -1) s += sq_diffs[r_f] + sq_diffs[r_t] - 20.0;
         }
         if (m.type() == libchess::MoveType::enpassant) {
-            s += sq_diffs[(to & 7) | (f & 0x38)];
+            s += sq_diffs[(to & 7) | (f & 0x38)] - 10.0;
         }
         std::string uci;
         uci.reserve(5);
