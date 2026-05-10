@@ -113,13 +113,14 @@ MainWindow::~MainWindow() {
 
 void MainWindow::browseVideo() {
     QSettings settings;
-    QString lastDir = settings.value("lastVideoDir", QDir::homePath()).toString();
+    QString defaultDir = settings.value("defaultVideoDir", "").toString();
+    if (defaultDir.isEmpty()) {
+        defaultDir = QDir::homePath();
+    }
 
-    QStringList fileNames = QFileDialog::getOpenFileNames(this, "Select Chess Video(s)", lastDir, "Video Files (*.mp4 *.mkv *.avi);;All Files (*)");
+    QStringList fileNames = QFileDialog::getOpenFileNames(this, "Select Chess Video(s)", defaultDir, "Video Files (*.mp4 *.mkv *.avi);;All Files (*)");
     if (!fileNames.isEmpty()) {
         addVideosToQueue(fileNames);
-        settings.setValue("lastVideoDir", QFileInfo(fileNames.first()).absolutePath());
-        settings.sync();
     }
 }
 
@@ -154,9 +155,6 @@ void MainWindow::dropEvent(QDropEvent* event) {
 
     addVideosToQueue(droppedFiles);
     if (!droppedFiles.isEmpty()) {
-        QSettings settings;
-        settings.setValue("lastVideoDir", QFileInfo(droppedFiles.first()).absolutePath());
-        settings.sync();
         event->acceptProposedAction();
     } else {
         event->ignore();

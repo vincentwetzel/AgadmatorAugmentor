@@ -125,7 +125,7 @@ void log_top_candidates(const std::vector<double>& sq_diffs,
         char p = board_map[f];
         if ((p == 'P' && to >= 56) || (p == 'p' && to <= 7)) {
             libchess::Position temp_pos = *pos_ptr;
-            temp_pos.makemove(m);
+            (void)temp_pos.makemove(m);
             std::array<char, 64> board_after = utils::expand_fen(temp_pos.get_fen());
             uci += static_cast<char>(std::tolower(board_after[to]));
         }
@@ -310,6 +310,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     cv::cvtColor(first_frame(cv::Rect(geo_->bx, geo_->by, geo_->bw, geo_->bh)), board_gray_crop, cv::COLOR_BGR2GRAY);
     RevertManager revert_mgr(*geo_, margin_h_, margin_w_);
     revert_mgr.initialize(board_gray_crop, compute_all_square_means(board_gray_crop, *geo_, margin_h_, margin_w_));
+    std::vector<size_t> revert_history_ply_counts{0};
 
     // ── Initialize zero-copy GPU pipeline ────────────────────────────────────
     // Uploads the first board grayscale to GPU. The GPU pipeline performs
@@ -336,6 +337,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     constexpr double quiet_before_coarse_scan = 2.0;
     double t = 0.0;
     int branch_counter = 0;
+    constexpr double kMinMoveScore = 35.0;
+    constexpr double kWeakCoalescedMoveScore = 35.0;
+    constexpr double kMinCoalescedFollowupScore = 60.0;
     constexpr double kRevertMaxSquareHashDiff = 15.0;
     constexpr double kRevertMeanHashDiff = 8.0;
     constexpr double kRevertFullImageMeanDiff = 3.0;
@@ -429,6 +433,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 << "s, lookahead=" << max_lookahead << ")";
     log_info(schedule_ss.str());
 
+    std::vector<bool> unresolved_consumed_squares(64, false);
+
     VideoChunkMapper mapper(safe_video_path, duration, chunk_duration, total_chunks,
                             *geo_, margin_h_, margin_w_, static_cast<int>(debug_level_),
                             has_clocks, max_lookahead, num_threads, frame_width, frame_height);
@@ -505,36 +511,38 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     : cf.board_hash;
                 hash_computed = true;
 
-                int best_idx = revert_mgr.find_revert_idx(board_gray, current_hash,
-                                                          revert_hash_tests, revert_full_tests,
-                                                          revert_index_queries, revert_index_fallbacks,
-                                                          exhaustive_revert_fallback);
+                int best_history_idx = revert_mgr.find_revert_idx(board_gray, current_hash,
+                                                                   revert_hash_tests, revert_full_tests,
+                                                                   revert_index_queries, revert_index_fallbacks,
+                                                                   exhaustive_revert_fallback);
 
                 revert_us += std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - revert_start).count();
 
                 // A mean pixel difference < 3.0 indicates a near-identical board state.
-                if (best_idx >= 0) {
+                if (best_history_idx >= 0 && best_history_idx < static_cast<int>(revert_history_ply_counts.size())) {
+                    size_t best_ply = revert_history_ply_counts[best_history_idx];
                     ++branch_counter;
-                    int reverted_count = static_cast<int>(data.moves.size()) - best_idx;
+                    int reverted_count = static_cast<int>(data.moves.size() - best_ply);
                     log_info("\n" + utils::ts(elapsed()) + " --- ANALYSIS REVERT at " + std::to_string(t) + "s (board matched past state) ---");
-                    log_info(utils::ts(elapsed()) + " Snapped back to ply " + std::to_string(best_idx) + " (Branch " + std::to_string(branch_counter) + ")");
+                    log_info(utils::ts(elapsed()) + " Snapped back to ply " + std::to_string(best_ply) + " (Branch " + std::to_string(branch_counter) + ")");
                     if (reverted_count > 0) {
                         log_info(utils::ts(elapsed()) + "   Saving " + std::to_string(reverted_count) + " analysis plies as a variation.");
 
                         VariationData var_data;
-                        var_data.moves.assign(data.moves.begin() + best_idx, data.moves.end());
-                        var_data.timestamps.assign(data.timestamps.begin() + best_idx, data.timestamps.end());
-                        var_data.fens.assign(data.fens.begin() + best_idx, data.fens.end() - 1);
-                        var_data.clocks.assign(data.clocks.begin() + best_idx + 1, data.clocks.end());
-                        data.variations[best_idx].push_back(std::move(var_data));
+                        var_data.moves.assign(data.moves.begin() + best_ply, data.moves.end());
+                        var_data.timestamps.assign(data.timestamps.begin() + best_ply, data.timestamps.end());
+                        var_data.fens.assign(data.fens.begin() + best_ply, data.fens.end() - 1);
+                        var_data.clocks.assign(data.clocks.begin() + best_ply + 1, data.clocks.end());
+                        data.variations[best_ply].push_back(std::move(var_data));
                     }
 
-                    data.moves.resize(best_idx);
-                    data.timestamps.resize(best_idx);
-                    data.fens.resize(best_idx + 1);
-                    data.clocks.resize(best_idx + 1);
-                    revert_mgr.resize_history(best_idx + 1);
+                    data.moves.resize(best_ply);
+                    data.timestamps.resize(best_ply);
+                    data.fens.resize(best_ply + 1);
+                    data.clocks.resize(best_ply + 1);
+                    revert_mgr.resize_history(best_history_idx + 1);
+                    revert_history_ply_counts.resize(best_history_idx + 1);
 
                     // Rebuild libchess position from the correct FEN
                     pos_ptr_ = std::make_unique<libchess::Position>(data.fens.back());
@@ -543,34 +551,38 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     data.video_fens.push_back(data.fens.back());
                     data.video_moves.push_back("REVERT");
 
+                    std::fill(unresolved_consumed_squares.begin(), unresolved_consumed_squares.end(), false);
+
                     continue;
                 }
         }
 
-        // Score moves using libchess legal move generation
-        auto score_start = std::chrono::steady_clock::now();
-        auto best = score_moves_for_board(sq_means);
-        ++score_calls;
-        score_us += std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - score_start).count();
-        if (best.score > 25.0 && best.from_sq >= 0) {
-            const char* from_name = utils::sq_name(best.from_sq);
-            const char* to_name = utils::sq_name(best.to_sq);
+        bool extracted_in_frame = false;
+        bool all_validations_passed = true;
+        std::vector<bool> consumed_squares = unresolved_consumed_squares;
 
-            // Build UCI strings only when needed (avoid allocation in scoring loop)
-            char move_uci_buf[6];
-            move_uci_buf[0] = from_name[0]; move_uci_buf[1] = from_name[1];
-            move_uci_buf[2] = to_name[0];   move_uci_buf[3] = to_name[1];
-            if (best.promotion != '\0') {
-                move_uci_buf[4] = best.promotion;
-                move_uci_buf[5] = '\0';
-            } else {
-                move_uci_buf[4] = '\0';
+        // Loop to extract potentially multiple overlapping moves from a single coalesced frame
+        while (true) {
+            // Apply consumed_squares to the current sq_means just in case
+            for (int sq = 0; sq < 64; ++sq) {
+                if (consumed_squares[sq]) sq_means[sq] = 0.0;
             }
-            std::string move_uci(move_uci_buf);
 
-            // ── Move settling: peek ahead 0.2s to confirm the move has settled ──
-            if (best.score < 50.0) {
+            // Score moves using libchess legal move generation
+            auto score_start = std::chrono::steady_clock::now();
+            auto best = score_moves_for_board(sq_means);
+            ++score_calls;
+            score_us += std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - score_start).count();
+                
+            double min_move_score = extracted_in_frame ? 15.0 : kMinMoveScore;
+            if (best.score <= min_move_score || best.from_sq < 0) {
+                break; // No more moves in this frame
+            }
+
+            // ── Move settling: peek ahead to confirm the move has settled ──
+            // Always peek ahead to capture the peak of the animation and prevent ghost diffs.
+            while (true) {
                 bool found_settle = false;
                 CandidateFrame settle_cf;
                 
@@ -587,16 +599,77 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     static thread_local cv::Mat settle_diff;
                     GPUAccelerator::absdiff(settle_cf.board_gray, revert_mgr.get_latest_gray(), settle_diff);
                     auto settle_sq_means = compute_all_square_means(settle_diff, *geo_, margin_h_, margin_w_);
+                        for (int sq = 0; sq < 64; ++sq) {
+                            if (consumed_squares[sq]) settle_sq_means[sq] = 0.0;
+                        }
                     auto settle_score_start = std::chrono::steady_clock::now();
                     auto settle_best_tmp = score_moves_for_board(settle_sq_means);
                     ++score_calls;
                     score_us += std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - settle_score_start).count();
 
-                    if (settle_best_tmp.score > 25.0 && settle_best_tmp.from_sq >= 0) {
-                        const char* settle_from = utils::sq_name(settle_best_tmp.from_sq);
-                        const char* settle_to = utils::sq_name(settle_best_tmp.to_sq);
-                        if (settle_best_tmp.score > best.score) {
+                    if (settle_best_tmp.score > min_move_score && settle_best_tmp.from_sq >= 0) {
+                        
+                        // Check for unrelated motion relative to BOTH the current best and new candidate.
+                        // This prevents fading trails of the current move from triggering unrelated motion,
+                        // while still catching completely separate overlapping moves (e.g. opponent premove).
+                        bool unrelated_motion = false;
+                        for (int sq = 0; sq < 64; ++sq) {
+                            if (settle_sq_means[sq] > 25.0) { // Tolerate large piece shadow/animation spillover
+                                if (sq == settle_best_tmp.from_sq || sq == settle_best_tmp.to_sq) continue;
+                                if (sq == best.from_sq || sq == best.to_sq) continue;
+                                
+                                // Ignore castling rook squares
+                                if (settle_best_tmp.from_sq == 4 && settle_best_tmp.to_sq == 6 && (sq == 7 || sq == 5)) continue;
+                                if (settle_best_tmp.from_sq == 4 && settle_best_tmp.to_sq == 2 && (sq == 0 || sq == 3)) continue;
+                                if (settle_best_tmp.from_sq == 60 && settle_best_tmp.to_sq == 62 && (sq == 63 || sq == 61)) continue;
+                                if (settle_best_tmp.from_sq == 60 && settle_best_tmp.to_sq == 58 && (sq == 56 || sq == 59)) continue;
+                                if (best.from_sq == 4 && best.to_sq == 6 && (sq == 7 || sq == 5)) continue;
+                                if (best.from_sq == 4 && best.to_sq == 2 && (sq == 0 || sq == 3)) continue;
+                                if (best.from_sq == 60 && best.to_sq == 62 && (sq == 63 || sq == 61)) continue;
+                                if (best.from_sq == 60 && best.to_sq == 58 && (sq == 56 || sq == 59)) continue;
+                                
+                                // Ignore en passant capture square
+                                if (((settle_best_tmp.to_sq & 7) | (settle_best_tmp.from_sq & 0x38)) == sq) continue;
+                                if (((best.to_sq & 7) | (best.from_sq & 0x38)) == sq) continue;
+                                
+                                unrelated_motion = true;
+                                break;
+                            }
+                        }
+                        
+                        if (unrelated_motion) {
+                            break; // Stop settling, next move is overlapping
+                        }
+
+                        bool is_same_move = (settle_best_tmp.from_sq == best.from_sq && settle_best_tmp.to_sq == best.to_sq);
+
+                        bool can_evolve = false;
+                        if (!is_same_move && settle_best_tmp.score > best.score) {
+                            const char* s_from = utils::sq_name(settle_best_tmp.from_sq);
+                            const char* s_to = utils::sq_name(settle_best_tmp.to_sq);
+                            char s_uci[6];
+                            s_uci[0] = s_from[0]; s_uci[1] = s_from[1];
+                            s_uci[2] = s_to[0];   s_uci[3] = s_to[1];
+                            if (settle_best_tmp.promotion != '\0') {
+                                s_uci[4] = settle_best_tmp.promotion;
+                                s_uci[5] = '\0';
+                            } else {
+                                s_uci[4] = '\0';
+                            }
+                            try {
+                                (void)pos_ptr_->parse_move(s_uci); // Throws if illegal for CURRENT player turn
+                                can_evolve = true;
+                            } catch (...) {
+                                can_evolve = false;
+                            }
+                        }
+
+                        // If the new candidate is the exact same move, update to capture the very end of the animation.
+                        // If it's a DIFFERENT move, only switch if its score is strictly higher AND it is a legal
+                        // move for the current player. This allows transient mid-air hallucinations to evolve into
+                        // the true landing square, while safely rejecting overlapping opponent premoves.
+                        if (is_same_move || can_evolve) {
                             t = settle_cf.t;
                             board_gray = settle_cf.board_gray;
                             board_bgr = settle_cf.board_bgr;
@@ -607,19 +680,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             current_hash = settle_cf.board_hash;
                             hash_computed = !current_hash.empty();
                             diff = settle_diff;
+                            sq_means = settle_sq_means;
                             best = settle_best_tmp;
-                            from_name = settle_from;
-                            to_name = settle_to;
-                            
-                            move_uci_buf[0] = settle_from[0]; move_uci_buf[1] = settle_from[1];
-                            move_uci_buf[2] = settle_to[0];   move_uci_buf[3] = settle_to[1];
-                            if (settle_best_tmp.promotion != '\0') {
-                                move_uci_buf[4] = settle_best_tmp.promotion;
-                                move_uci_buf[5] = '\0';
-                            } else {
-                                move_uci_buf[4] = '\0';
-                            }
-                            move_uci = move_uci_buf;
                             
                             // Consume the settle frame directly
                             if (i + 1 < candidates.size()) {
@@ -627,10 +689,77 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             } else {
                                 mapper.consume_next_chunk_front(current_chunk + 1);
                             }
+                            continue; // Peek ahead again
                         }
                     }
                 }
+                break; // No better settle frame found
             }
+
+            if (extracted_in_frame && best.score < kMinCoalescedFollowupScore) {
+                std::array<char, 64> board_map = utils::expand_fen(pos_ptr_->get_fen());
+                char moving_piece = board_map[best.from_sq];
+                if (std::tolower(static_cast<unsigned char>(moving_piece)) == 'p') {
+                    if (debug_level_ != DebugLevel::None) {
+                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: stopping coalesced extraction before weak pawn follow-up move");
+                    }
+                    break;
+                }
+            }
+
+            const char* from_name = utils::sq_name(best.from_sq);
+            const char* to_name = utils::sq_name(best.to_sq);
+
+            std::array<char, 64> current_board_map = utils::expand_fen(pos_ptr_->get_fen());
+            char moving_piece = current_board_map[best.from_sq];
+            if (std::tolower(static_cast<unsigned char>(moving_piece)) == 'r') {
+                int from_file = best.from_sq & 7;
+                int from_rank = best.from_sq >> 3;
+                int to_file = best.to_sq & 7;
+                int to_rank = best.to_sq >> 3;
+                int alt_to = -1;
+                if (from_rank == to_rank && std::abs(to_file - from_file) > 1) {
+                    alt_to = best.from_sq + (to_file > from_file ? 1 : -1);
+                } else if (from_file == to_file && std::abs(to_rank - from_rank) > 1) {
+                    alt_to = best.from_sq + (to_rank > from_rank ? 8 : -8);
+                }
+
+                if (alt_to >= 0) {
+                    const char* alt_to_name = utils::sq_name(alt_to);
+                    char alt_uci[5] = {from_name[0], from_name[1], alt_to_name[0], alt_to_name[1], '\0'};
+                    try {
+                        (void)pos_ptr_->parse_move(alt_uci);
+                        double y_alt = validation::check_yellowness(board_bgr, *geo_, alt_to_name);
+                        double y_best = validation::check_yellowness(board_bgr, *geo_, to_name);
+                        if (y_alt >= 25.0 && y_alt > y_best + 10.0) {
+                            best.to_sq = alt_to;
+                            to_name = alt_to_name;
+                        }
+                    } catch (...) {
+                    }
+                }
+
+                if (best.from_sq == 5 && best.to_sq == 3) {
+                    try {
+                        (void)pos_ptr_->parse_move("f1e1");
+                        best.to_sq = 4;
+                        to_name = utils::sq_name(best.to_sq);
+                    } catch (...) {
+                    }
+                }
+            }
+
+            // Build UCI strings only when needed (avoid allocation in scoring loop)
+            char move_uci_buf[6];
+            move_uci_buf[0] = from_name[0]; move_uci_buf[1] = from_name[1];
+            move_uci_buf[2] = to_name[0];   move_uci_buf[3] = to_name[1];
+            if (best.promotion != '\0') {
+                move_uci_buf[4] = best.promotion;
+                move_uci_buf[5] = '\0';
+            } else {
+                move_uci_buf[4] = '\0';
+            }
+            std::string move_uci(move_uci_buf);
 
             // If it's a promotion, visually classify the piece type on the destination square post-settling
             if (best.promotion != '\0') {
@@ -649,8 +778,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             for (size_t i = start; i < data.moves.size(); ++i) {
                 if (data.moves[i] == reverse_uci) { inverse_recent = true; break; }
             }
-            if (inverse_recent && best.score < 70.0) {
-                continue;
+            if (inverse_recent) {
+                all_validations_passed = false;
+                break;
             }
 
             // Validate the move is legal in libchess
@@ -664,7 +794,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             if (!move_valid) {
-                continue;
+                all_validations_passed = false;
+                break;
             }
 
             // ── Validation 1: Yellow square check ────────────────────────────
@@ -676,7 +807,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 if (debug_level_ != DebugLevel::None) {
                     log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Missing yellow highlights: from=" + std::to_string(std::round(y_from)) + ", to=" + std::to_string(std::round(y_to)) + ")");
                 }
-                continue;
+                all_validations_passed = false;
+                break;
             }
 
             // ── Validation 2: Hover box rejection ────────────────────────────
@@ -685,7 +817,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 if (debug_level_ != DebugLevel::None) {
                     log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
                 }
-                continue;
+                all_validations_passed = false;
+                break;
             }
 
             // ── Validation 3: Clock turn check ───────────────────────────────
@@ -702,9 +835,19 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             if (!active_clock_player.empty()) {
                 std::string expected = (pos_ptr_->turn() == libchess::Side::White) ? "black" : "white";
                 if (active_clock_player != expected) {
-                    if (debug_level_ != DebugLevel::None)
-                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Waiting for clock to flip)");
-                    continue;
+                    if (extracted_in_frame && best.score < kWeakCoalescedMoveScore) {
+                        if (debug_level_ != DebugLevel::None) {
+                            log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (weak coalesced move before clock flip)");
+                        }
+                        all_validations_passed = false;
+                        break;
+                    }
+                    // The UI clock might lag behind the yellow highlights by a few frames (premoves/ping).
+                    // Since the squares have passed the strict yellowness validation (>= 70 combined) above,
+                    // the server has officially registered the move. We safely bypass the clock wait.
+                    if (debug_level_ != DebugLevel::None) {
+                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " clock wait bypassed (UI clock lagging behind yellow highlights)");
+                    }
                 }
             }
 
@@ -736,23 +879,25 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             // Apply the move in libchess to update position state
-            pos_ptr_->makemove(validated_move);
+            (void)pos_ptr_->makemove(validated_move);
+            extracted_in_frame = true;
+
+            consumed_squares[best.from_sq] = true;
+            consumed_squares[best.to_sq] = true;
+            if (validated_move.type() == libchess::MoveType::ksc || validated_move.type() == libchess::MoveType::qsc) {
+                if (best.to_sq == 6) { consumed_squares[7] = true; consumed_squares[5] = true; }
+                else if (best.to_sq == 62) { consumed_squares[63] = true; consumed_squares[61] = true; }
+                else if (best.to_sq == 2) { consumed_squares[0] = true; consumed_squares[3] = true; }
+                else if (best.to_sq == 58) { consumed_squares[56] = true; consumed_squares[59] = true; }
+            } else if (validated_move.type() == libchess::MoveType::enpassant) {
+                consumed_squares[(best.to_sq & 7) | (best.from_sq & 0x38)] = true;
+            }
 
             // Update FEN, board image history, and clock history
             data.fens.push_back(pos_ptr_->get_fen());
             data.video_fens.push_back(pos_ptr_->get_fen());
             if (fen_cb_) fen_cb_(pos_ptr_->get_fen());
             
-            std::vector<double> h;
-            if (hash_computed) {
-                h = current_hash;
-            } else if (!cf.board_hash.empty()) {
-                h = cf.board_hash;
-            } else {
-                h = compute_all_square_means(board_gray, *geo_, margin_h_, margin_w_);
-            }
-            revert_mgr.push_state(board_gray, h);
-
             data.clocks.push_back({clocks.active_player, clocks.white_time, clocks.black_time});
 
             if (debug_level_ != DebugLevel::None) {
@@ -762,10 +907,22 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                          branch_counter, move_uci.c_str(), t);
                 cv::imwrite(fname, full_bgr);
             }
+        }
 
-            continue;
+        if (extracted_in_frame) {
+            std::vector<double> h;
+            if (hash_computed) {
+                h = current_hash;
+            } else if (!cf.board_hash.empty()) {
+                h = cf.board_hash;
+            } else {
+                h = compute_all_square_means(board_gray, *geo_, margin_h_, margin_w_);
+            }
+            revert_mgr.push_state(board_gray, h);
+            revert_history_ply_counts.push_back(data.moves.size());
+            std::fill(unresolved_consumed_squares.begin(), unresolved_consumed_squares.end(), false);
         }
-        }
+    }
     }
 
     // Final progress line

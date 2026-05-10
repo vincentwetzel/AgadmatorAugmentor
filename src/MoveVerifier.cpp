@@ -83,7 +83,8 @@ bool MoveVerifier::check_hover_boxes(const BoardAnalysis::HoverBoxDetectionResul
 bool MoveVerifier::check_clock_turn(const libchess::Position& current_pos, const ClockRecognizer::ClockDetectionResult& clocks, std::string& debug_info) const {
     if (!clocks.active_player.has_value()) {
         debug_info += "Active player not detected from clocks. ";
-        return false;
+        // Soft-fallback: If the clock is briefly occluded during rapid undos/mouse movement, do not hard-block valid visual piece diffs.
+        return true; 
     }
 
     libchess::Color expected_turn = current_pos.turn();

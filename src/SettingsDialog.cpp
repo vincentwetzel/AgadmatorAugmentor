@@ -117,6 +117,32 @@ void SettingsDialog::setupUi() {
     auto* generalTab = new QWidget();
     auto* generalLayout = new QVBoxLayout(generalTab);
 
+    auto* inputDirGroup = new QGroupBox("Default Video Folder");
+    inputDirGroup->setToolTip("Choose the default folder that opens when you click Add Video(s).");
+    auto* inputDirLayout = new QHBoxLayout(inputDirGroup);
+
+    auto* defaultVideoDirEdit = new QLineEdit();
+    defaultVideoDirEdit->setObjectName("defaultVideoDirEdit");
+    defaultVideoDirEdit->setToolTip("Leave blank to use the system home folder.");
+    inputDirLayout->addWidget(defaultVideoDirEdit);
+
+    auto* defaultVideoDirBtn = new QPushButton("Browse...");
+    defaultVideoDirBtn->setObjectName("defaultVideoDirBtn");
+    defaultVideoDirBtn->setToolTip("Choose the default folder for opening videos.");
+    inputDirLayout->addWidget(defaultVideoDirBtn);
+
+    connect(defaultVideoDirEdit, &QLineEdit::textChanged, this, [this]() { saveSettings(); });
+    connect(defaultVideoDirBtn, &QPushButton::clicked, this, [this, defaultVideoDirEdit]() {
+        QString currentDir = defaultVideoDirEdit->text();
+        if (currentDir.isEmpty()) currentDir = QDir::homePath();
+        QString dir = QFileDialog::getExistingDirectory(this, "Select Default Video Folder", currentDir);
+        if (!dir.isEmpty()) {
+            defaultVideoDirEdit->setText(dir);
+        }
+    });
+
+    generalLayout->addWidget(inputDirGroup);
+
     auto* outputDirGroup = new QGroupBox("Where to Save Results");
     outputDirGroup->setToolTip("Choose where PGN files and analysis videos will be saved.");
     auto* outputDirLayout = new QVBoxLayout(outputDirGroup);
@@ -762,6 +788,7 @@ void SettingsDialog::loadSettings() {
     if (auto* ss = findChild<QRadioButton*>("sameAsSourceRadio")) ss->setChecked(sameAsSource);
     if (auto* cd = findChild<QRadioButton*>("customDirRadio")) cd->setChecked(!sameAsSource);
     if (auto* e = findChild<QLineEdit*>("customDirEdit")) e->setText(settings.value("outCustomDir", "").toString());
+    if (auto* e = findChild<QLineEdit*>("defaultVideoDirEdit")) e->setText(settings.value("defaultVideoDir", "").toString());
 
     if (auto* vc = findChild<QComboBox*>("videoCodecComboBox")) {
         const QString videoCodec = canonicalVideoCodec(settings.value("videoCodec", "libx264").toString());
@@ -849,6 +876,7 @@ void SettingsDialog::saveSettings() {
 
     if (auto* ss = findChild<QRadioButton*>("sameAsSourceRadio")) settings.setValue("outSameAsSource", ss->isChecked());
     if (auto* cd = findChild<QLineEdit*>("customDirEdit")) settings.setValue("outCustomDir", cd->text());
+    if (auto* e = findChild<QLineEdit*>("defaultVideoDirEdit")) settings.setValue("defaultVideoDir", e->text());
     if (auto* vc = findChild<QComboBox*>("videoCodecComboBox")) settings.setValue("videoCodec", vc->currentData().toString());
     if (auto* ac = findChild<QComboBox*>("audioCodecComboBox")) settings.setValue("audioCodec", ac->currentData().toString());
     if (auto* ec = findChild<QComboBox*>("extensionComboBox")) settings.setValue("videoExtension", ec->currentText());

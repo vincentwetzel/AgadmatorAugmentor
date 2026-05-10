@@ -34,8 +34,8 @@ DraggableOverlay::DraggableOverlay(const QPixmap& pixmap, const QString& id, QGr
 }
 
 DraggableOverlay::ResizeHandle DraggableOverlay::getHandleAt(const QPointF& pos) const {
-    qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
-    qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+    qreal sx = (id_ == "EvalBar") ? transform().m11() : scale();
+    qreal sy = (id_ == "EvalBar") ? transform().m22() : scale();
     if (sx == 0.0) sx = 1.0;
     if (sy == 0.0) sy = 1.0;
 
@@ -95,8 +95,8 @@ void DraggableOverlay::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         qreal origH = boundingRect().height();
         
         QPointF currentPos = pos();
-        qreal scaleX = (id_ == "EvalBar") ? transform().m11() : currentScale_;
-        qreal scaleY = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+        qreal scaleX = (id_ == "EvalBar") ? transform().m11() : scale();
+        qreal scaleY = (id_ == "EvalBar") ? transform().m22() : scale();
         if (scaleX == 0.0) scaleX = 1.0;
         if (scaleY == 0.0) scaleY = 1.0;
 
@@ -164,7 +164,6 @@ void DraggableOverlay::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         if (id_ == "EvalBar") {
             setTransform(QTransform::fromScale(newScaleX, newScaleY));
         } else {
-            currentScale_ = newScaleX;
             setScale(newScaleX);
         }
         setPos(newPos);
@@ -188,18 +187,18 @@ void DraggableOverlay::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
 
 void DraggableOverlay::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        currentScale_ = 1.0;
+        qreal videoScaleRatio = videoBounds_.isValid() ? (videoBounds_.height() / 1080.0) : 1.0;
         if (id_ == "EvalBar") {
             qreal visualSy = videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0;
-            setTransform(QTransform::fromScale(1.0, visualSy));
+            setTransform(QTransform::fromScale(videoScaleRatio, visualSy));
         } else {
-            setScale(currentScale_);
+            setScale(videoScaleRatio);
         }
         
         // Snap back into bounds if resetting the scale pushed it outside the video area
         if (videoBounds_.isValid()) {
-            qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
-            qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+            qreal sx = (id_ == "EvalBar") ? transform().m11() : scale();
+            qreal sy = (id_ == "EvalBar") ? transform().m22() : scale();
             qreal maxX = std::max(0.0, videoBounds_.width() - boundingRect().width() * sx);
             qreal maxY = std::max(0.0, videoBounds_.height() - boundingRect().height() * sy);
             setPos(std::clamp(pos().x(), 0.0, maxX), std::clamp(pos().y(), 0.0, maxY));
@@ -217,26 +216,28 @@ void DraggableOverlay::setVideoBounds(const QSizeF& bounds) {
 void DraggableOverlay::updateFromConfig(const OverlayElement& elem) {
     setVisible(elem.enabled);
     
-    qreal scaleY = 1.0;
+    qreal videoScaleRatio = videoBounds_.isValid() ? (videoBounds_.height() / 1080.0) : 1.0;
+    qreal visualSx = 1.0;
+    qreal visualSy = 1.0;
+    
     if (id_ == "EvalBar") {
         double encoded = elem.scale;
         double sx = std::round(encoded * 100.0) / 100.0;
         double sy = std::round((encoded - sx) * 10000.0 * 100.0) / 100.0;
         if (sy <= 0.0) sy = 1.0;
         
-        currentScale_ = sx;
-        qreal visualSy = sy * (videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0);
-        scaleY = visualSy;
-        setTransform(QTransform::fromScale(sx, visualSy));
+        visualSx = sx * videoScaleRatio;
+        visualSy = sy * (videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0);
+        setTransform(QTransform::fromScale(visualSx, visualSy));
     } else {
-        currentScale_ = elem.scale;
-        setScale(currentScale_);
-        scaleY = currentScale_;
+        visualSx = elem.scale * videoScaleRatio;
+        visualSy = visualSx;
+        setScale(visualSx);
     }
     
     if (videoBounds_.isValid()) {
-        qreal availW = videoBounds_.width() - boundingRect().width() * currentScale_;
-        qreal availH = videoBounds_.height() - boundingRect().height() * scaleY;
+        qreal availW = videoBounds_.width() - boundingRect().width() * visualSx;
+        qreal availH = videoBounds_.height() - boundingRect().height() * visualSy;
         setPos(elem.x_percent * std::max(0.0, availW), elem.y_percent * std::max(0.0, availH));
     }
 }
@@ -244,17 +245,18 @@ void DraggableOverlay::updateFromConfig(const OverlayElement& elem) {
 void DraggableOverlay::populateConfig(OverlayElement& elem) const {
     elem.enabled = isVisible();
     
-    qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
-    qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+    qreal videoScaleRatio = videoBounds_.isValid() ? (videoBounds_.height() / 1080.0) : 1.0;
+    qreal sx = (id_ == "EvalBar") ? transform().m11() : scale();
+    qreal sy = (id_ == "EvalBar") ? transform().m22() : scale();
     
     if (id_ == "EvalBar") {
         double logicalSy = sy / (videoBounds_.isValid() ? (videoBounds_.height() / boundingRect().height()) : 1.0);
-        double dsx = std::round(sx * 100.0) / 100.0;
+        double dsx = std::round((sx / videoScaleRatio) * 100.0) / 100.0;
         double dsy = std::round(logicalSy * 100.0) / 100.0;
         // Encode both X and Y into the single scale double (X.XXYYYY)
         elem.scale = dsx + (dsy / 10000.0);
     } else {
-        elem.scale = currentScale_;
+        elem.scale = sx / videoScaleRatio;
     }
     
     if (videoBounds_.isValid()) {
@@ -287,8 +289,8 @@ void DraggableOverlay::paint(QPainter* painter, const QStyleOptionGraphicsItem* 
     QGraphicsPixmapItem::paint(painter, option, widget);
     
     if (isSelected()) {
-        qreal sx = (id_ == "EvalBar") ? transform().m11() : currentScale_;
-        qreal sy = (id_ == "EvalBar") ? transform().m22() : currentScale_;
+        qreal sx = (id_ == "EvalBar") ? transform().m11() : scale();
+        qreal sy = (id_ == "EvalBar") ? transform().m22() : scale();
         if (sx == 0.0) sx = 1.0;
         if (sy == 0.0) sy = 1.0;
 

@@ -156,20 +156,20 @@ void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& cloc
         pure_uci = uci_move_str.substr(0, uci_len);
         annotation = uci_move_str.substr(uci_len);
 
-    try {
+        try {
             move = current_pos.parse_move(pure_uci);
             san_move = build_san(current_pos, move, pure_uci) + annotation;
-        current_pos.makemove(move);
-    } catch (const std::exception& e) {
+            current_pos.makemove(move);
+        } catch (const std::exception& e) {
             std::cerr << "Warning: Failed to parse or convert move " << pure_uci << ": " << e.what() << std::endl;
-        san_move = uci_move_str; // Fallback to UCI on error
-    }
+            san_move = uci_move_str; // Fallback to UCI on error
+        }
 
-    // The PgnPly struct members are ordered {san, clock, evaluation_comment}.
-    // The function parameters are (move_str, clock, eval_comment), so a direct mapping is correct.
-    // The first parameter is now the converted SAN move.
-    PgnPly ply{san_move, clock, eval_comment, {}};
-    active_lines_.back()->push_back(ply);
+        // The PgnPly struct members are ordered {san, clock, evaluation_comment}.
+        // The function parameters are (move_str, clock, eval_comment), so a direct mapping is correct.
+        // The first parameter is now the converted SAN move.
+        PgnPly ply{san_move, clock, eval_comment, {}};
+        active_lines_.back()->push_back(ply);
 }
 
 void PgnWriter::push_variation() {

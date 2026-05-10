@@ -9,6 +9,7 @@ build_zero_copy/
 build_codex*
 out/
 temp/
+tmp/
 bin/
 CMakeCache.txt
 CMakeFiles/

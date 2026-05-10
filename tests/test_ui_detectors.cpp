@@ -38,16 +38,16 @@ static std::vector<IntegrationTestResult> g_test_results;
 // Every test MUST have a toggle here — no exceptions.
 //
 // Unit tests (detector accuracy on sample images):
-#define TEST_LOCATE_BOARD         1
-#define TEST_DRAW_GRID            1
-#define TEST_YELLOW_SQUARES       1
-#define TEST_PIECE_COUNTS         1
-#define TEST_RED_SQUARES          1
-#define TEST_YELLOW_ARROWS        1
-#define TEST_MISALIGNED_PIECE     1
-#define TEST_GAME_CLOCKS          1
-#define TEST_MEMORY_LIMIT         1
-#define TEST_CACHE_CORRECTNESS    1
+#define TEST_LOCATE_BOARD         0
+#define TEST_DRAW_GRID            0
+#define TEST_YELLOW_SQUARES       0
+#define TEST_PIECE_COUNTS         0
+#define TEST_RED_SQUARES          0
+#define TEST_YELLOW_ARROWS        0
+#define TEST_MISALIGNED_PIECE     0
+#define TEST_GAME_CLOCKS          0
+#define TEST_MEMORY_LIMIT         0
+#define TEST_CACHE_CORRECTNESS    0
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   1

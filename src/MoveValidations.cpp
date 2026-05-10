@@ -38,7 +38,10 @@ double check_yellowness(const cv::Mat& board_bgr, const BoardGeometry& geo, cons
         for (int r = 0; r < patch.rows; ++r) {
             const auto* ptr = patch.ptr<cv::Vec3b>(r);
             for (int pc = 0; pc < patch.cols; ++pc) {
-                sum_y += (ptr[pc][2] + ptr[pc][1]) / 2.0 - ptr[pc][0];
+                double b = ptr[pc][0];
+                double g = ptr[pc][1];
+                double red = ptr[pc][2];
+                sum_y += std::min(red, g) - b;
             }
         }
         y_score += sum_y / (patch.rows * patch.cols);
