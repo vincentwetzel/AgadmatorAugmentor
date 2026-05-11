@@ -95,14 +95,17 @@ bool VideoExportHelper::exportAll(const ProcessingSettings& settings,
         if (!generateSubtitles(settings, gameData, subtitlePath)) return false;
     }
 
+    bool success = true;
     if (settings.generateAnalysisVideo) {
         emit logMessage("Generating Analysis Video...");
-        if (!generateVideo(settings, gameData, sfResults, lichessResults, geo, outPath, subtitlePath, cancelFlag)) return false;
-    } else if (settings.generateSubtitles) {
-        QFile::remove(subtitlePath); // Cleanup stray temp subtitle files if video generation was bypassed
+        success = generateVideo(settings, gameData, sfResults, lichessResults, geo, outPath, subtitlePath, cancelFlag);
     }
 
-    return true;
+    if (settings.generateSubtitles && !subtitlePath.isEmpty()) {
+        QFile::remove(subtitlePath); // Cleanup the temporary subtitle file once embedded
+    }
+
+    return success;
 }
 
 bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const GameData& gameData, const StockfishAnalysisResults& sfResults, const LichessSyncResults& lichessResults) {
@@ -174,17 +177,93 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
 }
 
 bool VideoExportHelper::generateSubtitles(const ProcessingSettings& settings, const GameData& gameData, const QString& subtitlePath) {
-    // Implementation similar to original inside Process
     std::ofstream srtFile(subtitlePath.toStdString());
-    if (!srtFile.is_open()) { emit error(QString("Failed to save subtitles to: %1").arg(subtitlePath)); return false; }
-    // Omitted logic body for brevity in this display, but matches the implementation exactly
+    if (!srtFile.is_open()) {
+        emit error(QString("Failed to save subtitles to: %1").arg(subtitlePath));
+        return false;
+    }
+
+    int sub_index = 1;
+    for (size_t i = 0; i < gameData.video_timestamps.size(); ++i) {
+        if (gameData.video_moves[i] == "REVERT") continue;
+
+        double start_t = gameData.video_timestamps[i];
+        double end_t = start_t + 5.0; // Default 5 seconds duration
+
+        // Cap the subtitle duration when the next move happens
+        for (size_t j = i + 1; j < gameData.video_timestamps.size(); ++j) {
+            if (gameData.video_moves[j] != "REVERT") {
+                end_t = std::min(start_t + 5.0, gameData.video_timestamps[j]);
+                break;
+            }
+        }
+
+        std::string fen = gameData.video_fens[i];
+        bool is_white = (fen.find(" w ") != std::string::npos);
+        
+        int full_move = 1;
+        size_t last_space = fen.find_last_of(' ');
+        if (last_space != std::string::npos) {
+            try { full_move = std::stoi(fen.substr(last_space + 1)); } catch (...) {}
+        }
+        
+        int ply_index = (full_move - 1) * 2 + (is_white ? 0 : 1);
+        std::string san_move = ChessFenUtils::uci_to_san_line(gameData.video_moves[i], fen);
+
+        srtFile << sub_index++ << "\n";
+        srtFile << Utils::format_srt_timestamp(start_t) << " --> " << Utils::format_srt_timestamp(end_t) << "\n";
+        srtFile << Utils::move_to_subtitle_text(ply_index, san_move) << "\n\n";
+    }
+
+    // FFmpeg fails if the SRT file is completely empty
+    if (sub_index == 1) {
+        srtFile << "1\n";
+        srtFile << "00:00:00,000 --> 00:00:01,000\n";
+        srtFile << "Analysis Started\n\n";
+    }
+
     return true; 
 }
 
 bool VideoExportHelper::generateVideo(const ProcessingSettings& settings, const GameData& gameData, const StockfishAnalysisResults& sfResults, const LichessSyncResults& lichessResults, const BoardGeometry& geo, const QString& outPath, const QString& subtitlePath, std::atomic<bool>* cancelFlag) {
-    // Matches Original generate_analysis_video logic exactly
-    // (Populated accurately using Utils, AnalysisVideoGenerator, etc.)
-    return true;
+    AnalysisVideoGenerator generator(settings.assetsPath.toStdString());
+    
+    bool has_error = false;
+    auto progress_cb = [this, &has_error](int percent, const std::string& msg) {
+        if (percent >= 0) {
+            emit progressUpdated(percent);
+            if (!msg.empty()) {
+                emit logMessage(QString::fromStdString(msg));
+            }
+        } else {
+            has_error = true;
+            emit error(QString::fromStdString(msg));
+        }
+    };
+
+    QSettings q_settings_vid;
+    QString vCodec = q_settings_vid.value("videoCodec", "libx264").toString();
+    QString aCodec = q_settings_vid.value("audioCodec", "copy").toString();
+    QString resolution = q_settings_vid.value("videoResolution", "Source Resolution").toString();
+    QString crf = q_settings_vid.value("videoQuality", "23").toString();
+    
+    QString fullOutPath = outPath + "|" + vCodec + "|" + aCodec + "|" + resolution + "|" + crf;
+
+    bool success = generator.generate_analysis_video(
+        settings.videoPath.toStdString(),
+        fullOutPath.toStdString(),
+        geo,
+        gameData.video_fens,
+        gameData.video_timestamps,
+        sfResults.videoResults,
+        lichessResults.videoOpeningNames,
+        settings.overlayConfig.arrowThicknessPct, // arrow thickness pct
+        settings.overlayConfig,
+        cancelFlag,
+        progress_cb
+    );
+
+    return success && !has_error;
 }
 
 } // namespace cta

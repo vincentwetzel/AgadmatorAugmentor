@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Opening Metadata:** Added a background Lichess Explorer fetcher with cached ECO/opening lookups for verified video FENs.
 - **Opening Overlays:** Added an optional opening-name overlay to analysis videos and the screenshot-based overlay template editor.
 - **Performance Estimate Headers:** PGN export can now include estimated Elo, ACPL, and accuracy headers derived from move-quality centipawn loss.
+- **Arrow Thickness Templates:** Overlay templates can now persist and edit the base thickness percentage for engine arrows.
 
 ### Performance
 
@@ -40,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Elapsed Log Prefixes:** GUI and headless logs now add elapsed-time prefixes while preserving existing extractor timestamps.
 - **Test Runner:** `tests/run_tests.py` now configures the build tree with `BUILD_TESTS=ON` before building and running `test_extract_moves`.
 - **FFmpeg Filter Graph Organization:** Moved `FFmpegFilterGraph` into `src/` and expanded it to track CPU/GPU stream state for analysis-video composition.
+- **Source Video Cleanup:** The optional post-processing cleanup now moves completed source videos to the trash instead of permanently deleting them.
 
 ### Refactored
 
@@ -54,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **FFmpeg Error Reporting:** Analysis video composition now captures the tail of FFmpeg output and reports Windows process-launch failures with the underlying system error.
 - **Analysis Video Failure Flow:** Processing now stops after PGN save or analysis-video generation failures instead of continuing as though the batch completed successfully.
+- **Export Helper Video Path:** Restored analysis-video generation and synced subtitle writing inside `VideoExportHelper`, including cleanup of temporary SRT files after export.
 - **Analysis Video Composition:** CUDA filter paths are now disabled for alpha-overlay cases that require CPU-compatible formats, while final video mapping explicitly targets the composed output stream and preserves optional source audio.
 - **CLI Input Validation:** Headless positional input now rejects non-video extensions before processing begins.
 - **Move Scoring:** Fixed a false positive where normal rook moves (e.g., `Rc1`) were misidentified as castling (`O-O-O`) due to visual noise accumulation on the king's squares. Applied a baseline penalty to multi-square moves to ensure all involved squares actually changed.

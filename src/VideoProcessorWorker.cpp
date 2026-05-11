@@ -74,9 +74,9 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         }
 
         VideoExportHelper exportHelper;
-        connect(&exportHelper, &VideoExportHelper::logMessage, this, &VideoProcessorWorker::logMessage);
-        connect(&exportHelper, &VideoExportHelper::progressUpdated, this, &VideoProcessorWorker::progressUpdated);
-        connect(&exportHelper, &VideoExportHelper::error, this, &VideoProcessorWorker::error);
+        connect(&exportHelper, &VideoExportHelper::logMessage, this, &VideoProcessorWorker::logMessage, Qt::DirectConnection);
+        connect(&exportHelper, &VideoExportHelper::progressUpdated, this, &VideoProcessorWorker::progressUpdated, Qt::DirectConnection);
+        connect(&exportHelper, &VideoExportHelper::error, this, &VideoProcessorWorker::error, Qt::DirectConnection);
 
         exportHelper.verifyEnvironment(settings, runStockfishAnalysis);
 
@@ -103,7 +103,7 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         });
 
         LichessSyncHelper lichessHelper;
-        connect(&lichessHelper, &LichessSyncHelper::logMessage, this, &VideoProcessorWorker::logMessage);
+        connect(&lichessHelper, &LichessSyncHelper::logMessage, this, &VideoProcessorWorker::logMessage, Qt::DirectConnection);
         
         extractor.set_fen_detected_callback(lichessHelper.getFenCallback());
 
@@ -121,8 +121,8 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
 
         // Step 2: Optional Stockfish analysis (decoupled from PGN generation)
         StockfishAnalysisHelper sfHelper(settings, gameData, cancelFlag);
-        connect(&sfHelper, &StockfishAnalysisHelper::logMessage, this, &VideoProcessorWorker::logMessage);
-        connect(&sfHelper, &StockfishAnalysisHelper::progressUpdated, this, &VideoProcessorWorker::progressUpdated);
+        connect(&sfHelper, &StockfishAnalysisHelper::logMessage, this, &VideoProcessorWorker::logMessage, Qt::DirectConnection);
+        connect(&sfHelper, &StockfishAnalysisHelper::progressUpdated, this, &VideoProcessorWorker::progressUpdated, Qt::DirectConnection);
         
         if (runStockfishAnalysis) {
             if (!sfHelper.runAnalysis()) {

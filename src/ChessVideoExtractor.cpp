@@ -317,7 +317,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         if (progress_callback_) {
             progress_callback_(percent, msg);
         } else {
-            std::cout << msg << "\n";
+            std::cout << msg << std::endl;
         }
     };
 
@@ -966,7 +966,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     // Final progress line
     if (last_progress_t >= 0) {
-        if (!progress_callback_) std::cout << "\n";
+        if (!progress_callback_) std::cout << std::endl;
     }
 
     std::ostringstream perf_ss;

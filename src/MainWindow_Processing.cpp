@@ -195,10 +195,10 @@ void MainWindow::processingFinished() {
         if (settings.value("removeOriginalVideo", false).toBool()) {
             QFile videoFile(finishedVideo);
             if (videoFile.exists()) {
-                if (videoFile.remove()) {
-                    appendLog("Deleted original video: " + finishedVideo);
+                if (videoFile.moveToTrash()) {
+                    appendLog("Moved original video to trash: " + finishedVideo);
                 } else {
-                    appendLog("Warning: Failed to delete original video: " + finishedVideo);
+                    appendLog("Warning: Failed to move original video to trash: " + finishedVideo);
                 }
             }
         }

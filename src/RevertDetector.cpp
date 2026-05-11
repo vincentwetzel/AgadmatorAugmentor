@@ -101,7 +101,7 @@ int RevertDetector::detect_revert(const cv::Mat& current_board_gray, double curr
         int moves_rolled_back = (history_.size() - 1) - best_match_idx;
         if (moves_rolled_back > 0) {
             std::cout << "Revert detected! Rolling back " << moves_rolled_back << " moves to ply "
-                      << best_match_idx + 1 << " (timestamp: " << history_[best_match_idx].timestamp << "s, diff: " << min_full_diff << ")\n";
+                      << best_match_idx + 1 << " (timestamp: " << history_[best_match_idx].timestamp << "s, diff: " << min_full_diff << ")" << std::endl;
 
             current_pos = history_[best_match_idx].position;
             move_history.resize(best_match_idx);

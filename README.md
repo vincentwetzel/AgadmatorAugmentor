@@ -20,7 +20,7 @@ Advanced extraction tuning is available through environment variables for benchm
 - **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
 - **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos.
-- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, and engine arrows into an annotated MP4.
+- **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, configurable engine arrows, and optional move subtitles into an annotated MP4.
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
@@ -91,7 +91,7 @@ Multiple videos can be passed as a semicolon-separated list:
 - Each queued item is auto-matched against the template name or alternative keywords using the video filename.
 - You can override the template per queue item before processing starts.
 - The selected template is snapshotted onto the queue item right before launch, so mixed-channel batches keep the intended overlay layout per video.
-- Use **Manage Templates** to load a reference screenshot, drag/resize overlays, toggle opening text, and choose whether engine arrows render on the analysis board, main board, both, or neither.
+- Use **Manage Templates** to load a reference screenshot, drag/resize overlays, toggle opening text, choose whether engine arrows render on the analysis board, main board, both, or neither, and tune the base arrow thickness.
 
 Template JSON files and reference screenshots live in `%APPDATA%\ChessTubeAnalyzer\templates`. Bundled defaults are copied there automatically on first run.
 
@@ -181,7 +181,7 @@ ChessTubeAnalyzer/
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
-9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
+9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg, embeds temporary move subtitles when requested, then removes the temporary SRT file.
 
 ## Testing
 

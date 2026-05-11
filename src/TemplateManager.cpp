@@ -61,6 +61,7 @@ OverlayTemplate parseTemplateJson(const nlohmann::json& j, const QString& defaul
         tpl.config.openingText.scale = cfg.value("openingTextScale", 1.0);
 
         tpl.config.arrowsTarget = normalizeArrowsTarget(cfg.value("arrowsTarget", "Analysis Board"));
+        tpl.config.arrowThicknessPct = cfg.value("arrowThicknessPct", 15);
     }
     return tpl;
 }
@@ -154,6 +155,7 @@ OverlayTemplate TemplateManager::getFallbackTemplate() const {
     safe.config.board.y_percent = 0.0;
     safe.config.board.scale = 0.3;
     safe.config.arrowsTarget = "Analysis Board";
+    safe.config.arrowThicknessPct = 15;
     return safe;
 }
 
@@ -247,6 +249,7 @@ bool TemplateManager::saveTemplate(const OverlayTemplate& tpl, QString* errorMes
     cfg["openingTextY"] = tpl.config.openingText.y_percent;
     cfg["openingTextScale"] = tpl.config.openingText.scale;
 
+    cfg["arrowThicknessPct"] = tpl.config.arrowThicknessPct;
     j["config"] = cfg;
 
     QString filePath = QDir(appDataTemplateDir_).absoluteFilePath(tpl.id + ".json");
@@ -329,6 +332,7 @@ QVariantMap overlayConfigToVariantMap(const VideoOverlayConfig& config) {
     map.insert("openingY", config.openingText.y_percent);
     map.insert("openingScale", config.openingText.scale);
     map.insert("arrowsTarget", QString::fromStdString(config.arrowsTarget));
+    map.insert("arrowThicknessPct", config.arrowThicknessPct);
     return map;
 }
 
@@ -354,6 +358,7 @@ VideoOverlayConfig overlayConfigFromVariantMap(const QVariant& value) {
     config.openingText.y_percent = map.value("openingY", config.openingText.y_percent).toDouble();
     config.openingText.scale = map.value("openingScale", config.openingText.scale).toDouble();
     config.arrowsTarget = map.value("arrowsTarget", QString::fromStdString(config.arrowsTarget)).toString().toStdString();
+    config.arrowThicknessPct = map.value("arrowThicknessPct", 15).toInt();
     return config;
 }
 

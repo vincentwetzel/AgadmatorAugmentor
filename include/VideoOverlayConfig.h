@@ -17,6 +17,7 @@ struct VideoOverlayConfig {
     OverlayElement pvText = {true, 0.5, 0.95, 1.0};     // Default: Bottom center
     OverlayElement openingText = {false, 0.5, 0.05, 1.0}; // Default: Top center, 100% scale
     std::string arrowsTarget = "Analysis Board";
+    int arrowThicknessPct = 15;
 };
 
 } // namespace cta

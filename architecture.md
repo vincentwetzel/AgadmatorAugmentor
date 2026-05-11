@@ -106,7 +106,7 @@ When enabled, `VideoExportHelper` also writes a synced SRT subtitle file beside 
 
 During extraction, verified video FENs can also be passed to `OpeningFetcher`, which performs a background Lichess Explorer lookup on Windows through WinHTTP. Responses are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`; lookup stops once the game reaches a likely unique position, so common opening names can be added without blocking the visual reducer.
 
-The PGN is saved alongside the source video or in a user-defined custom directory. A GUI cleanup option can delete the source video after a queue item finishes successfully; failed and cancelled items keep the original file.
+The PGN is saved alongside the source video or in a user-defined custom directory. A GUI cleanup option can move the source video to the trash after a queue item finishes successfully; failed and cancelled items keep the original file.
 
 ## 6. Overlay Templates & Layout Model
 
@@ -114,7 +114,7 @@ Analysis-video layout is driven by a template-backed configuration model rather 
 
 - **Data Model:** `VideoOverlayConfig` contains four independently configurable `OverlayElement`s: `board`, `evalBar`, `pvText`, and `openingText`.
 - **Per-Element Controls:** Each element stores `enabled`, `x_percent`, `y_percent`, and `scale`. For elements requiring independent X and Y scaling without changing legacy data structures (like the Evaluation Bar), the `scale` float is mathematically encoded to store both dimensions (e.g., `X.XXYYYY`).
-- **Arrow Targeting:** `VideoOverlayConfig` also stores `arrowsTarget`, allowing engine arrows to render on the generated analysis board, the original board in the video, both, or neither.
+- **Arrow Targeting:** `VideoOverlayConfig` stores `arrowsTarget` and `arrowThicknessPct`, allowing engine arrows to render on the generated analysis board, the original board in the video, both, or neither, with a template-specific base thickness.
 - **Template Persistence:** `TemplateManager` copies bundled template JSON files into `%APPDATA%\ChessTubeAnalyzer\templates` on first run, then loads and saves user edits from there.
 - **Auto-Detection:** When a video is added to the queue, the filename is matched against each template's exact name, falling back to its keyword list. If nothing matches, the built-in `generic` template is used.
 - **Per-Queue Overrides:** Each queue entry carries its own selected template and a serialized snapshot of that template's layout config, so mixed-channel batches can use different overlay layouts in one run even if templates are edited later.
@@ -124,7 +124,7 @@ Analysis-video layout is driven by a template-backed configuration model rather 
 
 The system generates an optional "Analysis Video" overlay. Instead of frame-by-frame OpenCV rendering (O(frames)), the `AnalysisVideoGenerator` generates static overlay images (board, arrows, eval bar, text) only when the board state changes (O(moves)). These static images are driven by an FFmpeg `concat` demuxer file (`.txt`) specifying precise display durations. This reduces a 36,000-frame rendering workload to ~50 static images, providing a ~1000x speedup while retaining full sync with the source video. 
 
-Engine arrows are dynamically styled (thickness and opacity) based on the Stockfish evaluation difference compared to the principal variation.
+Engine arrows are dynamically styled (base thickness, evaluation-based thickness scaling, and opacity) based on the active template and the Stockfish evaluation difference compared to the principal variation.
 The FFmpeg composition stage conditionally includes the board, evaluation bar, PV text, opening text, and main-board engine arrows based on the active template snapshot, and maps normalized template coordinates into absolute video positions at render time. `FFmpegFilterGraph` builds the final `filter_complex`, tracks whether intermediate streams live on CPU or GPU, and only enables CUDA filters when the active overlay set can stay in hardware-compatible formats. Alpha overlays such as PV text, opening text, and main-board arrows fall back to CPU filters while still allowing hardware encoders for the final MP4.
 
 ## 8. Source Module Organization

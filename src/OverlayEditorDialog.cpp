@@ -21,6 +21,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QDir>
+#include <QSpinBox>
 
 namespace cta {
 
@@ -459,6 +460,15 @@ void OverlayEditorDialog::setupUi() {
     togglesLayout->addWidget(arrowsLabel);
     togglesLayout->addWidget(arrowsCombo);
 
+    auto* arrowsThicknessLabel = new QLabel("Arrow Thickness (%):");
+    arrowsThicknessLabel->setToolTip("Adjust the base thickness percentage of engine arrows.");
+    auto* arrowsThicknessSpin = new QSpinBox();
+    arrowsThicknessSpin->setObjectName("arrowsThicknessSpin");
+    arrowsThicknessSpin->setRange(5, 40);
+    arrowsThicknessSpin->setToolTip("Adjust the base thickness percentage of engine arrows.");
+    togglesLayout->addWidget(arrowsThicknessLabel);
+    togglesLayout->addWidget(arrowsThicknessSpin);
+
     togglesLayout->addStretch();
     mainLayout->addLayout(togglesLayout);
 
@@ -467,6 +477,7 @@ void OverlayEditorDialog::setupUi() {
     connect(pvCheck_, &QCheckBox::toggled, [this](bool checked){ pvTextItem_->setVisible(checked); if(!checked) pvTextItem_->setSelected(false); onTogglesChanged(); });
     connect(openingCheck_, &QCheckBox::toggled, [this](bool checked){ openingTextItem_->setVisible(checked); if(!checked) openingTextItem_->setSelected(false); onTogglesChanged(); });
     connect(arrowsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OverlayEditorDialog::onTogglesChanged);
+    connect(arrowsThicknessSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &OverlayEditorDialog::onTogglesChanged);
     
     connect(templateNameEdit_, &QLineEdit::textChanged, this, [this](const QString& text){
         if (currentIndex_ >= 0 && currentIndex_ < templates_.size()) {
@@ -617,6 +628,10 @@ void OverlayEditorDialog::loadTemplateToUi(int index) {
         arrowsCombo->setCurrentIndex(aIdx >= 0 ? aIdx : 0);
         arrowsCombo->blockSignals(false);
     }
+    if (auto* arrowsThicknessSpin = findChild<QSpinBox*>("arrowsThicknessSpin")) {
+        arrowsThicknessSpin->setValue(tpl.config.arrowThicknessPct);
+        arrowsThicknessSpin->blockSignals(false);
+    }
     
     templateNameEdit_->blockSignals(false);
     boardCheck_->blockSignals(false);
@@ -641,6 +656,9 @@ void OverlayEditorDialog::saveUiToTemplate(int index) {
 
     if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
         tpl.config.arrowsTarget = arrowsCombo->currentText().toStdString();
+    }
+    if (auto* arrowsThicknessSpin = findChild<QSpinBox*>("arrowsThicknessSpin")) {
+        tpl.config.arrowThicknessPct = arrowsThicknessSpin->value();
     }
 }
 
@@ -717,6 +735,9 @@ void OverlayEditorDialog::onTogglesChanged() {
         templates_[currentIndex_].config.openingText.enabled = openingTextItem_ && openingTextItem_->isVisible();
         if (auto* arrowsCombo = findChild<QComboBox*>("arrowsCombo")) {
             templates_[currentIndex_].config.arrowsTarget = arrowsCombo->currentText().toStdString();
+        }
+        if (auto* arrowsThicknessSpin = findChild<QSpinBox*>("arrowsThicknessSpin")) {
+            templates_[currentIndex_].config.arrowThicknessPct = arrowsThicknessSpin->value();
         }
     }
 }
