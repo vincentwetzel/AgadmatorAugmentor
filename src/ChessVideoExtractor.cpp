@@ -150,6 +150,99 @@ cv::VideoCapture open_video_capture(const std::string& safe_video_path) {
     return cap;
 }
 
+bool handle_revert_detection(
+    double t, GameData& data, RevertManager& revert_mgr,
+    const cv::Mat& board_gray, const std::vector<double>& current_hash,
+    std::vector<size_t>& revert_history_ply_counts, int& branch_counter,
+    std::unique_ptr<libchess::Position>& pos_ptr, std::vector<bool>& unresolved_consumed_squares,
+    long long& revert_hash_tests, long long& revert_full_tests, long long& revert_index_queries,
+    long long& revert_index_fallbacks, long long& revert_us, bool exhaustive_revert_fallback,
+    const std::function<void(const std::string&)>& log_info, const std::function<double()>& elapsed) {
+
+    if (revert_mgr.history_size() <= 1) {
+        return false;
+    }
+
+    auto revert_start = std::chrono::steady_clock::now();
+    int best_history_idx = revert_mgr.find_revert_idx(board_gray, current_hash,
+                                                       revert_hash_tests, revert_full_tests,
+                                                       revert_index_queries, revert_index_fallbacks,
+                                                       exhaustive_revert_fallback);
+    revert_us += std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - revert_start).count();
+
+    if (best_history_idx < 0 || best_history_idx >= static_cast<int>(revert_history_ply_counts.size())) {
+        return false;
+    }
+
+    size_t best_ply = revert_history_ply_counts[best_history_idx];
+    ++branch_counter;
+    int reverted_count = static_cast<int>(data.moves.size() - best_ply);
+    log_info("\n" + utils::ts(elapsed()) + " --- ANALYSIS REVERT at " + std::to_string(t) + "s (board matched past state) ---");
+    log_info(utils::ts(elapsed()) + " Snapped back to ply " + std::to_string(best_ply) + " (Branch " + std::to_string(branch_counter) + ")");
+    if (reverted_count > 0) {
+        log_info(utils::ts(elapsed()) + "   Saving " + std::to_string(reverted_count) + " analysis plies as a variation.");
+
+        VariationData var_data;
+        var_data.moves.assign(data.moves.begin() + best_ply, data.moves.end());
+        var_data.timestamps.assign(data.timestamps.begin() + best_ply, data.timestamps.end());
+        var_data.fens.assign(data.fens.begin() + best_ply, data.fens.end() - 1);
+        var_data.clocks.assign(data.clocks.begin() + best_ply + 1, data.clocks.end());
+        data.variations[best_ply].push_back(std::move(var_data));
+    }
+
+    data.moves.resize(best_ply);
+    data.timestamps.resize(best_ply);
+    data.fens.resize(best_ply + 1);
+    data.clocks.resize(best_ply + 1);
+    revert_mgr.resize_history(best_history_idx + 1);
+    revert_history_ply_counts.resize(best_history_idx + 1);
+
+    pos_ptr = std::make_unique<libchess::Position>(data.fens.back());
+
+    data.video_timestamps.push_back(t);
+    data.video_fens.push_back(data.fens.back());
+    data.video_moves.push_back("REVERT");
+
+    std::fill(unresolved_consumed_squares.begin(), unresolved_consumed_squares.end(), false);
+
+    return true;
+}
+
+bool is_inverse_of_recent_move(const std::vector<std::string>& moves, const char* from_name, const char* to_name) {
+    char reverse_uci_buf[5] = {to_name[0], to_name[1], from_name[0], from_name[1], '\0'};
+    std::string_view reverse_uci(reverse_uci_buf, 4);
+    size_t start = moves.size() > 4 ? moves.size() - 4 : 0;
+    for (size_t i = start; i < moves.size(); ++i) {
+        if (moves[i] == reverse_uci) return true;
+    }
+    return false;
+}
+
+bool passes_yellowness_check(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* from_name, const char* to_name) {
+    double y_from = validation::check_yellowness(board_bgr, geo, from_name);
+    double y_to = validation::check_yellowness(board_bgr, geo, to_name);
+    // Elastic threshold: allow one square to dip to 25.0 if the other is strong, requiring a combined score of 70.0
+    return !(y_from < 25.0 || y_to < 25.0 || (y_from + y_to) < 70.0);
+}
+
+bool is_valid_libchess_move(libchess::Position& pos, const std::string& move_uci, libchess::Move& out_move) {
+    try {
+        out_move = pos.parse_move(move_uci);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const char* from_name, const cv::Mat& board_bgr, const BoardGeometry& geo, libchess::Position* pos_ptr) {
+    int from_file = from_sq & 7, from_rank = from_sq >> 3, to_file = to_sq & 7, to_rank = to_sq >> 3, alt_to = -1;
+    if (from_rank == to_rank && std::abs(to_file - from_file) > 1) alt_to = from_sq + (to_file > from_file ? 1 : -1);
+    else if (from_file == to_file && std::abs(to_rank - from_rank) > 1) alt_to = from_sq + (to_rank > from_rank ? 8 : -8);
+    if (alt_to >= 0) { const char* alt_to_name = utils::sq_name(alt_to); char alt_uci[5] = {from_name[0], from_name[1], alt_to_name[0], alt_to_name[1], '\0'}; try { (void)pos_ptr->parse_move(alt_uci); double y_alt = validation::check_yellowness(board_bgr, geo, alt_to_name), y_best = validation::check_yellowness(board_bgr, geo, to_name); if (y_alt >= 25.0 && y_alt > y_best + 10.0) { to_sq = alt_to; to_name = alt_to_name; } } catch (...) {} }
+    if (from_sq == 5 && to_sq == 3) { try { (void)pos_ptr->parse_move("f1e1"); to_sq = 4; to_name = utils::sq_name(to_sq); } catch (...) {} }
+}
+
 } // namespace
 
 // ── Constructor ──────────────────────────────────────────────────────────────
@@ -570,7 +663,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // Score moves using libchess legal move generation
             auto score_start = std::chrono::steady_clock::now();
-            auto best = score_moves_for_board(sq_means);
+            auto best = this->score_moves_for_board(sq_means);
             ++score_calls;
             score_us += std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - score_start).count();
@@ -603,7 +696,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             if (consumed_squares[sq]) settle_sq_means[sq] = 0.0;
                         }
                     auto settle_score_start = std::chrono::steady_clock::now();
-                    auto settle_best_tmp = score_moves_for_board(settle_sq_means);
+                    auto settle_best_tmp = this->score_moves_for_board(settle_sq_means);
                     ++score_calls;
                     score_us += std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - settle_score_start).count();
@@ -713,40 +806,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             std::array<char, 64> current_board_map = utils::expand_fen(pos_ptr_->get_fen());
             char moving_piece = current_board_map[best.from_sq];
             if (std::tolower(static_cast<unsigned char>(moving_piece)) == 'r') {
-                int from_file = best.from_sq & 7;
-                int from_rank = best.from_sq >> 3;
-                int to_file = best.to_sq & 7;
-                int to_rank = best.to_sq >> 3;
-                int alt_to = -1;
-                if (from_rank == to_rank && std::abs(to_file - from_file) > 1) {
-                    alt_to = best.from_sq + (to_file > from_file ? 1 : -1);
-                } else if (from_file == to_file && std::abs(to_rank - from_rank) > 1) {
-                    alt_to = best.from_sq + (to_rank > from_rank ? 8 : -8);
-                }
-
-                if (alt_to >= 0) {
-                    const char* alt_to_name = utils::sq_name(alt_to);
-                    char alt_uci[5] = {from_name[0], from_name[1], alt_to_name[0], alt_to_name[1], '\0'};
-                    try {
-                        (void)pos_ptr_->parse_move(alt_uci);
-                        double y_alt = validation::check_yellowness(board_bgr, *geo_, alt_to_name);
-                        double y_best = validation::check_yellowness(board_bgr, *geo_, to_name);
-                        if (y_alt >= 25.0 && y_alt > y_best + 10.0) {
-                            best.to_sq = alt_to;
-                            to_name = alt_to_name;
-                        }
-                    } catch (...) {
-                    }
-                }
-
-                if (best.from_sq == 5 && best.to_sq == 3) {
-                    try {
-                        (void)pos_ptr_->parse_move("f1e1");
-                        best.to_sq = 4;
-                        to_name = utils::sq_name(best.to_sq);
-                    } catch (...) {
-                    }
-                }
+                adjust_rook_target(best.to_sq, to_name, best.from_sq, from_name, board_bgr, *geo_, pos_ptr_.get());
             }
 
             // Build UCI strings only when needed (avoid allocation in scoring loop)
@@ -767,44 +827,23 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 move_uci.back() = best.promotion; // Update the trailing 'q' with the true piece
             }
 
-            // Inverse move filter: reject if this is the reverse of a recent move
-            bool inverse_recent = false;
-            char reverse_uci_buf[5];
-            reverse_uci_buf[0] = to_name[0]; reverse_uci_buf[1] = to_name[1];
-            reverse_uci_buf[2] = from_name[0]; reverse_uci_buf[3] = from_name[1];
-            reverse_uci_buf[4] = '\0';
-            std::string_view reverse_uci(reverse_uci_buf, 4);
-            size_t start = data.moves.size() > 4 ? data.moves.size() - 4 : 0;
-            for (size_t i = start; i < data.moves.size(); ++i) {
-                if (data.moves[i] == reverse_uci) { inverse_recent = true; break; }
-            }
-            if (inverse_recent) {
+            if (is_inverse_of_recent_move(data.moves, from_name, to_name)) {
                 all_validations_passed = false;
                 break;
             }
 
             // Validate the move is legal in libchess
             libchess::Move validated_move;
-            bool move_valid = false;
-            try {
-                validated_move = pos_ptr_->parse_move(move_uci);
-                move_valid = true;
-            } catch (...) {
-                move_valid = false;
-            }
-
-            if (!move_valid) {
+            if (!is_valid_libchess_move(*pos_ptr_, move_uci, validated_move)) {
                 all_validations_passed = false;
                 break;
             }
 
             // ── Validation 1: Yellow square check ────────────────────────────
-            double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
-            double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
-            
-            // Elastic threshold: allow one square to dip to 25.0 if the other is strong, requiring a combined score of 70.0
-            if (y_from < 25.0 || y_to < 25.0 || (y_from + y_to) < 70.0) {
+            if (!passes_yellowness_check(board_bgr, *geo_, from_name, to_name)) {
                 if (debug_level_ != DebugLevel::None) {
+                    double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
+                    double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
                     log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Missing yellow highlights: from=" + std::to_string(std::round(y_from)) + ", to=" + std::to_string(std::round(y_to)) + ")");
                 }
                 all_validations_passed = false;
@@ -874,7 +913,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             move_log_ss << utils::ts(elapsed()) << " [Branch " << branch_counter << "] Ply " << data.moves.size()
                         << ": detected " << move_uci << " at " << t << "s (confidence: " << round_t(score_to_confidence(best.score)) << "%)";
             log_info(move_log_ss.str());
-            if (debug_level_ != DebugLevel::None) {
+            if (debug_level_ != DebugLevel::None) { // Use a lambda to pass `this` context
                 log_top_candidates(sq_means, pos_ptr_.get(), log_info, elapsed());
             }
 

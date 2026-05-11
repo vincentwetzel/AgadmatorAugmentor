@@ -5,6 +5,7 @@
 #include "ThemeManager.h"
 #include "SettingsDialog.h"
 #include "TemplateManager.h"
+#include "GuiUtils.h"
 
 #include <QApplication>
 #include <QVBoxLayout>
@@ -56,32 +57,6 @@
 #endif
 
 namespace {
-
-QString formatElapsedPrefix(qint64 totalMs) {
-    const qint64 h = totalMs / 3600000;
-    const qint64 m = (totalMs % 3600000) / 60000;
-    const qint64 s = (totalMs % 60000) / 1000;
-    const qint64 ms = totalMs % 1000;
-
-    if (h > 0) {
-        return QString("[%1:%2:%3.%4]")
-            .arg(h)
-            .arg(m, 2, 10, QChar('0'))
-            .arg(s, 2, 10, QChar('0'))
-            .arg(ms, 3, 10, QChar('0'));
-    }
-
-    return QString("[%1:%2.%3]")
-        .arg(m)
-        .arg(s, 2, 10, QChar('0'))
-        .arg(ms, 3, 10, QChar('0'));
-}
-
-bool hasElapsedPrefix(const QString& line) {
-    static const QRegularExpression elapsedPrefixPattern(
-        QStringLiteral("^\\s*\\[(?:\\d+:)?\\d+:\\d{2}\\.\\d{3}\\]"));
-    return elapsedPrefixPattern.match(line).hasMatch();
-}
 
 } // namespace
 
@@ -162,13 +137,13 @@ void MainWindow::dropEvent(QDropEvent* event) {
 }
 
 void MainWindow::appendLog(const QString& message) {
-    const QString prefix = formatElapsedPrefix(logTimer_.elapsed());
+    const QString prefix = cta::gui::formatElapsedPrefix(logTimer_.elapsed());
     const QStringList lines = message.split('\n');
     QStringList formattedLines;
     formattedLines.reserve(lines.size());
 
     for (const QString& line : lines) {
-        if (line.isEmpty() || hasElapsedPrefix(line)) {
+        if (line.isEmpty() || cta::gui::hasElapsedPrefix(line)) {
             formattedLines << line;
         } else {
             formattedLines << prefix + " " + line;

@@ -9,6 +9,8 @@ class QSpinBox;
 class QComboBox;
 class QGroupBox;
 class QRadioButton;
+class QCheckBox;
+class QPushButton;
 
 class ToggleSwitch;
 
@@ -64,14 +66,44 @@ signals:
 private:
     void setupUi();
 
-    ToggleSwitch* pgnExportToggle_;
-    ToggleSwitch* subtitlesToggle_;
-    ToggleSwitch* analysisVideoToggle_;
-    QComboBox* multiPvComboBox_;
-    QComboBox* themeComboBox_;
-    QComboBox* debugLevelComboBox_;
-    QComboBox* threadComboBox_;
-    QGroupBox* stockfishSettingsGroup_;
+    struct Ui {
+        ToggleSwitch* pgnExportToggle = nullptr;
+        ToggleSwitch* subtitlesToggle = nullptr;
+        ToggleSwitch* analysisVideoToggle = nullptr;
+        ToggleSwitch* moveAnnotationsToggle = nullptr;
+        ToggleSwitch* removeOriginalToggle = nullptr;
+        ToggleSwitch* fastPreviewToggle = nullptr;
+
+        QComboBox* multiPvComboBox = nullptr;
+        QComboBox* themeComboBox = nullptr;
+        QComboBox* debugLevelComboBox = nullptr;
+        QComboBox* threadComboBox = nullptr;
+        QComboBox* depthComboBox = nullptr;
+        QComboBox* timeComboBox = nullptr;
+        QComboBox* nodesComboBox = nullptr;
+        QComboBox* analysisDepthComboBox = nullptr;
+        QComboBox* videoCodecComboBox = nullptr;
+        QComboBox* audioCodecComboBox = nullptr;
+        QComboBox* extensionComboBox = nullptr;
+        QComboBox* resolutionComboBox = nullptr;
+        QComboBox* qualityComboBox = nullptr;
+        QComboBox* memoryLimitComboBox = nullptr;
+
+        QLineEdit* stockfishPathEdit = nullptr;
+        QPushButton* stockfishPathBtn = nullptr;
+        QPushButton* stockfishSearchBtn = nullptr;
+
+        QGroupBox* stockfishSettingsGroup = nullptr;
+
+        QLineEdit* defaultVideoDirEdit = nullptr;
+        QRadioButton* sameAsSourceRadio = nullptr;
+        QRadioButton* customDirRadio = nullptr;
+        QLineEdit* customDirEdit = nullptr;
+        
+        QSpinBox* logRetentionSpinBox = nullptr;
+        QCheckBox* compressLogsCheck = nullptr;
+    } ui;
+
     VideoOverlayConfig currentOverlayConfig_;
 };
 

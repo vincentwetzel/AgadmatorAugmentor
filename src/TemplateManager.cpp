@@ -310,4 +310,51 @@ bool TemplateManager::deleteTemplate(const QString& id, QString* errorMessage) {
     return true;
 }
 
+QVariantMap overlayConfigToVariantMap(const VideoOverlayConfig& config) {
+    QVariantMap map;
+    map.insert("boardEnabled", config.board.enabled);
+    map.insert("boardX", config.board.x_percent);
+    map.insert("boardY", config.board.y_percent);
+    map.insert("boardScale", config.board.scale);
+    map.insert("evalEnabled", config.evalBar.enabled);
+    map.insert("evalX", config.evalBar.x_percent);
+    map.insert("evalY", config.evalBar.y_percent);
+    map.insert("evalScale", config.evalBar.scale);
+    map.insert("pvEnabled", config.pvText.enabled);
+    map.insert("pvX", config.pvText.x_percent);
+    map.insert("pvY", config.pvText.y_percent);
+    map.insert("pvScale", config.pvText.scale);
+    map.insert("openingEnabled", config.openingText.enabled);
+    map.insert("openingX", config.openingText.x_percent);
+    map.insert("openingY", config.openingText.y_percent);
+    map.insert("openingScale", config.openingText.scale);
+    map.insert("arrowsTarget", QString::fromStdString(config.arrowsTarget));
+    return map;
+}
+
+VideoOverlayConfig overlayConfigFromVariantMap(const QVariant& value) {
+    VideoOverlayConfig config;
+    const QVariantMap map = value.toMap();
+    if (map.isEmpty()) return config;
+
+    config.board.enabled = map.value("boardEnabled", config.board.enabled).toBool();
+    config.board.x_percent = map.value("boardX", config.board.x_percent).toDouble();
+    config.board.y_percent = map.value("boardY", config.board.y_percent).toDouble();
+    config.board.scale = map.value("boardScale", config.board.scale).toDouble();
+    config.evalBar.enabled = map.value("evalEnabled", config.evalBar.enabled).toBool();
+    config.evalBar.x_percent = map.value("evalX", config.evalBar.x_percent).toDouble();
+    config.evalBar.y_percent = map.value("evalY", config.evalBar.y_percent).toDouble();
+    config.evalBar.scale = map.value("evalScale", config.evalBar.scale).toDouble();
+    config.pvText.enabled = map.value("pvEnabled", config.pvText.enabled).toBool();
+    config.pvText.x_percent = map.value("pvX", config.pvText.x_percent).toDouble();
+    config.pvText.y_percent = map.value("pvY", config.pvText.y_percent).toDouble();
+    config.pvText.scale = map.value("pvScale", config.pvText.scale).toDouble();
+    config.openingText.enabled = map.value("openingEnabled", config.openingText.enabled).toBool();
+    config.openingText.x_percent = map.value("openingX", config.openingText.x_percent).toDouble();
+    config.openingText.y_percent = map.value("openingY", config.openingText.y_percent).toDouble();
+    config.openingText.scale = map.value("openingScale", config.openingText.scale).toDouble();
+    config.arrowsTarget = map.value("arrowsTarget", QString::fromStdString(config.arrowsTarget)).toString().toStdString();
+    return config;
+}
+
 } // namespace cta

@@ -3,12 +3,19 @@
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 namespace cta {
+
+static std::mutex g_cache_mutex;
+static nlohmann::json g_board_cache;
+static bool g_cache_loaded = false;
+static std::filesystem::path g_cache_file;
+static std::filesystem::path g_appdata_dir;
 
 std::unique_ptr<BoardGeometry> BoardCache::load_or_locate(
     const std::string& safe_video_path,
@@ -40,51 +47,54 @@ std::unique_ptr<BoardGeometry> BoardCache::load_or_locate(
         + "_template=" + std::to_string(board_template.cols) + "x" + std::to_string(board_template.rows)
         + "_tplhash=" + std::to_string(template_hash);
     
-    std::filesystem::path appdata_dir;
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+
+    if (!g_cache_loaded) {
 #ifdef _WIN32
-    size_t len = 0;
-    char* appdata = nullptr;
-    if (_dupenv_s(&appdata, &len, "APPDATA") == 0 && appdata != nullptr) {
-        appdata_dir = std::filesystem::path(appdata) / "ChessTubeAnalyzer";
-        free(appdata);
-    }
+        size_t len = 0;
+        char* appdata = nullptr;
+        if (_dupenv_s(&appdata, &len, "APPDATA") == 0 && appdata != nullptr) {
+            g_appdata_dir = std::filesystem::path(appdata) / "ChessTubeAnalyzer";
+            free(appdata);
+        }
 #endif
-    if (appdata_dir.empty()) {
-        appdata_dir = std::filesystem::temp_directory_path() / "ChessTubeAnalyzer";
+        if (g_appdata_dir.empty()) {
+            g_appdata_dir = std::filesystem::temp_directory_path() / "ChessTubeAnalyzer";
+        }
+        g_cache_file = g_appdata_dir / "board_cache.json";
+        
+        if (std::filesystem::exists(g_cache_file)) {
+            try {
+                std::ifstream ifs(g_cache_file);
+                ifs >> g_board_cache;
+            } catch (...) {}
+        }
+        g_cache_loaded = true;
     }
-    std::filesystem::path cache_file = appdata_dir / "board_cache.json";
-    
-    if (std::filesystem::exists(cache_file)) {
-        try {
-            std::ifstream ifs(cache_file);
-            nlohmann::json j;
-            ifs >> j;
-            if (j.contains(cache_key)) {
-                auto& c = j[cache_key];
-                int bx = c["bx"], by = c["by"], bw = c["bw"], bh = c["bh"];
-                if (bx >= 0 && by >= 0 && bw > 0 && bh > 0 && 
-                    (bx + bw) <= first_frame.cols && (by + bh) <= first_frame.rows) {
-                    auto geo = std::make_unique<BoardGeometry>();
-                    geo->bx = bx; geo->by = by; geo->bw = bw; geo->bh = bh;
-                    geo->sq_w = c["sq_w"]; geo->sq_h = c["sq_h"];
-                    log_info("Loaded exact board scale from cache (skipped multi-pass search).");
-                    return geo;
-                } else {
-                    log_info("Cached board geometry is out of bounds for current frame. Ignoring cache.");
-                }
-            }
-        } catch (...) {}
+
+    if (g_board_cache.contains(cache_key)) {
+        auto& c = g_board_cache[cache_key];
+        int bx = c["bx"], by = c["by"], bw = c["bw"], bh = c["bh"];
+        if (bx >= 0 && by >= 0 && bw > 0 && bh > 0 && 
+            (bx + bw) <= first_frame.cols && (by + bh) <= first_frame.rows) {
+            auto geo = std::make_unique<BoardGeometry>();
+            geo->bx = bx; geo->by = by; geo->bw = bw; geo->bh = bh;
+            geo->sq_w = c["sq_w"]; geo->sq_h = c["sq_h"];
+            log_info("Loaded exact board scale from cache (skipped multi-pass search).");
+            return geo;
+        } else {
+            log_info("Cached board geometry is out of bounds for current frame. Ignoring cache.");
+        }
     }
 
     log_info("Performing multi-pass template matching to find exact board scale...");
     auto geo = std::make_unique<BoardGeometry>(locate_board(first_frame, board_template));
     
     try {
-        std::filesystem::create_directories(appdata_dir);
-        nlohmann::json j;
-        if (std::filesystem::exists(cache_file)) { std::ifstream ifs(cache_file); ifs >> j; }
-        j[cache_key] = { {"bx", geo->bx}, {"by", geo->by}, {"bw", geo->bw}, {"bh", geo->bh}, {"sq_w", geo->sq_w}, {"sq_h", geo->sq_h} };
-        std::ofstream ofs(cache_file); ofs << j.dump(4);
+        std::filesystem::create_directories(g_appdata_dir);
+        g_board_cache[cache_key] = { {"bx", geo->bx}, {"by", geo->by}, {"bw", geo->bw}, {"bh", geo->bh}, {"sq_w", geo->sq_w}, {"sq_h", geo->sq_h} };
+        std::ofstream ofs(g_cache_file); 
+        ofs << g_board_cache.dump(4);
     } catch (...) {}
     
     return geo;

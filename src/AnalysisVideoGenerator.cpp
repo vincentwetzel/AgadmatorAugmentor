@@ -22,11 +22,10 @@
 #include <mutex>
 #include <sstream>
 #include <opencv2/imgcodecs.hpp>
-
-// Include the new ChessFenUtils header
 #include "ChessFenUtils.h"
 #include "ImageWriteUtils.h"
 #include "AnalysisVideoRenderUtils.h"
+#include "FfmpegProcessRunner.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -38,65 +37,6 @@
 namespace cta {
 
 namespace {
-
-#ifdef _WIN32
-std::wstring utf8_to_wide(const std::string& text) {
-    if (text.empty()) {
-        return std::wstring();
-    }
-
-    auto convert = [&text](UINT code_page, DWORD flags) -> std::wstring {
-        int size = MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
-        if (size <= 0) {
-            return std::wstring();
-        }
-
-        std::wstring wide(size, L'\0');
-        MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), wide.data(), size);
-        return wide;
-    };
-
-    std::wstring wide = convert(CP_UTF8, MB_ERR_INVALID_CHARS);
-    if (wide.empty()) {
-        wide = convert(CP_ACP, 0);
-    }
-    if (wide.empty()) {
-        return std::wstring(text.begin(), text.end());
-    }
-    return wide;
-}
-
-std::string format_windows_error(DWORD error_code) {
-    LPSTR message_buffer = nullptr;
-    const DWORD size = FormatMessageA(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr,
-        error_code,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        reinterpret_cast<LPSTR>(&message_buffer),
-        0,
-        nullptr
-    );
-
-    std::string message = size > 0 && message_buffer ? message_buffer : "Unknown Windows error";
-    if (message_buffer) {
-        LocalFree(message_buffer);
-    }
-    while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' ')) {
-        message.pop_back();
-    }
-    return message;
-}
-#endif
-
-void append_tail(std::string& tail, const char* data, size_t size) {
-    constexpr size_t kMaxTailBytes = 4096;
-    tail.append(data, size);
-    if (tail.size() > kMaxTailBytes) {
-        tail.erase(0, tail.size() - kMaxTailBytes);
-    }
-}
-
 std::string compose_ffmpeg_failure_message(int result, const std::string& details) {
     std::ostringstream oss;
     oss << "FFmpeg composition failed";
@@ -122,6 +62,96 @@ std::string compose_ffmpeg_failure_message(int result, const std::string& detail
         oss << " No FFmpeg output was captured. Check that ffmpeg is in PATH.";
     }
     return oss.str();
+}
+
+struct FilterGraphParams {
+    int width;
+    int height;
+    int debug_w;
+    int debug_h;
+    int text_w;
+    int text_h;
+    int bar_w;
+    int bar_h;
+    int opening_w;
+    int opening_h;
+    int safe_bx;
+    int safe_by;
+    bool draw_main_arrows;
+    bool is_hw_overlay;
+    std::string resolution;
+    std::string board_stream;
+    std::string bar_stream;
+    std::string text_stream;
+    std::string opening_stream;
+    std::string arrows_stream;
+    VideoOverlayConfig overlay_config;
+    HardwareAccelerationType hw_type;
+};
+
+std::string build_filter_complex_string(const FilterGraphParams& p) {
+    int board_x_pos = static_cast<int>(p.overlay_config.board.x_percent * std::max(0.0, static_cast<double>(p.width - p.debug_w)));
+    int board_y_pos = static_cast<int>(p.overlay_config.board.y_percent * std::max(0.0, static_cast<double>(p.height - p.debug_h)));
+    board_x_pos -= board_x_pos % 2;
+    board_y_pos -= board_y_pos % 2;
+
+    int text_x_pos = static_cast<int>(p.overlay_config.pvText.x_percent * std::max(0.0, static_cast<double>(p.width - p.text_w)));
+    int text_y_pos = static_cast<int>(p.overlay_config.pvText.y_percent * std::max(0.0, static_cast<double>(p.height - p.text_h)));
+    text_x_pos -= text_x_pos % 2;
+    text_y_pos -= text_y_pos % 2;
+
+    int bar_x_pos = static_cast<int>(p.overlay_config.evalBar.x_percent * std::max(0.0, static_cast<double>(p.width - p.bar_w)));
+    int bar_y_pos = static_cast<int>(p.overlay_config.evalBar.y_percent * std::max(0.0, static_cast<double>(p.height - p.bar_h)));
+    bar_x_pos -= bar_x_pos % 2;
+    bar_y_pos -= bar_y_pos % 2;
+
+    int opening_x_pos = static_cast<int>(p.overlay_config.openingText.x_percent * std::max(0.0, static_cast<double>(p.width - p.opening_w)));
+    int opening_y_pos = static_cast<int>(p.overlay_config.openingText.y_percent * std::max(0.0, static_cast<double>(p.height - p.opening_h)));
+    opening_x_pos -= opening_x_pos % 2;
+    opening_y_pos -= opening_y_pos % 2;
+
+    FFmpegFilterGraph graph(p.hw_type);
+    std::string current_bg = "[0:v]";
+    
+    if (p.draw_main_arrows) {
+        std::string arr_fmt = graph.add_filter({p.arrows_stream}, "format=bgra", "[arr_bgra]");
+        graph.add_filter({current_bg, arr_fmt}, "overlay=" + std::to_string(p.safe_bx) + ":" + std::to_string(p.safe_by), "[bg_arr]", p.is_hw_overlay);
+        current_bg = "[bg_arr]";
+    }
+    if (p.overlay_config.pvText.enabled) {
+        graph.add_filter({current_bg}, "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(text_y_pos) + ":w=" + std::to_string(p.text_w) + ":h=" + std::to_string(p.text_h) + ":color=black@0.6:t=fill", "[bg_box]");
+        std::string txt_fmt = graph.add_filter({p.text_stream}, "colorkey=black:0.01:0.5,format=bgra", "[txt_bgra]");
+        graph.add_filter({"[bg_box]", txt_fmt}, "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]", p.is_hw_overlay);
+        current_bg = "[bg_txt]";
+    }
+    if (p.overlay_config.openingText.enabled) {
+        graph.add_filter({current_bg}, "drawbox=x=" + std::to_string(opening_x_pos) + ":y=" + std::to_string(opening_y_pos) + ":w=" + std::to_string(p.opening_w) + ":h=" + std::to_string(p.opening_h) + ":color=black@0.6:t=fill", "[bg_op_box]");
+        std::string op_fmt = graph.add_filter({p.opening_stream}, "colorkey=black:0.01:0.5,format=bgra", "[op_bgra]");
+        graph.add_filter({"[bg_op_box]", op_fmt}, "overlay=" + std::to_string(opening_x_pos) + ":" + std::to_string(opening_y_pos), "[bg_op]", p.is_hw_overlay);
+        current_bg = "[bg_op]";
+    }
+    if (p.overlay_config.board.enabled) {
+        std::string board_fmt = graph.add_filter({p.board_stream}, "format=nv12", "[brd_nv12]");
+        graph.add_filter({current_bg, board_fmt}, "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(board_y_pos), "[bg_brd]", p.is_hw_overlay);
+        current_bg = "[bg_brd]";
+    }
+    
+    std::string scale_str = "";
+    if (p.resolution.find("1920x1080") != std::string::npos) scale_str = "scale=1920:-2";
+    else if (p.resolution.find("1280x720") != std::string::npos) scale_str = "scale=1280:-2";
+    else if (p.resolution.find("3840x2160") != std::string::npos) scale_str = "scale=3840:-2";
+
+    if (p.overlay_config.evalBar.enabled) {
+        std::string bar_fmt = graph.add_filter({p.bar_stream}, "format=nv12", "[bar_nv12]");
+        std::string filter_str = "overlay=" + std::to_string(bar_x_pos) + ":" + std::to_string(bar_y_pos);
+        current_bg = graph.add_filter({current_bg, bar_fmt}, filter_str, "[bg_bar]", p.is_hw_overlay);
+    }
+    if (!scale_str.empty()) {
+        current_bg = graph.add_filter({current_bg}, scale_str, "[bg_scaled]", p.is_hw_overlay);
+    }
+
+    graph.add_filter({current_bg}, "format=yuv420p", "[out]");
+    return graph.build();
 }
 
 } // namespace
@@ -427,17 +457,14 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     std::string main_arrows_img = "main_arrows_" + std::to_string(i) + ".png";
 
                     bool write_ok = true;
-                    {
-                        // Keep temp image writes efficient and predictable; too many concurrent large writes
-                        // can become slower than the CPU rendering work itself.
-                        std::lock_guard<std::mutex> lock(io_mutex);
-                        if (overlay_config.board.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / board_img, cached_board);
-                        if (overlay_config.pvText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / text_img, cached_text);
-                        if (overlay_config.evalBar.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / bar_img, cached_bar);
-                        if (overlay_config.openingText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / opening_img, cached_opening);
-                        if (write_ok && draw_main_arrows) {
-                            write_ok = ImageWriteUtils::write_png_rgba(temp_dir / main_arrows_img, cached_main_arrows);
-                        }
+                    // Concurrent file writes to distinct files are safely handled by the OS.
+                    // This avoids serializing the multi-threaded render loop.
+                    if (overlay_config.board.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / board_img, cached_board);
+                    if (overlay_config.pvText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / text_img, cached_text);
+                    if (overlay_config.evalBar.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / bar_img, cached_bar);
+                    if (overlay_config.openingText.enabled) write_ok &= ImageWriteUtils::write_bmp_fast(temp_dir / opening_img, cached_opening);
+                    if (write_ok && draw_main_arrows) {
+                        write_ok = ImageWriteUtils::write_png_rgba(temp_dir / main_arrows_img, cached_main_arrows);
                     }
                     if (!write_ok) {
                         throw std::runtime_error("Failed to write temporary overlay bitmaps.");
@@ -475,26 +502,6 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Step 2: Have FFmpeg perform the composition
     if (progress_callback) progress_callback(80, "Compositing video streams with FFmpeg...");
 
-    int board_x_pos = static_cast<int>(overlay_config.board.x_percent * std::max(0.0, static_cast<double>(width - debug_w)));
-    int board_y_pos = static_cast<int>(overlay_config.board.y_percent * std::max(0.0, static_cast<double>(height - debug_h)));
-    board_x_pos -= board_x_pos % 2;
-    board_y_pos -= board_y_pos % 2;
-
-    int text_x_pos = static_cast<int>(overlay_config.pvText.x_percent * std::max(0.0, static_cast<double>(width - text_w)));
-    int text_y_pos = static_cast<int>(overlay_config.pvText.y_percent * std::max(0.0, static_cast<double>(height - text_h)));
-    text_x_pos -= text_x_pos % 2;
-    text_y_pos -= text_y_pos % 2;
-
-    int bar_x_pos = static_cast<int>(overlay_config.evalBar.x_percent * std::max(0.0, static_cast<double>(width - bar_w)));
-    int bar_y_pos = static_cast<int>(overlay_config.evalBar.y_percent * std::max(0.0, static_cast<double>(height - bar_h)));
-    bar_x_pos -= bar_x_pos % 2;
-    bar_y_pos -= bar_y_pos % 2;
-
-    int opening_x_pos = static_cast<int>(overlay_config.openingText.x_percent * std::max(0.0, static_cast<double>(width - opening_w)));
-    int opening_y_pos = static_cast<int>(overlay_config.openingText.y_percent * std::max(0.0, static_cast<double>(height - opening_h)));
-    opening_x_pos -= opening_x_pos % 2;
-    opening_y_pos -= opening_y_pos % 2;
-    
     int safe_bx = geo.bx - (geo.bx % 2);
     int safe_by = geo.by - (geo.by % 2);
 
@@ -574,53 +581,31 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
 
     bool is_hw_overlay = (hw_type == HardwareAccelerationType::NVDEC_CUDA);
 
-    // Compose advanced FFMPEG Filter Graph using the builder
-    FFmpegFilterGraph graph(hw_type);
-    std::string current_bg = "[0:v]";
-    
-    if (draw_main_arrows) {
-        std::string arr_fmt = graph.add_filter(arrows_stream, "format=bgra", "[arr_bgra]");
-        graph.add_filter(current_bg + arr_fmt, "overlay=" + std::to_string(safe_bx) + ":" + std::to_string(safe_by), "[bg_arr]", is_hw_overlay);
-        current_bg = "[bg_arr]";
-    }
+    FilterGraphParams fgp;
+    fgp.width = width;
+    fgp.height = height;
+    fgp.debug_w = debug_w;
+    fgp.debug_h = debug_h;
+    fgp.text_w = text_w;
+    fgp.text_h = text_h;
+    fgp.bar_w = bar_w;
+    fgp.bar_h = bar_h;
+    fgp.opening_w = opening_w;
+    fgp.opening_h = opening_h;
+    fgp.safe_bx = safe_bx;
+    fgp.safe_by = safe_by;
+    fgp.draw_main_arrows = draw_main_arrows;
+    fgp.is_hw_overlay = is_hw_overlay;
+    fgp.resolution = resolution;
+    fgp.board_stream = board_stream;
+    fgp.bar_stream = bar_stream;
+    fgp.text_stream = text_stream;
+    fgp.opening_stream = opening_stream;
+    fgp.arrows_stream = arrows_stream;
+    fgp.overlay_config = overlay_config;
+    fgp.hw_type = hw_type;
 
-    if (overlay_config.pvText.enabled) {
-        graph.add_filter(current_bg, "drawbox=x=" + std::to_string(text_x_pos) + ":y=" + std::to_string(text_y_pos) + ":w=" + std::to_string(text_w) + ":h=" + std::to_string(text_h) + ":color=black@0.6:t=fill", "[bg_box]");
-        std::string txt_fmt = graph.add_filter(text_stream, "colorkey=black:0.01:0.5,format=bgra", "[txt_bgra]");
-        graph.add_filter("[bg_box]" + txt_fmt, "overlay=" + std::to_string(text_x_pos) + ":" + std::to_string(text_y_pos), "[bg_txt]", is_hw_overlay);
-        current_bg = "[bg_txt]";
-    }
-
-    if (overlay_config.openingText.enabled) {
-        graph.add_filter(current_bg, "drawbox=x=" + std::to_string(opening_x_pos) + ":y=" + std::to_string(opening_y_pos) + ":w=" + std::to_string(opening_w) + ":h=" + std::to_string(opening_h) + ":color=black@0.6:t=fill", "[bg_op_box]");
-        std::string op_fmt = graph.add_filter(opening_stream, "colorkey=black:0.01:0.5,format=bgra", "[op_bgra]");
-        graph.add_filter("[bg_op_box]" + op_fmt, "overlay=" + std::to_string(opening_x_pos) + ":" + std::to_string(opening_y_pos), "[bg_op]", is_hw_overlay);
-        current_bg = "[bg_op]";
-    }
-
-    if (overlay_config.board.enabled) {
-        std::string board_fmt = graph.add_filter(board_stream, "format=nv12", "[brd_nv12]");
-        graph.add_filter(current_bg + board_fmt, "overlay=" + std::to_string(board_x_pos) + ":" + std::to_string(board_y_pos), "[bg_brd]", is_hw_overlay);
-        current_bg = "[bg_brd]";
-    }
-    
-    std::string scale_str = "";
-    if (resolution.find("1920x1080") != std::string::npos) scale_str = "scale=1920:-2";
-    else if (resolution.find("1280x720") != std::string::npos) scale_str = "scale=1280:-2";
-    else if (resolution.find("3840x2160") != std::string::npos) scale_str = "scale=3840:-2";
-
-    if (overlay_config.evalBar.enabled) {
-        std::string bar_fmt = graph.add_filter(bar_stream, "format=nv12", "[bar_nv12]");
-        std::string filter_str = "overlay=" + std::to_string(bar_x_pos) + ":" + std::to_string(bar_y_pos);
-        current_bg = graph.add_filter(current_bg + bar_fmt, filter_str, "[bg_bar]", is_hw_overlay);
-    }
-
-    if (!scale_str.empty()) {
-        current_bg = graph.add_filter(current_bg, scale_str, "[bg_scaled]", is_hw_overlay);
-    }
-
-    graph.add_filter(current_bg, "format=yuv420p", "[out]");
-    std::string filter_complex = graph.build();
+    std::string filter_complex = build_filter_complex_string(fgp);
 
     std::string ffmpeg_cmd;
     std::string actual_vcodec = vCodec;
@@ -679,123 +664,8 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                  map_args +
                  "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs + " -c:t copy \"" + std::filesystem::path(actual_output_path).generic_string() + "\"";
 
-#ifdef _WIN32
-    SECURITY_ATTRIBUTES saAttr; 
-    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES); 
-    saAttr.bInheritHandle = TRUE; 
-    saAttr.lpSecurityDescriptor = NULL; 
-
-    HANDLE hReadPipe = NULL;
-    HANDLE hWritePipe = NULL;
-    if (!CreatePipe(&hReadPipe, &hWritePipe, &saAttr, 0)) {
-        if (progress_callback) progress_callback(-1, "Failed to create pipes for FFmpeg.");
-        return false;
-    }
-    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.hStdError = hWritePipe; // FFmpeg outputs progress to stderr
-    si.hStdOutput = hWritePipe;
-    si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    ZeroMemory(&pi, sizeof(pi));
-
-    std::wstring ffmpeg_cmd_w = utf8_to_wide(ffmpeg_cmd);
-    std::vector<wchar_t> cmd_buffer(ffmpeg_cmd_w.begin(), ffmpeg_cmd_w.end());
-    cmd_buffer.push_back(L'\0');
-
-    int result = -1;
     std::string ffmpeg_tail;
-    // TRUE for bInheritHandles so FFmpeg can use hWritePipe. CREATE_NO_WINDOW strictly prevents the console.
-    if (CreateProcessW(NULL, cmd_buffer.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        CloseHandle(hWritePipe); // Close write end in parent
-        
-        char buffer[256];
-        DWORD bytesRead;
-        std::string output_acc;
-        
-        while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-            if (cancel_flag && *cancel_flag) {
-                TerminateProcess(pi.hProcess, 1);
-                break;
-            }
-            buffer[bytesRead] = '\0';
-            append_tail(ffmpeg_tail, buffer, bytesRead);
-            output_acc += buffer;
-            
-            size_t frame_pos = output_acc.rfind("frame=");
-            if (frame_pos != std::string::npos) {
-                size_t end_pos = output_acc.find("fps=", frame_pos);
-                if (end_pos != std::string::npos) {
-                    std::string frame_str = output_acc.substr(frame_pos + 6, end_pos - (frame_pos + 6));
-                    try {
-                        int frame_num = std::stoi(frame_str);
-                        if (total_frames > 0 && progress_callback) {
-                            int percent = 80 + (frame_num * 20) / total_frames;
-                            percent = std::clamp(percent, 80, 99);
-                            progress_callback(percent, "Muxing video: frame " + std::to_string(frame_num) + " / " + std::to_string(total_frames));
-                        }
-                    } catch (...) {}
-                    output_acc = output_acc.substr(end_pos);
-                }
-            }
-            if (output_acc.length() > 1024) {
-                output_acc = output_acc.substr(output_acc.length() - 512);
-            }
-        }
-        
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        DWORD exit_code = 0;
-        if (GetExitCodeProcess(pi.hProcess, &exit_code)) {
-            result = static_cast<int>(exit_code);
-        }
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        CloseHandle(hReadPipe);
-    } else {
-        const DWORD create_error = GetLastError();
-        ffmpeg_tail = "CreateProcessW failed: " + format_windows_error(create_error);
-        CloseHandle(hReadPipe);
-        CloseHandle(hWritePipe);
-    }
-#else
-    ffmpeg_cmd += " 2>&1"; // redirect stderr to stdout to capture it
-    FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
-    int result = -1;
-    std::string ffmpeg_tail;
-    if (pipe) {
-        char buffer[256];
-        std::string output_acc;
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-            if (cancel_flag && *cancel_flag) {
-                break; // Break loop, pclose will wait.
-            }
-            append_tail(ffmpeg_tail, buffer, std::strlen(buffer));
-            output_acc += buffer;
-            size_t frame_pos = output_acc.rfind("frame=");
-            if (frame_pos != std::string::npos) {
-                size_t end_pos = output_acc.find("fps=", frame_pos);
-                if (end_pos != std::string::npos) {
-                    std::string frame_str = output_acc.substr(frame_pos + 6, end_pos - (frame_pos + 6));
-                    try {
-                        int frame_num = std::stoi(frame_str);
-                        if (total_frames > 0 && progress_callback) {
-                            int percent = 80 + (frame_num * 20) / total_frames;
-                            percent = std::clamp(percent, 80, 99);
-                            progress_callback(percent, "Muxing video: frame " + std::to_string(frame_num) + " / " + std::to_string(total_frames));
-                        }
-                    } catch (...) {}
-                    output_acc = output_acc.substr(end_pos);
-                }
-            }
-            if (output_acc.length() > 1024) output_acc = output_acc.substr(output_acc.length() - 512);
-        }
-        result = pclose(pipe);
-    }
-#endif
+    int result = FfmpegProcessRunner::run_with_progress(ffmpeg_cmd, total_frames, cancel_flag, progress_callback, ffmpeg_tail);
 
     if (result == 0) {
         std::error_code ec;

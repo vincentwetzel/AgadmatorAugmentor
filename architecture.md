@@ -98,9 +98,11 @@ When the board visually diverges from the engine state (e.g., the streamer undoe
 
 ## 5. Output Format
 
-The primary output is a PGN file that contains the extracted moves, clock times, and optional Stockfish analysis. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the PGN writer.
+The primary output is a PGN file that contains the extracted moves, clock times, and optional Stockfish analysis. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the export helpers.
 
-When enabled, `VideoProcessorWorker` also writes a synced SRT subtitle file beside the configured output path. Subtitle cues are generated from verified move timestamps and converted from UCI to SAN with move numbers, so players and video editors can enable a lightweight move track without rendering a full analysis overlay.
+`VideoProcessorWorker` now acts mostly as the Qt-facing orchestrator. It delegates engine evaluation and move-quality statistics to `StockfishAnalysisHelper`, opening lookup synchronization to `LichessSyncHelper`, and PGN/SRT/analysis-video output to `VideoExportHelper`. Shared subtitle and FFmpeg checks live in `VideoProcessorWorker_Utils`, so the worker can keep cancellation and signal wiring readable.
+
+When enabled, `VideoExportHelper` also writes a synced SRT subtitle file beside the configured output path. Subtitle cues are generated from verified move timestamps and converted from UCI to SAN with move numbers, so players and video editors can enable a lightweight move track without rendering a full analysis overlay.
 
 During extraction, verified video FENs can also be passed to `OpeningFetcher`, which performs a background Lichess Explorer lookup on Windows through WinHTTP. Responses are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`; lookup stops once the game reaches a likely unique position, so common opening names can be added without blocking the visual reducer.
 
@@ -134,16 +136,23 @@ The detector code is split into three focused modules to keep files manageable (
 | Board Localizer | `BoardLocalizer.h/.cpp` | 213 | GSS board localization, grid drawing |
 | Board Analysis | `BoardAnalysis.h/.cpp` | 356 | Square means, yellow squares, piece counting, red squares, hover boxes |
 | Arrow Detector | `ArrowDetector.h/.cpp` | 141 | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
-| Clock Recognizer | `ClockRecognizer.h/.cpp` | 264 | Hu Moments digit recognizer, clock extraction, conditional caching |
+| Clock Recognizer | `ClockRecognizer.h/.cpp` | split | Clock ROI extraction, active-clock detection, conditional caching |
+| Digit Recognizer | `DigitRecognizer.h/.cpp` | split | Hu Moments digit segmentation and nearest-neighbor clock OCR |
 | Orchestrator | `ChessVideoExtractor.h/.cpp` | ~630 | Video scanning loop, move scoring, revert detection, PGN-bound game data |
 | Move Validation | `MoveValidations.h/.cpp` | 97 | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
+| Stockfish Analysis Helper | `StockfishAnalysisHelper.h/.cpp` | split | Worker-facing analysis orchestration, result synchronization, move annotations, ACPL/Elo estimates |
 | Opening Fetcher | `OpeningFetcher.h/.cpp` | ~200 | Cached Lichess Explorer lookup for ECO/opening metadata |
+| Lichess Sync Helper | `LichessSyncHelper.h/.cpp` | split | Bridges extractor FEN callbacks to opening lookup completion and video opening labels |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Template Manager | `TemplateManager.h/.cpp` | ~200 | Overlay template loading, matching, persistence in AppData |
 | Overlay Editor | `OverlayEditorDialog.h/.cpp` | ~450 | Screenshot-based WYSIWYG editor for overlay template layout |
 | FFmpeg Filter Graph | `FFmpegFilterGraph.h/.cpp` | ~180 | Builds filter_complex chains and manages CPU/GPU filter transitions |
+| FFmpeg Process Runner | `FfmpegProcessRunner.h/.cpp` | split | Runs FFmpeg with progress parsing, cancellation, and captured output tail |
+| Video Export Helper | `VideoExportHelper.h/.cpp` | split | PGN, SRT, and analysis-video export orchestration |
 | Main Window | `MainWindow*.cpp` | split | GUI setup, settings, queue management, and processing orchestration |
+| Worker Utilities | `VideoProcessorWorker_Utils.h/.cpp` | split | Clock/subtitle formatting and FFmpeg availability checks |
+| Application Utilities | `HeadlessCliParser`, `GuiUtils`, `Logger`, `SysUtils` | split | CLI parsing, elapsed log prefixes, rotating logs, system thread and FFmpeg settings |
 | Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.

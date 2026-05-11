@@ -384,6 +384,7 @@ add_library(chess_extraction_core
     src/BoardAnalysis.cpp
     src/ArrowDetector.cpp
     src/ClockRecognizer.cpp
+    src/DigitRecognizer.cpp
     src/ChessVideoExtractor.cpp
     src/ExtractorUtils.cpp
     src/MoveValidations.cpp
@@ -420,6 +421,7 @@ add_library(chess_analysis_core
     src/ImageWriteUtils.cpp
     src/AnalysisVideoRenderUtils.cpp
     src/FFmpegFilterGraph.cpp
+    src/FfmpegProcessRunner.cpp
     src/OpeningFetcher.cpp
     src/AnalysisVideoGenerator_Render.cpp
 )
@@ -446,6 +448,7 @@ configure_cuda_target(chess_analysis_core)
 # ── Main executable (CLI) ────────────────────────────────────────────────────
 add_executable(extract_moves
     src/main.cpp
+    src/SysUtils.cpp
 )
 
 target_include_directories(extract_moves PRIVATE
@@ -479,6 +482,9 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/VideoProcessorWorker.h
         include/ToggleSwitch.h
         include/OverlayEditorDialog.h
+        src/StockfishAnalysisHelper.h
+        src/LichessSyncHelper.h
+        src/VideoExportHelper.h
     )
 
     add_executable(analyzer_gui
@@ -492,6 +498,7 @@ if(Qt6_FOUND AND BUILD_GUI)
         src/SettingsDialog.cpp
         include/SettingsDialog.h
         src/VideoProcessorWorker.cpp
+        src/VideoProcessorWorker_Utils.cpp
         include/VideoProcessorWorker.h
         src/ToggleSwitch.cpp
         include/ToggleSwitch.h
@@ -501,6 +508,13 @@ if(Qt6_FOUND AND BUILD_GUI)
         include/OverlayEditorDialog.h
         src/TemplateManager.cpp
         include/TemplateManager.h
+        src/Logger.cpp
+        src/SysUtils.cpp
+        src/HeadlessCliParser.cpp
+        src/GuiUtils.cpp
+        src/StockfishAnalysisHelper.cpp
+        src/LichessSyncHelper.cpp
+        src/VideoExportHelper.cpp
     )
 
     qt6_wrap_cpp(analyzer_gui_moc_sources TARGET analyzer_gui ${CHESSTUBE_GUI_MOC_HEADERS})

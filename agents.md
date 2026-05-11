@@ -141,16 +141,16 @@ Raw Video
 | Board Localization | `BoardLocalizer.h/.cpp` |
 | UI Detection (yellow, red, hover, pieces) | `BoardAnalysis.h/.cpp` |
 | Arrow Detection | `ArrowDetector.h/.cpp` |
-| Clock OCR | `ClockRecognizer.h/.cpp` |
+| Clock OCR | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` |
 | Verification + Orchestrator | `ChessVideoExtractor.h/.cpp` |
 | Move Validation Logic | `MoveValidations.h/.cpp` |
-| Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp` |
-| Stockfish Analysis | `StockfishAnalyzer.h/.cpp` |
-| Opening Metadata | `OpeningFetcher.h/.cpp` |
+| Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp`, `SysUtils.h/.cpp` |
+| Stockfish Analysis | `StockfishAnalyzer.h/.cpp`, `StockfishAnalysisHelper.h/.cpp` |
+| Opening Metadata | `OpeningFetcher.h/.cpp`, `LichessSyncHelper.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
-| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp` |
-| Output Generation | `PgnWriter.h/.cpp`, `ImageWriteUtils.h/.cpp` |
-| GUI & Orchestration | `MainWindow*.cpp`, `VideoProcessorWorker.h/.cpp` |
+| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp`, `FfmpegProcessRunner.h/.cpp` |
+| Output Generation | `PgnWriter.h/.cpp`, `ImageWriteUtils.h/.cpp`, `VideoExportHelper.h/.cpp`, `VideoProcessorWorker_Utils.h/.cpp` |
+| GUI & Orchestration | `MainWindow*.cpp`, `VideoProcessorWorker.h/.cpp`, `HeadlessCliParser.h/.cpp`, `GuiUtils.h/.cpp`, `Logger.h/.cpp` |
 | Configuration & Templates | `SettingsDialog.h/.cpp`, `ThemeManager.h/.cpp`, `TemplateManager.h/.cpp`, `OverlayEditorDialog.h/.cpp` |
 
 ## Future: Parallel Agent Architecture

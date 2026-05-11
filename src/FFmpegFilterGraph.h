@@ -29,7 +29,7 @@ public:
     //               If true and HW acceleration is active, the graph will attempt to keep data on GPU
     //               and potentially translate generic filters to HW-specific ones.
     // Returns the actual output label used for this filter.
-    std::string add_filter(const std::string& inputs, const std::string& filter_desc, const std::string& output_label = "", bool is_hw_filter = false);
+    std::string add_filter(const std::vector<std::string>& input_labels_vec, const std::string& filter_desc, const std::string& output_label = "", bool is_hw_filter = false);
 
     // Builds the complete FFmpeg filter_complex string from all added filters.
     std::string build() const;

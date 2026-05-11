@@ -132,17 +132,27 @@ ChessTubeAnalyzer/
 |   |-- BoardAnalysis.cpp
 |   |-- ArrowDetector.cpp
 |   |-- ClockRecognizer.cpp
+|   |-- DigitRecognizer.cpp
 |   |-- ChessVideoExtractor.cpp
 |   |-- OpeningFetcher.cpp
 |   |-- StockfishAnalyzer.cpp
+|   |-- StockfishAnalysisHelper.cpp
+|   |-- LichessSyncHelper.cpp
+|   |-- VideoExportHelper.cpp
 |   |-- AnalysisVideoGenerator.cpp
 |   |-- AnalysisVideoGenerator_Render.cpp
 |   |-- AnalysisVideoRenderUtils.cpp
+|   |-- FfmpegProcessRunner.cpp
 |   |-- GPUAccelerator.cpp
+|   |-- HeadlessCliParser.cpp
+|   |-- Logger.cpp
+|   |-- SysUtils.cpp
 |   |-- MainWindow_UI.cpp
 |   |-- MainWindow_Settings.cpp
 |   |-- MainWindow_Queue.cpp
 |   |-- MainWindow_Processing.cpp
+|   |-- VideoProcessorWorker.cpp
+|   |-- VideoProcessorWorker_Utils.cpp
 |   `-- main_gui.cpp
 |-- tests/
 |   `-- test_ui_detectors.cpp
@@ -171,7 +181,7 @@ ChessTubeAnalyzer/
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
-9. **Output:** PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
+9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg.
 
 ## Testing
 

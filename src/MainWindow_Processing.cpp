@@ -3,6 +3,7 @@
 #include "VideoProcessorWorker.h"
 #include "SettingsDialog.h"
 #include "TemplateManager.h"
+#include "SysUtils.h"
 
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -18,15 +19,6 @@
 #ifdef _WIN32
 #include <stdlib.h>
 #endif
-
-static void set_ffmpeg_threads(int threads) {
-    std::string val = std::to_string(threads);
-#ifdef _WIN32
-    _putenv_s("OPENCV_FFMPEG_THREADS", val.c_str());
-#else
-    setenv("OPENCV_FFMPEG_THREADS", val.c_str(), 1);
-#endif
-}
 
 namespace cta {
 
@@ -110,7 +102,7 @@ int MainWindow::processHeadless(const QString& videoPath, int pgnOverride, int a
     settingsDialog_->loadSettings();
     settingsDialog_->applyHeadlessOverrides(pgnOverride, analysisVideoOverride, moveLabelsOverride, multiPv, threads, depth, time, nodes, analysisDepth, debugLevelStr, memoryLimit);
 
-    set_ffmpeg_threads(gatherSettings().ffmpegThreads);
+    cta::SysUtils::set_ffmpeg_threads(gatherSettings().ffmpegThreads);
 
     appendLog("=== Headless Mode ===");
     appendLog("Processing: " + videoPath);
@@ -171,7 +163,7 @@ void MainWindow::onStartCancelClicked() {
         logTimer_.restart();
         appendLog("Starting processing...");
 
-        set_ffmpeg_threads(settings.ffmpegThreads);
+        cta::SysUtils::set_ffmpeg_threads(settings.ffmpegThreads);
         appendLog("FFmpeg decode threads: " + QString::number(settings.ffmpegThreads));
 
         settingsDialog_->saveSettings();

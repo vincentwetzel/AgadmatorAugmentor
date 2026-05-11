@@ -1,6 +1,7 @@
 // Extracted from cpp directory
 #include "PgnWriter.h"
 #include "StockfishAnalyzer.h"
+#include "ChessFenUtils.h"
 #include <sstream>
 #include <iostream> // Required for std::cerr
 #include <iomanip> // For std::fixed, std::setprecision
@@ -9,122 +10,6 @@
 #include <cmath>
 
 namespace cta {
-
-namespace {
-    std::array<char, 64> expand_fen_to_board(const std::string& fen) {
-        std::array<char, 64> board;
-        board.fill(' ');
-        int sq = 56;
-        for (char c : fen) {
-            if (c == ' ') break;
-            if (c == '/') sq -= 16;
-            else if (c >= '1' && c <= '8') sq += (c - '0');
-            else board[sq++] = c;
-        }
-        return board;
-    }
-
-    std::string format_eval_string(const StockfishLine& line, const std::string& fen) {
-        bool is_black_to_move = (fen.find(" b ") != std::string::npos);
-
-        if (line.is_mate) {
-            int mate_in = line.mate_in;
-            if (is_black_to_move) mate_in = -mate_in;
-            if (mate_in > 0) return "+M" + std::to_string(mate_in);
-            else return "-M" + std::to_string(-mate_in);
-        }
-
-        std::ostringstream ss;
-        ss.imbue(std::locale::classic());
-        ss << std::fixed << std::setprecision(2);
-        double eval_cp = line.centipawns / 100.0;
-        if (is_black_to_move) eval_cp = -eval_cp;
-        
-        if (eval_cp >= 0.0) ss << "+";
-        ss << eval_cp;
-        return ss.str();
-    }
-
-    std::string build_san(const libchess::Position& pos, const libchess::Move& move, const std::string& uci_str) {
-        auto from_sq = static_cast<int>(static_cast<unsigned int>(move.from()));
-        auto to_sq = static_cast<int>(static_cast<unsigned int>(move.to()));
-        
-        std::array<char, 64> board = expand_fen_to_board(pos.get_fen());
-        char piece = board[from_sq];
-        char target_piece = board[to_sq];
-        
-        bool is_pawn = (piece == 'P' || piece == 'p');
-        bool is_capture = (target_piece != ' ') || (is_pawn && (from_sq % 8) != (to_sq % 8) && target_piece == ' ');
-        
-        // Castling
-        if (move.type() == libchess::MoveType::ksc) return "O-O";
-        if (move.type() == libchess::MoveType::qsc) return "O-O-O";
-
-        if ((piece == 'K' || piece == 'k') && std::abs((from_sq % 8) - (to_sq % 8)) == 2) {
-            if (to_sq % 8 == 6) return "O-O";
-            if (to_sq % 8 == 2) return "O-O-O";
-        }
-
-        std::string san;
-        if (!is_pawn) {
-            san += static_cast<char>(std::toupper(piece));
-            
-            // Disambiguation
-            bool file_conflict = false;
-            bool rank_conflict = false;
-            bool need_disambiguation = false;
-            
-            for (const auto& alt_move : pos.legal_moves()) {
-                auto alt_from = static_cast<int>(static_cast<unsigned int>(alt_move.from()));
-                auto alt_to = static_cast<int>(static_cast<unsigned int>(alt_move.to()));
-                
-                if (alt_from != from_sq && alt_to == to_sq && board[alt_from] == piece) {
-                    need_disambiguation = true;
-                    if (alt_from % 8 == from_sq % 8) file_conflict = true;
-                    if (alt_from / 8 == from_sq / 8) rank_conflict = true;
-                }
-            }
-            
-            if (need_disambiguation) {
-                if (!file_conflict) {
-                    san += static_cast<char>('a' + (from_sq % 8));
-                } else if (!rank_conflict) {
-                    san += static_cast<char>('1' + (from_sq / 8));
-                } else {
-                    san += static_cast<char>('a' + (from_sq % 8));
-                    san += static_cast<char>('1' + (from_sq / 8));
-                }
-            }
-        } else {
-            if (is_capture) {
-                san += static_cast<char>('a' + (from_sq % 8));
-            }
-        }
-        
-        if (is_capture) san += "x";
-        
-        san += static_cast<char>('a' + (to_sq % 8));
-        san += static_cast<char>('1' + (to_sq / 8));
-        
-        // Promotion
-        if (uci_str.length() >= 5) {
-            san += "=";
-            san += static_cast<char>(std::toupper(uci_str[4]));
-        }
-        
-        // Append check/checkmate symbol, which is standard for PGN.
-        // A temporary position is used to check the state *after* the move.
-        libchess::Position temp_pos = pos;
-        temp_pos.makemove(move);
-        if (temp_pos.is_checkmate()) {
-            san += "#";
-        } else if (temp_pos.in_check()) {
-            san += "+";
-        }
-
-        return san;
-    }
-}
 
 PgnWriter::PgnWriter() {
     pos_.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
@@ -158,7 +43,7 @@ void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& cloc
 
         try {
             move = current_pos.parse_move(pure_uci);
-            san_move = build_san(current_pos, move, pure_uci) + annotation;
+            san_move = ChessFenUtils::build_san(current_pos, move, pure_uci) + annotation;
             current_pos.makemove(move);
         } catch (const std::exception& e) {
             std::cerr << "Warning: Failed to parse or convert move " << pure_uci << ": " << e.what() << std::endl;
@@ -210,7 +95,7 @@ void PgnWriter::add_stockfish_analysis(const std::vector<StockfishResult>& resul
         if (result.lines.empty()) continue;
 
         // Add evaluation comment for the position on the board (after the played move)
-        ply.evaluation_comment = format_eval_string(result.lines[0], result.fen);
+        ply.evaluation_comment = ChessFenUtils::format_eval_string(result.lines[0], result.fen);
 
         // Add all top N engine lines as variations
         for (const auto& line : result.lines) {
@@ -225,7 +110,7 @@ void PgnWriter::add_stockfish_analysis(const std::vector<StockfishResult>& resul
             while (move_count < analysis_depth && (pv_stream >> move_uci_str)) {
                 try {
                     libchess::Move m = var_pos.parse_move(move_uci_str);
-                    std::string san = build_san(var_pos, m, move_uci_str);
+                    std::string san = ChessFenUtils::build_san(var_pos, m, move_uci_str);
                     variation_line.push_back({san, "", "", {}});
                     var_pos.makemove(m);
                 } catch (...) {
@@ -237,7 +122,7 @@ void PgnWriter::add_stockfish_analysis(const std::vector<StockfishResult>& resul
 
             if (!variation_line.empty()) {
                 // Add the evaluation comment to the first move of the variation
-                variation_line[0].evaluation_comment = format_eval_string(line, result.fen);
+                variation_line[0].evaluation_comment = ChessFenUtils::format_eval_string(line, result.fen);
                 ply.variations.push_back(std::move(variation_line));
             }
         }

@@ -276,6 +276,13 @@ void GPUAccelerator::init() {
             available_ = true;
             std::cout << "  [GPU] CUDA GPU detected via NPP: " << device_name_ << "\n";
             std::cout << "  [GPU] Compute capability: " << major << "." << minor << "\n";
+
+            // Pre-load libraries to avoid race conditions and debug-heap assertions
+            // during concurrent MSVC delay-loading from multiple worker threads.
+            LoadLibraryW(L"nppial64_13.dll");
+            LoadLibraryW(L"nppicc64_13.dll");
+            LoadLibraryW(L"nppig64_13.dll");
+            LoadLibraryW(L"nppist64_13.dll");
         } else {
             std::cout << "  [GPU] No CUDA devices found, using CPU\n";
             available_ = false;
@@ -299,6 +306,13 @@ std::string GPUAccelerator::device_name() {
 
 // ── GPU Operations ───────────────────────────────────────────────────────────
 
+static void fallback_resize_cpu(const GPUMat& src, GPUMat& dst, cv::Size dsize, int interp) {
+    cv::Mat h_src, h_dst;
+    src.download(h_src);
+    cv::resize(h_src, h_dst, dsize, 0, 0, interp);
+    dst.upload(h_dst);
+}
+
 void GPUAccelerator::resize(const cv::Mat& src, cv::Mat& dst, cv::Size dsize,
                              double fx, double fy, int interp) {
     // Keep host-image resize on OpenCV. The direct NPP resize path delay-loads
@@ -312,7 +326,8 @@ void GPUAccelerator::resize_gpu(const GPUMat& src, GPUMat& dst, cv::Size dsize,
                                  int interp) {
     if (!initialized_) init();
 #ifdef HAVE_SYSTEM_CUDA
-    if (available_ && src.type() == CV_8UC1) { // Only supports single channel for now (grayscale) with 8-bit unsigned data.
+    // NPPI Resize currently only supports 8-bit, single-channel (grayscale) inputs
+    if (available_ && src.type() == CV_8UC1) { 
         dst.ensure_capacity(dsize.width, dsize.height, src.type());
         NppiSize src_size = { src.width(), src.height() }; 
         NppiRect src_rect = { 0, 0, src.width(), src.height() };
@@ -328,22 +343,15 @@ void GPUAccelerator::resize_gpu(const GPUMat& src, GPUMat& dst, cv::Size dsize,
                                                      static_cast<double>(dsize.width) / src.width(), // Line 334
                                                      static_cast<double>(dsize.height) / src.height(), // Line 335
                                                      0, 0, mode, ctx);
-        if (st != NPP_SUCCESS) {
-            // Fallback to CPU if GPU resize fails for some reason
-            cv::Mat h_src, h_dst;
-            src.download(h_src);
-            cv::resize(h_src, h_dst, dsize, 0, 0, interp);
-            dst.upload(h_dst);
+        if (st == NPP_SUCCESS) {
+            cudaDeviceSynchronize(); // Synchronize to ensure operation completes before returning
+            return;
         }
-        cudaDeviceSynchronize(); // Synchronize to ensure operation completes before returning
-        return;
+        // If NPP fails (e.g. invalid arguments or context), drop down to CPU
     }
 #endif
-    // CPU Fallback: Download from GPU, resize on CPU, upload back to GPU
-    cv::Mat h_src, h_dst;
-    src.download(h_src);
-    cv::resize(h_src, h_dst, dsize, 0, 0, interp);
-    dst.upload(h_dst);
+    // CPU Fallback: Seamlessly download from GPU, resize using OpenCV on CPU, and upload back
+    fallback_resize_cpu(src, dst, dsize, interp);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

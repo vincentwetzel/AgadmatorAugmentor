@@ -158,5 +158,20 @@ namespace ChessFenUtils {
         return score;
     }
 
+    int calculate_material(const std::string& fen) {
+        int material = 0;
+        for (char c : fen) {
+            if (c == ' ') break;
+            switch (c) {
+                case 'Q': material += 9; break; case 'q': material -= 9; break;
+                case 'R': material += 5; break; case 'r': material -= 5; break;
+                case 'B': material += 3; break; case 'b': material -= 3; break;
+                case 'N': material += 3; break; case 'n': material -= 3; break;
+                case 'P': material += 1; break; case 'p': material -= 1; break;
+            }
+        }
+        return material;
+    }
+
 } // namespace ChessFenUtils
 } // namespace cta

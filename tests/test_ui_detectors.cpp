@@ -51,7 +51,7 @@ static std::vector<IntegrationTestResult> g_test_results;
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   1
-#define TEST_MEDIUM_GAME_REVERT   0
+#define TEST_MEDIUM_GAME_REVERT   1
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   0

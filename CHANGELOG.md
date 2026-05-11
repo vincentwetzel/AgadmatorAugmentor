@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Main Window Modules:** Split queue and processing responsibilities out of `MainWindow.cpp` into focused `MainWindow_Queue.cpp` and `MainWindow_Processing.cpp` compilation units.
 - **Analysis Video Rendering:** Moved board, piece, eval bar, and text rendering helpers into `AnalysisVideoGenerator_Render.cpp`.
 - **Board Cache Location:** Moved `BoardCache` into the normal `include/` and `src/` tree so CMake no longer relies on root-level duplicate source files.
+- **Processing Worker Helpers:** Split Stockfish analysis, Lichess opening synchronization, PGN/SRT/video export, FFmpeg availability checks, and subtitle formatting out of `VideoProcessorWorker.cpp`.
+- **Clock Digit Recognition:** Moved Hu Moments digit classification from `ClockRecognizer.cpp` into `DigitRecognizer.cpp`, leaving clock ROI extraction and caching in the clock recognizer.
+- **Application Utilities:** Moved headless CLI parsing, elapsed-log formatting, system thread/FFmpeg settings, and rotating log setup into focused utility modules.
 
 ### Fixed
 

@@ -11,37 +11,22 @@ namespace cta {
         stream_hw_states_["[0:v]"] = false;
     }
 
-    std::string FFmpegFilterGraph::add_filter(const std::string& inputs, const std::string& filter_desc_in, const std::string& output_label_in, bool is_hw_filter) {
+    std::string FFmpegFilterGraph::add_filter(const std::vector<std::string>& input_labels_vec, const std::string& filter_desc_in, const std::string& output_label_in, bool is_hw_filter) {
         std::string final_output_label = output_label_in;
         if (final_output_label.empty()) {
             final_output_label = "[f" + std::to_string(next_filter_id_++) + "]";
         }
 
-        std::string current_inputs = inputs;
         std::string filter_desc_processed = filter_desc_in;
-
-        // --- Parse Input Labels ---
-        // Split the inputs string (e.g., "[0:v][1:v]") into individual labels.
-        std::vector<std::string> input_labels_vec;
-        size_t start = 0;
-        size_t end = current_inputs.find("][");
-        while (end != std::string::npos) {
-            input_labels_vec.push_back(current_inputs.substr(start, end - start + 1));
-            start = end + 1;
-            end = current_inputs.find("][", start);
-        }
-        if (start < current_inputs.length()) {
-            input_labels_vec.push_back(current_inputs.substr(start)); // Add the last label
-        }
+        std::vector<std::string> current_inputs = input_labels_vec;
 
         // --- Determine Current Hardware State of Inputs ---
         bool all_inputs_on_gpu = true;
         bool any_input_on_gpu = false;
 
-        for (const std::string& label : input_labels_vec) {
+        for (const std::string& label : current_inputs) {
             if (label.empty()) continue;
-            bool is_hw = get_stream_hw_state(label);
-            if (is_hw) {
+            if (get_stream_hw_state(label)) {
                 any_input_on_gpu = true;
             } else {
                 all_inputs_on_gpu = false;
@@ -56,25 +41,22 @@ namespace cta {
             if (is_hw_filter) {
                 // This filter is intended to run on the GPU. Ensure all inputs are on GPU.
                 if (!all_inputs_on_gpu) {
-                    for (const std::string& label : input_labels_vec) {
+                    for (size_t i = 0; i < current_inputs.size(); ++i) {
+                        const std::string& label = current_inputs[i];
                         if (label.empty()) continue;
                         if (!get_stream_hw_state(label)) {
                             // Insert hwupload for CPU inputs
                             FilterNode upload_node;
                             upload_node.inputs = label;
                             upload_node.filter_desc = "hwupload";
-                            if (!label.empty() && label.back() == ']') {
+                            if (label.back() == ']') {
                                 upload_node.output_label = label.substr(0, label.length() - 1) + "_hw]";
                             } else {
                                 upload_node.output_label = label + "_hw";
                             }
                             filter_nodes_.push_back(upload_node);
                             
-                            // Replace the original CPU input label with the new GPU output label in current_inputs
-                            size_t pos = current_inputs.find(label);
-                            if (pos != std::string::npos) {
-                                current_inputs.replace(pos, label.length(), upload_node.output_label);
-                            }
+                            current_inputs[i] = upload_node.output_label;
                             set_stream_hw_state(upload_node.output_label, true);
                         }
                     }
@@ -109,7 +91,8 @@ namespace cta {
             } else {
                 // This filter is intended to run on the CPU. Ensure all inputs are on CPU.
                 if (any_input_on_gpu) {
-                    for (const std::string& label : input_labels_vec) {
+                    for (size_t i = 0; i < current_inputs.size(); ++i) {
+                        const std::string& label = current_inputs[i];
                         if (label.empty()) continue;
                         if (get_stream_hw_state(label)) {
                             // Insert hwdownload for GPU inputs
@@ -117,7 +100,7 @@ namespace cta {
                             download_node.inputs = label;
                             download_node.filter_desc = "hwdownload";
                             std::string dl_out;
-                            if (!label.empty() && label.back() == ']') {
+                            if (label.back() == ']') {
                                 dl_out = label.substr(0, label.length() - 1) + "_dl]";
                             } else {
                                 dl_out = label + "_dl";
@@ -128,17 +111,14 @@ namespace cta {
                             FilterNode format_node;
                             format_node.inputs = dl_out;
                             format_node.filter_desc = "format=nv12"; // Format often needed after download
-                            if (!label.empty() && label.back() == ']') {
+                            if (label.back() == ']') {
                                 format_node.output_label = label.substr(0, label.length() - 1) + "_cpu]";
                             } else {
                                 format_node.output_label = label + "_cpu";
                             }
                             filter_nodes_.push_back(format_node);
                             
-                            size_t pos = current_inputs.find(label);
-                            if (pos != std::string::npos) {
-                                current_inputs.replace(pos, label.length(), format_node.output_label);
-                            }
+                            current_inputs[i] = format_node.output_label;
                             set_stream_hw_state(format_node.output_label, false);
                         }
                     }
@@ -149,7 +129,9 @@ namespace cta {
 
         // --- Add the actual filter node ---
         FilterNode node;
-        node.inputs = current_inputs;
+        std::ostringstream inputs_oss;
+        for (const auto& in : current_inputs) inputs_oss << in;
+        node.inputs = inputs_oss.str();
         node.filter_desc = filter_desc_processed;
         node.output_label = final_output_label;
         filter_nodes_.push_back(node);

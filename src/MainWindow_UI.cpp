@@ -3,6 +3,7 @@
 #include "ThemeManager.h"
 #include "SettingsDialog.h"
 #include "OverlayEditorDialog.h"
+#include "GuiUtils.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -36,65 +37,6 @@
 #include <QShortcut>
 #include <QKeySequence>
 #include <QSplitter>
-
-namespace {
-
-QIcon createSettingsCogIcon(const QColor& color) {
-    constexpr int canvasSize = 96;
-    constexpr qreal center = canvasSize / 2.0;
-    constexpr qreal bodyRadius = 24.0;
-    constexpr qreal ringCutoutRadius = 14.0;
-    constexpr qreal hubRadius = 4.75;
-    constexpr qreal toothCenterRadius = 28.5;
-    constexpr qreal toothWidth = 8.5;
-    constexpr qreal toothHeight = 15.0;
-    constexpr qreal toothCornerRadius = 4.0;
-
-    QPixmap pixmap(canvasSize, canvasSize);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-
-    QPainterPath gearPath;
-    gearPath.addEllipse(QPointF(center, center), bodyRadius, bodyRadius);
-
-    for (int i = 0; i < 8; ++i) {
-        painter.save();
-        painter.translate(center, center);
-        painter.rotate(i * 45.0);
-        QPainterPath toothPath;
-        toothPath.addRoundedRect(
-            QRectF(-toothWidth / 2.0, -toothCenterRadius - toothHeight / 2.0, toothWidth, toothHeight),
-            toothCornerRadius,
-            toothCornerRadius
-        );
-        gearPath.addPath(painter.transform().map(toothPath));
-        painter.restore();
-    }
-
-    QColor fillColor = color;
-    fillColor.setAlpha(242);
-    painter.setBrush(fillColor);
-    painter.drawPath(gearPath.simplified());
-
-    QColor rimColor = color.lighter(112);
-    rimColor.setAlpha(80);
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(rimColor, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawEllipse(QPointF(center, center), bodyRadius - 1.5, bodyRadius - 1.5);
-
-    painter.setCompositionMode(QPainter::CompositionMode_Clear);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(Qt::transparent);
-    painter.drawEllipse(QPointF(center, center), ringCutoutRadius, ringCutoutRadius);
-    painter.drawEllipse(QPointF(center, center), hubRadius, hubRadius);
-
-    return QIcon(pixmap);
-}
-
-} // namespace
 
 namespace cta {
 
@@ -248,7 +190,7 @@ void MainWindow::updateSettingsButtonIcon() {
     }
 
     const auto colors = ThemeManager::instance().colors();
-    settingsBtn_->setIcon(createSettingsCogIcon(QColor(colors.buttonText)));
+    settingsBtn_->setIcon(cta::gui::createSettingsCogIcon(QColor(colors.buttonText)));
 }
 
 } // namespace cta
