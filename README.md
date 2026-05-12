@@ -15,7 +15,7 @@ Advanced extraction tuning is available through environment variables for benchm
 - **Video Processing:** Extract chess moves from video files using computer vision.
 - **Move Verification:** Validate candidates against legal libchess moves and UI signals.
 - **UI Detection:** Detect yellow highlights, red emphasis marks, yellow arrows, clocks, hover boxes, and piece-count changes.
-- **Clock Recognition:** Hu Moments digit OCR with no Tesseract dependency.
+- **Clock Recognition:** Zero-dependency clock OCR using component-shape and Hu Moments digit recognition.
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
 - **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
@@ -190,7 +190,7 @@ ChessTubeAnalyzer/
 2. **Chunked Visual Map Pass:** The video is split into time chunks and decoded by worker threads with hardware acceleration requested where OpenCV/FFmpeg supports it.
 3. **Motion Filtering:** Workers crop to the board ROI, convert to grayscale, and keep candidate frames with meaningful visual changes.
 4. **Square Diffing:** Candidate frames are compared against verified board history with `absdiff` and direct square ROI means.
-5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, revert handling, and clock validation stay deterministic.
+5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, revert handling, hover rejection, and clock validation stay deterministic.
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
@@ -202,7 +202,7 @@ ChessTubeAnalyzer/
 python tests\run_tests.py
 ```
 
-The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. You can still run the target manually with CMake when you need lower-level control.
+The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. You can still run the target manually with CMake when you need lower-level control.
 
 ## Performance Snapshot
 
@@ -211,6 +211,6 @@ The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and ru
 | 9.9x Real-Time Extraction | 15s processing for a 2m37s benchmark video (17 plies). Hardware: 8-core CPU, 16 threads. Build: Release LTO. |
 | Board localization | Sparse GSS exact pass (39 evaluations vs 67) |
 | Analysis video generation | Static overlays plus FFmpeg mux/composite (~1000x speedup vs per-frame) |
-| Integration coverage | 7-ply and medium-game revert scenarios |
+| Integration coverage | 7-ply, medium-game revert, full-game, and clock-time scenarios |
 
 See [architecture.md](architecture.md), [SPEC.md](SPEC.md), and [docs/USAGE.md](docs/USAGE.md) for more detail.

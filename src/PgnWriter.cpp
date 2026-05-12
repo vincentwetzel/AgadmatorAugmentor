@@ -11,6 +11,84 @@
 
 namespace cta {
 
+namespace {
+std::string normalize_clock(const std::string& raw) {
+    if (raw.empty()) return "";
+
+    // 1. Clean up duplicate colons and ensure only digits/colons remain
+    std::string cleaned;
+    bool last_was_colon = false;
+    for (char c : raw) {
+        if (std::isdigit(c) || c == '.') {
+            cleaned += c;
+            last_was_colon = false;
+        } else if (c == ':') {
+            if (!last_was_colon) {
+                cleaned += c;
+                last_was_colon = true;
+            }
+        }
+    }
+
+    // Trim leading/trailing colons
+    if (!cleaned.empty() && cleaned.front() == ':') cleaned = cleaned.substr(1);
+    if (!cleaned.empty() && cleaned.back() == ':') cleaned.pop_back();
+
+    // 2. Split into components
+    std::vector<std::string> parts;
+    std::stringstream ss(cleaned);
+    std::string item;
+    while (std::getline(ss, item, ':')) {
+        parts.push_back(item);
+    }
+
+    if (parts.size() > 3 || parts.empty()) return "";
+
+    int h = 0, m = 0;
+    double s = 0.0;
+    try {
+        if (parts.size() == 3) {
+            h = std::stoi(parts[0]);
+            m = std::stoi(parts[1]);
+            s = std::stod(parts[2]);
+        } else if (parts.size() == 2) {
+            m = std::stoi(parts[0]);
+            s = std::stod(parts[1]);
+        } else {
+            s = std::stod(parts[0]);
+        }
+
+        // 3. Strict Validation & Formatting
+        if (s >= 60.0) return ""; // Discard OCR garbage like "020002"
+
+        // Roll over excess minutes into hours (e.g., 90:00 -> 1:30:00)
+        if (m > 59) {
+            h += m / 60;
+            m = m % 60;
+        }
+    } catch (...) {
+        return ""; // Failsafe for std::stoi/stod exceptions
+    }
+
+    std::ostringstream out;
+    out << h << ":" << std::setfill('0') << std::setw(2) << m << ":";
+    
+    // Seconds with proper zero-padding and precision handling
+    if (s < 10.0) {
+        out << "0";
+    }
+    
+    if (std::floor(s) == s) {
+        out << static_cast<int>(s);
+    } else {
+        // Show tenths of a second
+        out << std::fixed << std::setprecision(1) << s;
+    }
+    
+    return out.str();
+}
+} // namespace
+
 PgnWriter::PgnWriter() {
     pos_.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     active_lines_.push_back(&main_line_);
@@ -53,7 +131,7 @@ void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& cloc
         // The PgnPly struct members are ordered {san, clock, evaluation_comment}.
         // The function parameters are (move_str, clock, eval_comment), so a direct mapping is correct.
         // The first parameter is now the converted SAN move.
-        PgnPly ply{san_move, clock, eval_comment, {}};
+        PgnPly ply{san_move, normalize_clock(clock), eval_comment, {}};
         active_lines_.back()->push_back(ply);
 }
 

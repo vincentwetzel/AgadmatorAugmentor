@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Opening Overlays:** Added an optional opening-name overlay to analysis videos and the screenshot-based overlay template editor.
 - **Performance Estimate Headers:** PGN export can now include estimated Elo, ACPL, and accuracy headers derived from move-quality centipawn loss.
 - **Arrow Thickness Templates:** Overlay templates can now persist and edit the base thickness percentage for engine arrows.
+- **Clock-Time Integration Test:** Added a full video integration test that compares extracted move clocks against `[%clk ...]` PGN tags.
+- **Full-Game PGN Baseline Test:** Added an optional integration path that derives expected UCI moves directly from a sample full-game PGN.
 
 ### Performance
 
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bounded Clock OCR Scaling:** Clock digit recognition now caps ROI upscaling at a target text height instead of always tripling the image.
 - **Single-Side Clock OCR:** Accepted moves now OCR only the player clock that changed and reuse the opponent time from cache.
 - **True Zero-Copy Decoding:** Implemented native FFmpeg C API (libavcodec) with CUDA to decode frames directly into `CUdeviceptr`, eliminating PCIe ping-pong and further accelerating the GPU pipeline.
+- **NPP AbsDiff Fast Path:** Re-enabled CUDA/NPP `absdiff` for compatible grayscale buffers while retaining the OpenCV CPU fallback.
 
 ### Changed
 
@@ -42,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test Runner:** `tests/run_tests.py` now configures the build tree with `BUILD_TESTS=ON` before building and running `test_extract_moves`.
 - **FFmpeg Filter Graph Organization:** Moved `FFmpegFilterGraph` into `src/` and expanded it to track CPU/GPU stream state for analysis-video composition.
 - **Source Video Cleanup:** The optional post-processing cleanup now moves completed source videos to the trash instead of permanently deleting them.
+- **Test Build Isolation:** `tests/run_tests.py` now uses `build_tests/` by default, supports `CTA_TEST_BUILD_DIR`, reuses a cached Google Test source tree when present, and disables MSBuild file tracking for fewer Windows temp-path issues.
 
 ### Refactored
 
@@ -61,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Analysis Video Composition:** CUDA filter paths are now disabled for alpha-overlay cases that require CPU-compatible formats, while final video mapping explicitly targets the composed output stream and preserves optional source audio.
 - **CLI Input Validation:** Headless positional input now rejects non-video extensions before processing begins.
 - **Move Scoring:** Fixed a false positive where normal rook moves (e.g., `Rc1`) were misidentified as castling (`O-O-O`) due to visual noise accumulation on the king's squares. Applied a baseline penalty to multi-square moves to ensure all involved squares actually changed.
+- **Clock OCR Robustness:** Expanded the top clock ROI and added a connected-component digit classifier before the Hu Moments fallback, improving recognition for full `H:MM:SS` clock strings.
+- **PGN Clock Formatting:** Normalized extracted clock strings before writing `[%clk ...]` comments, including duplicate-colon cleanup, minute rollover, and invalid seconds rejection.
+- **Mid-Drag Rejection:** Hover-box validation now checks both source and destination squares and rejects candidates with a single strongly visible hover edge.
+- **Video Capture Fallbacks:** Video open paths now fall back through FFmpeg and generic OpenCV capture without pinning a hardware device when accelerated open attempts fail.
 
 ## [0.3.0] — 2026-04-25
 

@@ -1,16 +1,22 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
 
-BUILD_DIR_NAME = "build"
+BUILD_DIR_NAME = os.environ.get("CTA_TEST_BUILD_DIR", "build_tests")
 TEST_TARGET = "test_extract_moves"
 
 def main():
     # Go one level up from the 'tests' directory to get the project root
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     build_dir = os.path.join(root_dir, BUILD_DIR_NAME)
+    temp_dir = os.path.join(build_dir, "tmp")
     test_file = os.path.join(root_dir, "tests", "test_ui_detectors.cpp")
+    os.makedirs(temp_dir, exist_ok=True)
+    build_env = os.environ.copy()
+    build_env["TEMP"] = temp_dir
+    build_env["TMP"] = temp_dir
     
     # 1. Parse the C++ file to see which tests are toggled ON
     print("--- Active Tests ---")
@@ -37,17 +43,32 @@ def main():
         "-S", root_dir,
         "-B", build_dir,
         "-DBUILD_TESTS=ON",
+        "-DENABLE_SYSTEM_CUDA=" + os.environ.get("CTA_ENABLE_SYSTEM_CUDA", "ON"),
     ]
+    cached_gtest = os.path.join(root_dir, "build", "_deps", "googletest-src")
+    if os.path.isdir(cached_gtest):
+        configure_cmd.append("-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=" + cached_gtest)
     try:
-        subprocess.run(configure_cmd, cwd=root_dir, check=True)
+        subprocess.run(configure_cmd, cwd=root_dir, env=build_env, check=True)
     except subprocess.CalledProcessError:
         print("\nCMake configuration failed. Please check the errors above.")
         sys.exit(1)
 
     print("Compiling tests (this will be fast if only the toggles changed)...")
-    build_cmd = ["cmake", "--build", build_dir, "--config", "Release", "--target", TEST_TARGET]
+    for dirpath, dirnames, _ in os.walk(build_dir):
+        for dirname in list(dirnames):
+            if dirname.endswith(".tlog"):
+                shutil.rmtree(os.path.join(dirpath, dirname), ignore_errors=True)
+    build_cmd = [
+        "cmake", "--build", build_dir,
+        "--config", "Release",
+        "--target", TEST_TARGET,
+        "--",
+        "/m:1",
+        "/p:TrackFileAccess=false",
+    ]
     try:
-        subprocess.run(build_cmd, cwd=root_dir, check=True)
+        subprocess.run(build_cmd, cwd=root_dir, env=build_env, check=True)
     except subprocess.CalledProcessError:
         print("\nBuild failed. Please check the compilation errors.")
         sys.exit(1)
@@ -68,7 +89,7 @@ def main():
     
     print("\nStarting Test Run...\n" + "="*40)
     try:
-        subprocess.run([exe_path], cwd=exe_dir, check=True)
+        subprocess.run([exe_path], cwd=exe_dir, env=build_env, check=True)
     except subprocess.CalledProcessError as e:
         print(f"\nTest run finished with exit code {e.returncode}.")
         sys.exit(e.returncode)

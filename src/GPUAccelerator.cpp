@@ -20,7 +20,6 @@
 #undef max
 
 // Force CPU fallback for NPP symbols that may be missing in local CUDA toolkit
-#define nppiAbsDiff_8u_C1R_Ctx(...) ((NppStatus)-1)
 #define nppiCrossCorrValid_NormLevelGetBufferSize_8u32f_C1R(...) ((NppStatus)-1)
 #endif
 
@@ -415,6 +414,31 @@ void GPUPipeline::download_diff(cv::Mat& host) const {
 
 
 void GPUAccelerator::absdiff(const cv::Mat& a, const cv::Mat& b, cv::Mat& out) {
+#ifdef HAVE_SYSTEM_CUDA
+    if (!initialized_) init();
+    if (available_ && a.type() == CV_8UC1 && b.type() == CV_8UC1 &&
+        a.size() == b.size() && !a.empty() && !b.empty()) {
+        GPUMat d_a;
+        GPUMat d_b;
+        GPUMat d_out;
+        d_a.upload(a.isContinuous() ? a : a.clone());
+        d_b.upload(b.isContinuous() ? b : b.clone());
+        d_out.ensure_capacity(a.cols, a.rows, a.type());
+
+        NppiSize roi = {a.cols, a.rows};
+        NppStreamContext ctx = make_stream_ctx();
+        NppStatus st = nppiAbsDiff_8u_C1R_Ctx(
+            static_cast<const Npp8u*>(d_a.ptr()), static_cast<int>(d_a.step()),
+            static_cast<const Npp8u*>(d_b.ptr()), static_cast<int>(d_b.step()),
+            static_cast<Npp8u*>(d_out.ptr()), static_cast<int>(d_out.step()),
+            roi, ctx);
+
+        if (st == NPP_SUCCESS && cudaDeviceSynchronize() == cudaSuccess) {
+            d_out.download(out);
+            return;
+        }
+    }
+#endif
     cv::absdiff(a, b, out);
 }
 

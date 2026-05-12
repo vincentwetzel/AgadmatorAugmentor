@@ -100,9 +100,10 @@ void log_top_candidates(const std::vector<double>& sq_diffs,
 }
 
 cv::VideoCapture open_video_capture(const std::string& safe_video_path) {
-    cv::VideoCapture cap(safe_video_path, cv::CAP_FFMPEG, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY, cv::CAP_PROP_HW_DEVICE, 0});
-    if (!cap.isOpened()) cap.open(safe_video_path, cv::CAP_FFMPEG, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY});
+    cv::VideoCapture cap(safe_video_path, cv::CAP_FFMPEG, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY});
     if (!cap.isOpened()) cap.open(safe_video_path, cv::CAP_ANY, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY});
+    if (!cap.isOpened()) cap.open(safe_video_path, cv::CAP_FFMPEG);
+    if (!cap.isOpened()) cap.open(safe_video_path, cv::CAP_ANY);
     return cap;
 }
 

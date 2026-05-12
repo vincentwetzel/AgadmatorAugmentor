@@ -57,14 +57,14 @@ When a piece is picked up and dragged, the UI draws a white outline around the d
 
 - **White Masking:** Thresholds pixels at `[160, 160, 160]–[255, 255, 255]`.
 - **1D Projection:** Extracts the 4 outer edges of each square (~8% thickness). Collapses edges via 1D `np.max` to eliminate "thickness dilution" from thin 2-pixel outlines.
-- **Occlusion Tolerance:** A square is flagged as an active hover box if at least **2 of 4 edges** are >10% visible along their length. Handles cases where a large piece partially covers the destination square's outline.
+- **Occlusion Tolerance:** A square is flagged as an active hover box if at least **2 of 4 edges** are >10% visible along their length, or if one edge is strongly visible. Candidate validation checks both origin and destination squares, which catches more mid-drag frames where the hover outline remains partly hidden by the piece.
 
 ### Game Clocks & Turn Validation
 
-- **Region Isolation:** Extracts tight ROIs around the clock pills above and below the board (relative to localized board coordinates).
+- **Region Isolation:** Extracts tight ROIs around the clock pills above and below the board (relative to localized board coordinates), with an expanded upper ROI to tolerate videos where the top clock sits farther above the board.
 - **Active Player Tracking:** The active player's clock has a white background; the inactive clock has a dark background. The system compares white pixel area to determine whose turn it is.
 - **Turn Validation:** After a candidate move is proposed, the system checks that the UI clock turn matches the expected active player. If the clock lags behind the piece animation, the frame is rejected and naturally caught in the next poll.
-- **Hu Moments Digit Recognizer:** Replaces Tesseract with a zero-dependency OCR system:
+- **Zero-Dependency Digit Recognizer:** Replaces Tesseract with a local OCR system. A connected-component shape pass first classifies full clock glyph groups by holes, aspect ratio, and segment fill regions, then falls back to the Hu Moments template-style recognizer:
   1. **Preprocessing:** 3× cubic upscaling, adaptive Gaussian thresholding (block size 21), morphological closing.
   2. **Character Segmentation:** Vertical projection — columns with >3 non-zero pixels form character regions, minimum width 3px.
   3. **Template Matching:** Each segment resized to 5×8, 7 Hu moments computed and log-transformed. Nearest-neighbor classification against 11 pre-computed 7-segment display templates (digits 0–9 and `:`) using Euclidean distance with area/aspect ratio weighting.
@@ -137,7 +137,7 @@ Source code is split into focused modules to keep files manageable (soft limit: 
 | Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow squares, piece counting, red squares, promotion classification, debug helpers |
 | Board Hover Detection | `BoardHoverDetection.cpp` | Hover-box/mid-drag detection using white edge projections |
 | Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
-| Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock ROI extraction, active-clock detection, conditional caching, Hu Moments digit OCR |
+| Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock ROI extraction, active-clock detection, conditional caching, component-shape and Hu Moments digit OCR |
 | Extraction Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, map-reduce reduction loop, move scoring helpers, revert detection, PGN-bound game data |
 | Move Validation | `MoveValidations.h/.cpp` | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | UCI protocol wrapper, asynchronous evaluation parsing |

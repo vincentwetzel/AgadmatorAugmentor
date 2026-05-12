@@ -49,10 +49,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                                                      const VideoOverlayConfig& overlay_config,
                                                      std::atomic<bool>* cancel_flag,
                                                      std::function<void(int, const std::string&)> progress_callback) {
-    // Try explicit FFmpeg with specific GPU device to quickly retrieve metadata
+    // Try FFmpeg hardware acceleration first for quick metadata retrieval.
     cv::VideoCapture cap(input_video_path, cv::CAP_FFMPEG, {
-        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY,
-        cv::CAP_PROP_HW_DEVICE, 0
+        cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY
     });
     if (!cap.isOpened()) {
         cap.open(input_video_path, cv::CAP_FFMPEG, {

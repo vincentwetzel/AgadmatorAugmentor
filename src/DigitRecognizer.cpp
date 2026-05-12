@@ -306,6 +306,164 @@ static std::string extract_clock_substring(const std::string& raw_result) {
     return best_clock;
 }
 
+static int count_glyph_holes_binary(const cv::Mat& glyph) {
+    cv::Mat inverted;
+    cv::bitwise_not(glyph, inverted);
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    int component_count = cv::connectedComponentsWithStats(
+        inverted, labels, stats, centroids, 8, CV_32S);
+
+    int holes = 0;
+    for (int label = 1; label < component_count; ++label) {
+        const int x = stats.at<int>(label, cv::CC_STAT_LEFT);
+        const int y = stats.at<int>(label, cv::CC_STAT_TOP);
+        const int w = stats.at<int>(label, cv::CC_STAT_WIDTH);
+        const int h = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if (x > 0 && y > 0 && x + w < glyph.cols && y + h < glyph.rows && area >= 2) {
+            ++holes;
+        }
+    }
+    return holes;
+}
+
+static char classify_clock_glyph_shape(const cv::Mat& glyph) {
+    cv::Rect bbox = cv::boundingRect(glyph);
+    if (bbox.width <= 1 || bbox.height <= 1) return '?';
+
+    cv::Mat cropped = glyph(bbox);
+    int holes = count_glyph_holes_binary(cropped);
+    if (bbox.width <= 9 || static_cast<double>(bbox.width) / std::max(1, bbox.height) < 0.55) {
+        return '1';
+    }
+    if (holes >= 2) {
+        return '8';
+    }
+
+    cv::Mat norm;
+    cv::resize(cropped, norm, cv::Size(20, 32), 0, 0, cv::INTER_NEAREST);
+
+    auto fill = [&](int x, int y, int w, int h) {
+        cv::Rect r(std::clamp(x, 0, norm.cols - 1),
+                   std::clamp(y, 0, norm.rows - 1),
+                   std::min(w, norm.cols - std::clamp(x, 0, norm.cols - 1)),
+                   std::min(h, norm.rows - std::clamp(y, 0, norm.rows - 1)));
+        if (r.width <= 0 || r.height <= 0) return 0.0;
+        return static_cast<double>(cv::countNonZero(norm(r))) / static_cast<double>(r.area());
+    };
+
+    double tl = fill(0, 0, 7, 16);
+    double tr = fill(13, 0, 7, 16);
+    double ml = fill(0, 10, 10, 12);
+    double bl = fill(0, 16, 7, 16);
+    double br = fill(13, 16, 7, 16);
+    double top = fill(4, 0, 12, 6);
+    double mid = fill(4, 12, 12, 8);
+    double bot = fill(4, 26, 12, 6);
+
+    if (holes == 1) {
+        if (mid < 0.38) return '0';
+        if (top < 0.55 && bot < 0.45) return '4';
+        if (tl > 0.58 && bl > 0.70 && tr < 0.52) return '6';
+        if (bl < 0.55 && mid > 0.55) return '9';
+        return (tl > tr) ? '6' : '0';
+    }
+
+    if (top > 0.85 && bot < 0.70 && bl < 0.20) return '7';
+    if (ml < 0.12 && bot > 0.80) return '2';
+    if (tl > 0.50 && top > 0.85 && mid > 0.58 && br > 0.65) return '5';
+    return '3';
+}
+
+static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
+    if (roi_bgr.empty()) return "";
+
+    cv::Mat gray;
+    cv::cvtColor(roi_bgr, gray, cv::COLOR_BGR2GRAY);
+
+    std::vector<cv::Mat> candidates;
+    cv::Mat otsu_binary;
+    cv::threshold(gray, otsu_binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    candidates.push_back(otsu_binary);
+
+    cv::Mat otsu_inverse;
+    cv::threshold(gray, otsu_inverse, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
+    candidates.push_back(otsu_inverse);
+
+    for (const cv::Mat& thresh : candidates) {
+        cv::Mat labels;
+        cv::Mat stats;
+        cv::Mat centroids;
+        int component_count = cv::connectedComponentsWithStats(
+            thresh, labels, stats, centroids, 8, CV_32S);
+
+        std::vector<cv::Rect> digit_boxes;
+        for (int label = 1; label < component_count; ++label) {
+            cv::Rect r(stats.at<int>(label, cv::CC_STAT_LEFT),
+                       stats.at<int>(label, cv::CC_STAT_TOP),
+                       stats.at<int>(label, cv::CC_STAT_WIDTH),
+                       stats.at<int>(label, cv::CC_STAT_HEIGHT));
+            int area = stats.at<int>(label, cv::CC_STAT_AREA);
+            if (r.width <= 1 || r.height <= 1 || area < 20) continue;
+
+            bool looks_like_clock_icon =
+                r.x < thresh.cols / 2 &&
+                r.width >= r.height * 0.80 && r.width <= r.height * 1.20 &&
+                r.height >= thresh.rows / 2;
+            if (looks_like_clock_icon) continue;
+
+            if (r.height >= std::max(12, thresh.rows / 3) &&
+                r.width >= 4 &&
+                r.width <= std::max(16, thresh.cols / 4)) {
+                int max_single_digit_width = std::max(18, static_cast<int>(std::round(r.height * 0.75)));
+                if (r.width > max_single_digit_width) {
+                    int split_count = std::clamp(
+                        static_cast<int>(std::round(static_cast<double>(r.width) / std::max(1, max_single_digit_width))),
+                        2, 3);
+                    int x = r.x;
+                    for (int part = 0; part < split_count; ++part) {
+                        int next_x = r.x + static_cast<int>(std::round((part + 1) * r.width / static_cast<double>(split_count)));
+                        digit_boxes.emplace_back(x, r.y, next_x - x, r.height);
+                        x = next_x;
+                    }
+                } else {
+                    digit_boxes.push_back(r);
+                }
+            }
+        }
+
+        std::sort(digit_boxes.begin(), digit_boxes.end(),
+                  [](const cv::Rect& a, const cv::Rect& b) { return a.x < b.x; });
+
+        if (digit_boxes.size() > 5) {
+            digit_boxes.erase(digit_boxes.begin(), digit_boxes.end() - 5);
+        }
+        if (digit_boxes.size() != 5) {
+            continue;
+        }
+
+        std::string digits;
+        digits.reserve(5);
+        bool all_ok = true;
+        for (const cv::Rect& box : digit_boxes) {
+            char c = classify_clock_glyph_shape(thresh(box));
+            if (!std::isdigit(static_cast<unsigned char>(c))) {
+                all_ok = false;
+                break;
+            }
+            digits += c;
+        }
+        if (all_ok) {
+            return std::string(1, digits[0]) + ":" + digits.substr(1, 2) + ":" + digits.substr(3, 2);
+        }
+    }
+
+    return "";
+}
+
 static char classify_segment_fast(const cv::Mat& char_img) {
     cv::Rect bbox = cv::boundingRect(char_img);
     if (bbox.width <= 1 || bbox.height <= 1) return '?';
@@ -388,6 +546,11 @@ std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
 
     cv::Mat gray;
     cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
+
+    std::string component_clock = recognize_clock_by_components(scaled);
+    if (!component_clock.empty()) {
+        return component_clock;
+    }
 
     cv::Mat thresh;
     if (is_active) {

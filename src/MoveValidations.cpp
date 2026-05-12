@@ -88,7 +88,8 @@ bool check_hover_box(const cv::Mat& board_bgr, const BoardGeometry& geo, cv::Mat
     double r3 = static_cast<double>(cv::countNonZero(reduced)) / std::max(1, sh);
 
     int visible = (r0 > 0.10) + (r1 > 0.10) + (r2 > 0.10) + (r3 > 0.10);
-    return visible >= 2;
+    double strongest_edge = std::max({r0, r1, r2, r3});
+    return visible >= 2 || strongest_edge > 0.65;
 }
 
 } // namespace validation

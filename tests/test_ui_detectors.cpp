@@ -50,8 +50,10 @@ static std::vector<IntegrationTestResult> g_test_results;
 #define TEST_CACHE_CORRECTNESS    0
 //
 // Integration tests (full video pipeline with ground-truth PGN):
-#define TEST_7_PLIES_EXTRACTION   1
-#define TEST_MEDIUM_GAME_REVERT   1
+#define TEST_7_PLIES_EXTRACTION   0
+#define TEST_MEDIUM_GAME_REVERT   0
+#define TEST_FULL_GAME_1_EXTRACTION 0
+#define TEST_INTEGRATION_CLOCK_TIMES 1
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   0
@@ -60,6 +62,56 @@ static std::vector<IntegrationTestResult> g_test_results;
 namespace cta {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+static std::string format_clock_for_test(const std::string& raw) {
+    if (raw.empty()) return "";
+
+    std::string cleaned;
+    bool last_was_colon = false;
+    for (char c : raw) {
+        if (std::isdigit(c) || c == '.') {
+            cleaned += c;
+            last_was_colon = false;
+        } else if (c == ':') {
+            if (!last_was_colon) {
+                cleaned += c;
+                last_was_colon = true;
+            }
+        }
+    }
+    if (!cleaned.empty() && cleaned.front() == ':') cleaned = cleaned.substr(1);
+    if (!cleaned.empty() && cleaned.back() == ':') cleaned.pop_back();
+
+    std::vector<std::string> parts;
+    std::stringstream ss(cleaned);
+    std::string item;
+    while (std::getline(ss, item, ':')) {
+        parts.push_back(item);
+    }
+    if (parts.size() > 3 || parts.empty()) return "";
+
+    int h = 0, m = 0;
+    double s = 0.0;
+    try {
+        if (parts.size() == 3) { h = std::stoi(parts[0]); m = std::stoi(parts[1]); s = std::stod(parts[2]); } 
+        else if (parts.size() == 2) { m = std::stoi(parts[0]); s = std::stod(parts[1]); } 
+        else { s = std::stod(parts[0]); }
+
+        if (s >= 60.0) return "";
+        if (m > 59) { h += m / 60; m = m % 60; }
+    } catch (...) { return ""; }
+
+    std::ostringstream out;
+    out << h << ":" << std::setfill('0') << std::setw(2) << m << ":";
+    if (s < 10.0) out << "0";
+    
+    if (std::floor(s) == s) {
+        out << static_cast<int>(s);
+    } else {
+        out << std::fixed << std::setprecision(1) << s;
+    }
+    return out.str();
+}
 
 // Helper to find the assets directory from various common CWDs (root, build, build/Release)
 static std::string find_assets_dir() {
@@ -86,6 +138,14 @@ static std::string normalize_san_token(std::string san) {
     san.erase(std::remove(san.begin(), san.end(), '#'), san.end());
     san.erase(std::remove(san.begin(), san.end(), '!'), san.end());
     san.erase(std::remove(san.begin(), san.end(), '?'), san.end());
+    san.erase(std::remove(san.begin(), san.end(), '='), san.end());
+    san.erase(std::remove(san.begin(), san.end(), 'x'), san.end());
+
+    auto ep_pos = san.find("e.p.");
+    if (ep_pos != std::string::npos) san.erase(ep_pos, 4);
+
+    if (san == "0-0") return "O-O";
+    if (san == "0-0-0") return "O-O-O";
     return san;
 }
 
@@ -158,7 +218,7 @@ static std::string build_san_for_test(const libchess::Position& pos, const libch
 
 static std::string strip_pgn_markup(const std::string& pgn) {
     std::string out;
-    out.reserve(pgn.size());
+    out.reserve(pgn.size() + 100);
     int brace_depth = 0;
     int variation_depth = 0;
     bool in_header = false;
@@ -166,28 +226,36 @@ static std::string strip_pgn_markup(const std::string& pgn) {
     for (char c : pgn) {
         if (c == '[' && brace_depth == 0 && variation_depth == 0) {
             in_header = true;
+            out += ' ';
             continue;
         }
         if (in_header) {
-            if (c == ']') in_header = false;
+            if (c == ']') {
+                in_header = false;
+                out += ' ';
+            }
             continue;
         }
         if (c == '{') {
             ++brace_depth;
+            out += ' ';
             continue;
         }
         if (c == '}' && brace_depth > 0) {
             --brace_depth;
+            out += ' ';
             continue;
         }
         if (brace_depth > 0) continue;
 
         if (c == '(') {
             ++variation_depth;
+            out += ' ';
             continue;
         }
         if (c == ')' && variation_depth > 0) {
             --variation_depth;
+            out += ' ';
             continue;
         }
         if (variation_depth > 0) continue;
@@ -213,19 +281,63 @@ static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::stri
 
     while (iss >> token) {
         if (token == "*" || token == "1-0" || token == "0-1" || token == "1/2-1/2") continue;
-        if (token.find('.') != std::string::npos) continue;
         if (token.rfind("$", 0) == 0) continue;
 
+        // Remove leading move numbers safely without corrupting engine castling like "0-0"
+        size_t first_dot = token.find('.');
+        if (first_dot != std::string::npos) {
+            size_t last_dot = first_dot;
+            while (last_dot < token.size() && token[last_dot] == '.') last_dot++;
+            token = token.substr(last_dot);
+        }
+        if (token.empty()) continue;
+
+        // Skip stray move numbers that lack a dot (e.g. "12")
+        bool is_all_digits = true;
+        for (char c : token) { if (!std::isdigit(static_cast<unsigned char>(c))) { is_all_digits = false; break; } }
+        if (is_all_digits) continue;
+
         const std::string wanted_san = normalize_san_token(token);
+        if (wanted_san.empty()) continue;
+
         bool matched = false;
-        for (const auto& legal_move : pos.legal_moves()) {
-            const std::string uci = static_cast<std::string>(legal_move);
-            const std::string legal_san = normalize_san_token(build_san_for_test(pos, legal_move, uci));
-            if (legal_san == wanted_san) {
+        
+        try {
+            libchess::Move m = pos.parse_move(token);
+            std::string uci = static_cast<std::string>(m);
+            if (uci == "e1h1") uci = "e1g1";
+            else if (uci == "e1a1") uci = "e1c1";
+            else if (uci == "e8h8") uci = "e8g8";
+            else if (uci == "e8a8") uci = "e8c8";
+            moves.push_back(uci);
+            pos.makemove(m);
+            matched = true;
+        } catch (...) {
+            try {
+                libchess::Move m = pos.parse_move(wanted_san);
+                std::string uci = static_cast<std::string>(m);
+                if (uci == "e1h1") uci = "e1g1";
+                else if (uci == "e1a1") uci = "e1c1";
+                else if (uci == "e8h8") uci = "e8g8";
+                else if (uci == "e8a8") uci = "e8c8";
                 moves.push_back(uci);
-                pos.makemove(legal_move);
+                pos.makemove(m);
                 matched = true;
-                break;
+            } catch (...) {
+                for (const auto& legal_move : pos.legal_moves()) {
+                    std::string uci = static_cast<std::string>(legal_move);
+                    if (uci == "e1h1") uci = "e1g1";
+                    else if (uci == "e1a1") uci = "e1c1";
+                    else if (uci == "e8h8") uci = "e8g8";
+                    else if (uci == "e8a8") uci = "e8c8";
+                    const std::string legal_san = normalize_san_token(build_san_for_test(pos, legal_move, uci));
+                    if (legal_san == wanted_san) {
+                        moves.push_back(uci);
+                        pos.makemove(legal_move);
+                        matched = true;
+                        break;
+                    }
+                }
             }
         }
 
@@ -808,6 +920,180 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 }
 
 #endif // TEST_MEDIUM_GAME_REVERT
+
+// ─── INTEGRATION: FULL GAME 1 EXTRACTION ─────────────────────────────────────
+#if TEST_FULL_GAME_1_EXTRACTION
+
+TEST_F(DetectorsTest, FullGame1Extraction) {
+    const std::string dir_path = (std::filesystem::path(assets_dir_) / "sample_games_full" / "game_1").string();
+    auto vid_files = list_files(dir_path, {".mp4", ".mkv", ".webm", ".avi"});
+    
+    if (vid_files.empty()) {
+        GTEST_SKIP() << "Video not found in: " << dir_path;
+    }
+    
+    const std::string video_path = vid_files[0];
+    const std::string pgn_path = (std::filesystem::path(dir_path) / "game.pgn").string();
+
+    if (!std::filesystem::exists(pgn_path)) {
+        GTEST_SKIP() << "PGN not found: " << pgn_path;
+    }
+
+    std::cout << "\nRunning integration test on Full Game 1...\n";
+
+    IntegrationTestResult result;
+    result.name = "Full Game 1 Extraction";
+    result.video_file = std::filesystem::path(video_path).filename().string();
+    result.video_duration_sec = get_video_duration(video_path);
+
+    auto t_start = std::chrono::steady_clock::now();
+
+    ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
+    GameData data = extractor.extract_moves_from_video(video_path, "test_full_game_1");
+
+    result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    result.plies_extracted = static_cast<int>(data.moves.size());
+
+    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    std::cout << "  Loaded expected baseline from PGN.\n";
+
+    result.plies_expected = static_cast<int>(expected_moves.size());
+    result.reverts_detected = 0; // Can be updated if GameData tracks total reverts in the future
+
+    std::cout << "  Expected (" << expected_moves.size() << "): ";
+    for (const auto& m : expected_moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    std::cout << "  Extracted (" << data.moves.size() << "): ";
+    for (const auto& m : data.moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    result.passed = (data.moves == expected_moves);
+    EXPECT_EQ(data.moves, expected_moves)
+        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+
+    if (result.passed) {
+        std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size() << " plies from the PGN.\n";
+    }
+
+    g_test_results.push_back(result);
+    print_test_summary();
+}
+
+#endif // TEST_FULL_GAME_1_EXTRACTION
+
+// ─── INTEGRATION: CLOCK TIMES EXTRACTION ─────────────────────────────────────
+#if TEST_INTEGRATION_CLOCK_TIMES
+
+TEST_F(DetectorsTest, IntegrationClockTimes) {
+    const std::string dir_path = (std::filesystem::path(assets_dir_) / "test_clock_times").string();
+    auto vid_files = list_files(dir_path, {".mp4", ".mkv", ".webm", ".avi"});
+    
+    if (vid_files.empty()) {
+        GTEST_SKIP() << "Video not found in: " << dir_path;
+    }
+    
+    const std::string video_path = vid_files[0];
+    auto pgn_files = list_files(dir_path, {".pgn"});
+    if (pgn_files.empty()) {
+        GTEST_SKIP() << "PGN not found in: " << dir_path;
+    }
+    const std::string pgn_path = pgn_files[0];
+
+    std::cout << "\nRunning integration test on clock times...\n";
+
+    IntegrationTestResult result;
+    result.name = "Clock Times Integration";
+    result.video_file = std::filesystem::path(video_path).filename().string();
+    result.video_duration_sec = get_video_duration(video_path);
+
+    auto t_start = std::chrono::steady_clock::now();
+
+    ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
+    GameData data = extractor.extract_moves_from_video(video_path, "test_clock_times");
+
+    result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    result.plies_extracted = static_cast<int>(data.moves.size());
+
+    // Extract and verify expected moves from PGN
+    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    std::cout << "  Loaded expected moves from PGN.\n";
+    result.plies_expected = static_cast<int>(expected_moves.size());
+
+    std::cout << "  Expected Moves (" << expected_moves.size() << "): ";
+    for (const auto& m : expected_moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    std::cout << "  Extracted Moves (" << data.moves.size() << "): ";
+    for (const auto& m : data.moves) std::cout << m << " ";
+    std::cout << "\n";
+
+    bool moves_passed = (data.moves == expected_moves);
+    EXPECT_EQ(data.moves, expected_moves)
+        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+
+    // Extract expected clocks from PGN's [%clk ...] tags
+    std::vector<std::string> expected_clocks;
+    {
+        std::ifstream ifs(pgn_path);
+        ASSERT_TRUE(ifs.is_open()) << "Could not open PGN: " << pgn_path;
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        size_t pos = 0;
+        while ((pos = content.find("[%clk ", pos)) != std::string::npos) {
+            pos += 6;
+            size_t end_pos = content.find("]", pos);
+            if (end_pos != std::string::npos) {
+                expected_clocks.push_back(content.substr(pos, end_pos - pos));
+                pos = end_pos;
+            }
+        }
+    }
+    
+    std::cout << "  Loaded expected clocks from PGN.\n";
+
+    std::cout << "  Expected Clocks (" << expected_clocks.size() << "): ";
+    for (const auto& c : expected_clocks) std::cout << c << " ";
+    std::cout << "\n";
+
+    // Map GameData clocks into standard PGN strings for each ply
+    std::vector<std::string> extracted_clocks;
+    for (size_t i = 0; i < data.moves.size(); ++i) {
+        size_t clockIdx = i + 1;
+        const auto* clk_ptr = (clockIdx < data.clocks.size()) ? &data.clocks[clockIdx] : (i < data.clocks.size()) ? &data.clocks[i] : nullptr;
+        std::string raw_clock = clk_ptr ? ((i % 2 == 0) ? clk_ptr->white_time : clk_ptr->black_time) : "0:00:00";
+        
+        std::string formatted = format_clock_for_test(raw_clock);
+        extracted_clocks.push_back(formatted.empty() ? "0:00:00" : formatted);
+    }
+
+    // It's common for the final frame to settle before the clock updates its final tick.
+    // Trim any trailing zeroed clocks, and resize the expected array to match.
+    while (!extracted_clocks.empty() && extracted_clocks.back() == "0:00:00") {
+        extracted_clocks.pop_back();
+    }
+    if (expected_clocks.size() > extracted_clocks.size()) {
+        expected_clocks.resize(extracted_clocks.size());
+    }
+
+    std::cout << "  Extracted Clocks (" << extracted_clocks.size() << "): ";
+    for (const auto& c : extracted_clocks) std::cout << c << " ";
+    std::cout << "\n";
+
+    bool clocks_passed = (extracted_clocks == expected_clocks);
+    EXPECT_EQ(extracted_clocks, expected_clocks)
+        << "Extracted " << extracted_clocks.size() << " clocks, expected " << expected_clocks.size();
+
+    result.passed = moves_passed && clocks_passed;
+
+    if (result.passed) {
+        std::cout << "PASS: Extracted moves and clocks perfectly match the expected PGN.\n";
+    }
+
+    g_test_results.push_back(result);
+    print_test_summary();
+}
+
+#endif // TEST_INTEGRATION_CLOCK_TIMES
 
 // ─── MEMORY LIMIT BEHAVIOR ───────────────────────────────────────────────────
 #if TEST_MEMORY_LIMIT

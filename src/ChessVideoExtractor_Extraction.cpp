@@ -221,8 +221,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     int frame_height = first_frame.rows;
     int roi_x1 = std::max(0, static_cast<int>(geo_->bx + geo_->bw * 0.76));
     int roi_x2 = std::min(frame_width, static_cast<int>(geo_->bx + geo_->bw));
-    int top_roi_y1 = std::max(0, static_cast<int>(geo_->by - geo_->sq_h * 0.40));
-    int top_roi_y2 = std::max(top_roi_y1 + 1, static_cast<int>(geo_->by - geo_->sq_h * 0.03));
+    int top_roi_y1 = std::max(0, static_cast<int>(geo_->by - geo_->sq_h * 0.55));
+    int top_roi_y2 = std::max(top_roi_y1 + 1, static_cast<int>(geo_->by - geo_->sq_h * 0.08));
     int bot_roi_y1 = std::min(frame_height - 1, static_cast<int>(geo_->by + geo_->bh + geo_->sq_h * 0.07));
     int bot_roi_y2 = std::min(frame_height, static_cast<int>(geo_->by + geo_->bh + geo_->sq_h * 0.40));
     bool has_clocks = (roi_x2 > roi_x1 && top_roi_y2 > top_roi_y1 && bot_roi_y2 > bot_roi_y1);
@@ -593,7 +593,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // ── Validation 2: Hover box rejection ────────────────────────────
             if (!scratch_) scratch_ = std::make_unique<ScratchBuffers>();
-            if (validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name)) {
+            if (validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, from_name) ||
+                validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name)) {
                 if (debug_level_ != DebugLevel::None) {
                     log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
                 }

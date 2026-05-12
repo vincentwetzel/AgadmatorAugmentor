@@ -263,7 +263,7 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
     int roi_x1 = std::max(0, static_cast<int>(geo.bx + geo.bw * 0.70));
     int roi_x2 = std::min(img_bgr.cols, static_cast<int>(geo.bx + geo.bw));
 
-    int top_roi_y1 = std::max(0, static_cast<int>(geo.by - geo.sq_h * 0.40));
+    int top_roi_y1 = std::max(0, static_cast<int>(geo.by - geo.sq_h * 0.55));
     int top_roi_y2 = std::max(top_roi_y1 + 1, static_cast<int>(geo.by - geo.sq_h * 0.08));
     int bot_roi_y1 = std::min(img_bgr.rows - 1, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.07));
     int bot_roi_y2 = std::min(img_bgr.rows, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.40));
