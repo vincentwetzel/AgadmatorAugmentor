@@ -49,6 +49,7 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Configure Stockfish MultiPV, analysis strength, time cap, node cap, and variation-length presets.
 - Enable Fast Preview mode for rapid processing with bounded engine limits.
 - Automatically find or manually specify the Stockfish executable.
+- Provide an optional Lichess API token under **Advanced > Online Services** when Lichess Explorer requires authenticated requests.
 - Manage channel-specific overlay templates with a screenshot-based editor, including engine-arrow routing and base thickness.
 - Toggle and position optional opening-name text in analysis videos.
 - Override the auto-detected template per queue item.
@@ -57,7 +58,7 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 
 The queue stores the selected template configuration with each item right before processing begins. That lets mixed-channel batches keep each video's intended board, eval bar, PV text, opening text, arrow placement, and arrow thickness.
 
-Processing logs include elapsed-time prefixes, which makes it easier to compare extraction, Stockfish, Lichess opening lookup, and FFmpeg composition phases across runs. If FFmpeg composition fails, the failure message includes the captured tail of FFmpeg output when available.
+Processing logs include elapsed-time prefixes, which makes it easier to compare extraction, Stockfish, Lichess opening lookup, and FFmpeg composition phases across runs. Lichess lookup logs include the API connection check and can show top matching games when a position becomes rare or unique. If FFmpeg composition fails, the failure message includes the captured tail of FFmpeg output when available.
 
 ## Headless Mode
 
@@ -94,7 +95,6 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 - `CTA_CHUNK_SECONDS`: chunk duration in seconds, clamped to 30-300.
 - `CTA_MAX_CHUNK_LOOKAHEAD`: maximum number of mapped chunks allowed ahead of the reducer.
 - `CTA_TRACE_REJECTS`: set to `1` to log detailed reasons rejected move candidates were filtered.
-- `CTA_ENABLE_SYSTEM_CUDA`: set to `OFF` while configuring tests or local builds to exercise the CPU fallback path.
 
 ## Testing
 
@@ -104,4 +104,4 @@ Unit tests are opt-in so the default application build does not need to download
 python tests\run_tests.py
 ```
 
-The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to point at a different test build tree. When an existing `build/_deps/googletest-src` checkout is available, the helper reuses it to avoid another Google Test fetch. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. Integration tests can compare extracted moves and clock tags directly against sample PGNs.
+The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. The short-game integration test reads expected moves from the sample PGN rather than a separate golden JSON artifact.

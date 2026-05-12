@@ -341,6 +341,42 @@ void SettingsDialog::setupUi() {
     // === Tab 4: Advanced ===
     auto* advancedTab = new QWidget();
     auto* advancedLayout = new QVBoxLayout(advancedTab);
+
+    auto* networkGroup = new QGroupBox("Online Services");
+    networkGroup->setToolTip("Configure external API connections.");
+    auto* networkLayout = new QVBoxLayout(networkGroup);
+    
+    auto* lichessRow = new QHBoxLayout();
+    lichessRow->addWidget(createSettingsLabel("Lichess API Token:", "Personal API Access token for Lichess Explorer (optional)."));
+    auto* lichessTokenEdit = new QLineEdit();
+    lichessTokenEdit->setObjectName("lichessTokenEdit");
+    lichessTokenEdit->setEchoMode(QLineEdit::Password);
+    lichessTokenEdit->setToolTip("Required if Lichess blocks your IP with HTTP 401. Generate a free token at lichess.org/account/oauth/token");
+    lichessTokenEdit->setText(QSettings().value("lichessToken", "").toString());
+    connect(lichessTokenEdit, &QLineEdit::textChanged, this, [](const QString& text) {
+        QSettings().setValue("lichessToken", text.trimmed());
+    });
+    lichessRow->addWidget(lichessTokenEdit);
+
+    auto* showHideBtn = new QPushButton("Show");
+    showHideBtn->setCheckable(true);
+    showHideBtn->setToolTip("Toggle token visibility.");
+    connect(showHideBtn, &QPushButton::toggled, this, [lichessTokenEdit, showHideBtn](bool checked) {
+        lichessTokenEdit->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
+        showHideBtn->setText(checked ? "Hide" : "Show");
+    });
+    lichessRow->addWidget(showHideBtn);
+
+    auto* getTokenBtn = new QPushButton("Get Token");
+    getTokenBtn->setToolTip("Open Lichess in your browser to generate a free Personal API Access Token.");
+    connect(getTokenBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl("https://lichess.org/account/oauth/token"));
+    });
+    lichessRow->addWidget(getTokenBtn);
+
+    networkLayout->addLayout(lichessRow);
+    advancedLayout->addWidget(networkGroup);
+
     auto* advancedGroup = new QGroupBox("Performance and Troubleshooting");
     advancedGroup->setToolTip("Tune processing speed, memory use, and debug output.");
     auto* advancedGroupLayout = new QVBoxLayout(advancedGroup);

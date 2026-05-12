@@ -68,9 +68,23 @@ OpeningFetcher::OpeningFetcher() : stop_(false), unique_game_reached_(false), do
             nlohmann::json j;
             ifs >> j;
             for (auto& el : j.items()) {
+                long long tg = el.value().value("total_games", 0LL);
+                if (tg < 0) continue; // Skip corrupted entries from previous 32-bit overflows
+                
+                std::vector<std::string> top_games;
+                if (el.value().contains("top_games")) {
+                    for (const auto& g : el.value()["top_games"]) {
+                        top_games.push_back(g.get<std::string>());
+                    }
+                } else if (el.value().contains("game_info")) {
+                    std::string gi = el.value().value("game_info", "");
+                    if (!gi.empty()) top_games.push_back(gi);
+                }
+
                 cache_[el.key()] = {el.value().value("eco", ""), el.value().value("name", ""),
-                                    "", el.value().value("total_games", 0), 200, 0,
-                                    el.value().value("found", false), true};
+                                    "", tg, 200, 0,
+                                    el.value().value("found", false), true,
+                                    top_games};
             }
         } catch(...) {}
     }
@@ -91,7 +105,8 @@ OpeningFetcher::~OpeningFetcher() {
             if (info.api_success) {
                 j[fen] = {
                     {"eco", info.eco}, {"name", info.name},
-                    {"total_games", info.total_games}, {"found", info.found}
+                    {"total_games", info.total_games}, {"found", info.found},
+                    {"top_games", info.top_games}
                 };
             }
         }
@@ -99,6 +114,21 @@ OpeningFetcher::~OpeningFetcher() {
         std::ofstream ofs(cache_path_);
         ofs << j.dump(4);
     } catch(...) {}
+}
+
+void OpeningFetcher::set_api_token(const std::string& token) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    api_token_ = token;
+}
+
+bool OpeningFetcher::test_connection(std::string& out_error) {
+    LichessOpening result = fetch_from_lichess("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    if (result.http_status == 401 || result.http_status == 403) {
+        out_error = "Lichess API returned HTTP " + std::to_string(result.http_status) + 
+                    " Unauthorized. Please configure a valid API token in Settings -> Advanced.";
+        return false;
+    }
+    return true;
 }
 
 void OpeningFetcher::enqueue_fen(const std::string& fen) {
@@ -115,7 +145,7 @@ LichessOpening OpeningFetcher::get_opening(const std::string& fen) {
         return it->second;
     }
     LichessOpening missing;
-    missing.total_games = -1; // Use -1 to distinguish "not in cache" from "fetched but failed"
+    missing.total_games = -1LL; // Use -1 to distinguish "not in cache" from "fetched but failed"
     return missing;
 }
 
@@ -137,8 +167,14 @@ void OpeningFetcher::wait_until_done() {
 
 LichessOpening OpeningFetcher::fetch_from_lichess(const std::string& fen) {
     LichessOpening result;
+    std::string token;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        token = api_token_;
+    }
+
 #ifdef _WIN32
-    HINTERNET hSession = WinHttpOpen(L"ChessTubeAnalyzer/1.0 (https://github.com/vincentwetzel/chess-tube-analyzer)", 
+    HINTERNET hSession = WinHttpOpen(L"ChessTubeAnalyzer-Extract/1.0 (local extraction pipeline)", 
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME, 
                                      WINHTTP_NO_PROXY_BYPASS, 0);
@@ -162,7 +198,7 @@ LichessOpening OpeningFetcher::fetch_from_lichess(const std::string& fen) {
         return result;
     }
 
-    std::string path = "/lichess?variant=standard&fen=" + url_encode_query_value(fen);
+    std::string path = "/lichess?variant=standard&topGames=5&fen=" + url_encode_query_value(fen);
 
     int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), static_cast<int>(path.length()), nullptr, 0);
     std::wstring wpath(wlen, 0);
@@ -180,7 +216,18 @@ LichessOpening OpeningFetcher::fetch_from_lichess(const std::string& fen) {
         return result;
     }
 
-    if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+    std::wstring headers = L"";
+    if (!token.empty()) {
+        std::string auth_header = "Authorization: Bearer " + token + "\r\n";
+        int wlen_hdr = MultiByteToWideChar(CP_UTF8, 0, auth_header.c_str(), -1, nullptr, 0);
+        headers.resize(wlen_hdr, 0);
+        MultiByteToWideChar(CP_UTF8, 0, auth_header.c_str(), -1, &headers[0], wlen_hdr);
+        headers.resize(wlen_hdr - 1); // remove the embedded null terminator included by -1
+    }
+
+    if (WinHttpSendRequest(hRequest, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(), 
+                           headers.empty() ? 0 : static_cast<DWORD>(-1), 
+                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, NULL)) {
         
         DWORD dwStatusCode = 0;
@@ -193,7 +240,7 @@ LichessOpening OpeningFetcher::fetch_from_lichess(const std::string& fen) {
 
         if (dwStatusCode == 429) {
             result.api_success = false;
-            result.total_games = -2; // Signal rate limit
+            result.total_games = -2LL; // Signal rate limit
             result.error = "rate limited by Lichess";
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
@@ -243,10 +290,23 @@ LichessOpening OpeningFetcher::fetch_from_lichess(const std::string& fen) {
                         result.name = j["opening"].value("name", "");
                         result.found = true;
                     }
-                    int white = j.value("white", 0);
-                    int draws = j.value("draws", 0);
-                    int black = j.value("black", 0);
+                    long long white = j.value("white", 0LL);
+                    long long draws = j.value("draws", 0LL);
+                    long long black = j.value("black", 0LL);
                     result.total_games = white + draws + black;
+                    
+                    if (j.contains("topGames") && j["topGames"].is_array()) {
+                        for (const auto& game : j["topGames"]) {
+                            std::string white_name = "Unknown";
+                            if (game.contains("white") && game["white"].is_object()) white_name = game["white"].value("name", "Unknown");
+                            std::string black_name = "Unknown";
+                            if (game.contains("black") && game["black"].is_object()) black_name = game["black"].value("name", "Unknown");
+                            std::string year = game.contains("year") && game["year"].is_number() ? std::to_string(game.value("year", 0)) : "";
+                            
+                            if (!year.empty() && year != "0") result.top_games.push_back(white_name + " vs " + black_name + " (" + year + ")");
+                            else result.top_games.push_back(white_name + " vs " + black_name);
+                        }
+                    }
                 } else {
                     result.error = "unexpected JSON response";
                 }
@@ -300,7 +360,7 @@ void OpeningFetcher::worker_thread() {
         LichessOpening info;
         while (!stop_) {
             info = fetch_from_lichess(fen);
-            if (info.total_games == -2) {
+            if (info.total_games == -2LL) {
                 // 429 Too Many Requests: Lichess enforces a strict cooldown
                 for (int i = 0; i < 61; ++i) {
                     if (stop_) break;

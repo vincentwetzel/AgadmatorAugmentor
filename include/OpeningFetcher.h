@@ -13,11 +13,12 @@ struct LichessOpening {
     std::string eco;
     std::string name;
     std::string error;
-    int total_games = 0;
+    long long total_games = 0;
     int http_status = 0;
     unsigned long winhttp_error = 0;
     bool found = false;
     bool api_success = false;
+    std::vector<std::string> top_games;
 };
 
 class OpeningFetcher {
@@ -28,6 +29,8 @@ public:
     void enqueue_fen(const std::string& fen);
     LichessOpening get_opening(const std::string& fen);
     void wait_until_done();
+    void set_api_token(const std::string& token);
+    bool test_connection(std::string& out_error);
 
 private:
     void worker_thread();
@@ -43,6 +46,7 @@ private:
     std::atomic<bool> done_;
     bool active_request_ = false;
     std::string cache_path_;
+    std::string api_token_;
 };
 
 } // namespace cta

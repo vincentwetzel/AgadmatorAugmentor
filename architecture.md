@@ -104,7 +104,7 @@ The primary output is a PGN file that contains the extracted moves, clock times,
 
 When enabled, `VideoExportHelper` also writes a synced SRT subtitle file beside the configured output path. Subtitle cues are generated from verified move timestamps and converted from UCI to SAN with move numbers, so players and video editors can enable a lightweight move track without rendering a full analysis overlay.
 
-During extraction, verified video FENs can also be passed to `OpeningFetcher`, which performs a background Lichess Explorer lookup on Windows through WinHTTP. Responses are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`; lookup stops once the game reaches a likely unique position, so common opening names can be added without blocking the visual reducer.
+During extraction, verified video FENs can also be passed to `OpeningFetcher`, which performs a background Lichess Explorer lookup on Windows through WinHTTP. Responses are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`; lookup stops once the game reaches a likely unique position, so common opening names can be added without blocking the visual reducer. If a Lichess API token is configured in the Advanced settings, it is sent as a bearer token and the connection is checked before processing begins. Cached entries store 64-bit game totals and top matching games, allowing the sync helper to log the previous position's candidate games when a line reaches zero hits or the exact game when only one match remains.
 
 The PGN is saved alongside the source video or in a user-defined custom directory. A GUI cleanup option can move the source video to the trash after a queue item finishes successfully; failed and cancelled items keep the original file.
 
@@ -142,8 +142,8 @@ Source code is split into focused modules to keep files manageable (soft limit: 
 | Move Validation | `MoveValidations.h/.cpp` | UI-based move validation logic (yellow highlights, hover boxes) |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | UCI protocol wrapper, asynchronous evaluation parsing |
 | Stockfish Analysis Helper | `StockfishAnalysisHelper.h/.cpp` | Worker-facing analysis orchestration, result synchronization, move annotations, ACPL/Elo estimates |
-| Opening Fetcher | `OpeningFetcher.h/.cpp` | Cached Lichess Explorer lookup for ECO/opening metadata |
-| Lichess Sync Helper | `LichessSyncHelper.h/.cpp` | Bridges extractor FEN callbacks to opening lookup completion and video opening labels |
+| Opening Fetcher | `OpeningFetcher.h/.cpp` | Cached Lichess Explorer lookup for ECO/opening metadata, optional token auth, top-game capture |
+| Lichess Sync Helper | `LichessSyncHelper.h/.cpp` | Bridges extractor FEN callbacks to opening lookup completion, connection checks, and video opening labels |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 | Analysis Video | `AnalysisVideoGenerator.cpp`, `AnalysisVideoGenerator_FFmpeg.*`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.*` | Overlay asset rendering, FFmpeg composition, board/eval/text rendering utilities |
 | Template Manager | `TemplateManager.h/.cpp` | Overlay template loading, matching, persistence in AppData |

@@ -95,7 +95,9 @@ Red square and yellow arrow detection are fully implemented and produce structur
 
 - Consumes verified video FEN positions from the Verification Agent.
 - Queries Lichess Explorer in a background worker through WinHTTP on Windows.
+- Supports an optional Lichess API token from Advanced settings and verifies API access before processing.
 - Caches API responses under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`.
+- Stores 64-bit game totals and top matching games for rare or unique positions.
 - Stops once a likely unique position is reached, avoiding unnecessary API calls after the opening is known.
 - Supplies ECO/opening names for PGN headers and optional analysis-video opening overlays.
 

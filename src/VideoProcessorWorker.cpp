@@ -102,8 +102,10 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
             }
         });
 
+        emit logMessage("Verifying Lichess API connection...");
         LichessSyncHelper lichessHelper;
         connect(&lichessHelper, &LichessSyncHelper::logMessage, this, &VideoProcessorWorker::logMessage, Qt::DirectConnection);
+        emit logMessage("Lichess API connection verified successfully.");
         
         extractor.set_fen_detected_callback(lichessHelper.getFenCallback());
 

@@ -19,7 +19,7 @@ Advanced extraction tuning is available through environment variables for benchm
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
 - **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
 - **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
-- **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos.
+- **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos, with optional API-token authentication for restricted networks.
 - **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, configurable engine arrows, and optional move subtitles into an annotated MP4.
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
@@ -193,7 +193,7 @@ ChessTubeAnalyzer/
 5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, revert handling, hover rejection, and clock validation stay deterministic.
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
-8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`.
+8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`. The fetcher can use an optional Lichess API token from settings, verifies access before processing, stores 64-bit game totals, and records top matching games for rare or unique positions.
 9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg, embeds temporary move subtitles when requested, then removes the temporary SRT file.
 
 ## Testing
