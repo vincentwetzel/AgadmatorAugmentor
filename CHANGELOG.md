@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Analysis Video Rendering:** Moved board, piece, eval bar, and text rendering helpers into `AnalysisVideoGenerator_Render.cpp`.
 - **Board Cache Location:** Moved `BoardCache` into the normal `include/` and `src/` tree so CMake no longer relies on root-level duplicate source files.
 - **Processing Worker Helpers:** Split Stockfish analysis, Lichess opening synchronization, PGN/SRT/video export, FFmpeg availability checks, and subtitle formatting out of `VideoProcessorWorker.cpp`.
+- **Source File Refactor:** Split oversized source files into focused companion modules: `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*`, `BoardHoverDetection.cpp`, `AnalysisVideoGenerator_FFmpeg.*`, `ThemeManager_StyleSheet.cpp`, `SettingsDialog_Connections.cpp`, `SettingsDialog_Persistence.cpp`, `OverlayEditorDialog_DraggableOverlay.cpp`, `OverlayEditorDialog_Events.cpp`, and `MainWindow_QueueActions.cpp`.
 - **Clock Digit Recognition:** Moved Hu Moments digit classification from `ClockRecognizer.cpp` into `DigitRecognizer.cpp`, leaving clock ROI extraction and caching in the clock recognizer.
 - **Application Utilities:** Moved headless CLI parsing, elapsed-log formatting, system thread/FFmpeg settings, and rotating log setup into focused utility modules.
 

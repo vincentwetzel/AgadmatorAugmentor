@@ -129,31 +129,34 @@ The FFmpeg composition stage conditionally includes the board, evaluation bar, P
 
 ## 8. Source Module Organization
 
-The detector code is split into three focused modules to keep files manageable (soft limit: ~400 lines):
+Source code is split into focused modules to keep files manageable (soft limit: ~400 lines). Long-running orchestrators and dense algorithms are isolated into explicitly named companion files when they exceed the soft limit.
 
-| Module | File | Lines | Responsibility |
-|--------|------|-------|----------------|
-| Board Localizer | `BoardLocalizer.h/.cpp` | 213 | GSS board localization, grid drawing |
-| Board Analysis | `BoardAnalysis.h/.cpp` | 356 | Square means, yellow squares, piece counting, red squares, hover boxes |
-| Arrow Detector | `ArrowDetector.h/.cpp` | 141 | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
-| Clock Recognizer | `ClockRecognizer.h/.cpp` | split | Clock ROI extraction, active-clock detection, conditional caching |
-| Digit Recognizer | `DigitRecognizer.h/.cpp` | split | Hu Moments digit segmentation and nearest-neighbor clock OCR |
-| Orchestrator | `ChessVideoExtractor.h/.cpp` | ~630 | Video scanning loop, move scoring, revert detection, PGN-bound game data |
-| Move Validation | `MoveValidations.h/.cpp` | 97 | UI-based move validation logic (yellow highlights, hover boxes) |
-| Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | ~300 | UCI protocol wrapper, asynchronous evaluation parsing |
-| Stockfish Analysis Helper | `StockfishAnalysisHelper.h/.cpp` | split | Worker-facing analysis orchestration, result synchronization, move annotations, ACPL/Elo estimates |
-| Opening Fetcher | `OpeningFetcher.h/.cpp` | ~200 | Cached Lichess Explorer lookup for ECO/opening metadata |
-| Lichess Sync Helper | `LichessSyncHelper.h/.cpp` | split | Bridges extractor FEN callbacks to opening lookup completion and video opening labels |
-| GPU Pipeline | `GPUAccelerator.h/.cpp` | 544 | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
-| Template Manager | `TemplateManager.h/.cpp` | ~200 | Overlay template loading, matching, persistence in AppData |
-| Overlay Editor | `OverlayEditorDialog.h/.cpp` | ~450 | Screenshot-based WYSIWYG editor for overlay template layout |
-| FFmpeg Filter Graph | `FFmpegFilterGraph.h/.cpp` | ~180 | Builds filter_complex chains and manages CPU/GPU filter transitions |
-| FFmpeg Process Runner | `FfmpegProcessRunner.h/.cpp` | split | Runs FFmpeg with progress parsing, cancellation, and captured output tail |
-| Video Export Helper | `VideoExportHelper.h/.cpp` | split | PGN, SRT, and analysis-video export orchestration |
-| Main Window | `MainWindow*.cpp` | split | GUI setup, settings, queue management, and processing orchestration |
-| Worker Utilities | `VideoProcessorWorker_Utils.h/.cpp` | split | Clock/subtitle formatting and FFmpeg availability checks |
-| Application Utilities | `HeadlessCliParser`, `GuiUtils`, `Logger`, `SysUtils` | split | CLI parsing, elapsed log prefixes, rotating logs, system thread and FFmpeg settings |
-| Utilities | `ExtractorUtils.h/.cpp` | 105 | General helpers (timestamp formatting, FEN expansion, path utils) |
+| Module | File | Responsibility |
+|--------|------|----------------|
+| Board Localizer | `BoardLocalizer.h/.cpp` | GSS board localization, grid drawing |
+| Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow squares, piece counting, red squares, promotion classification, debug helpers |
+| Board Hover Detection | `BoardHoverDetection.cpp` | Hover-box/mid-drag detection using white edge projections |
+| Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
+| Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock ROI extraction, active-clock detection, conditional caching, Hu Moments digit OCR |
+| Extraction Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, map-reduce reduction loop, move scoring helpers, revert detection, PGN-bound game data |
+| Move Validation | `MoveValidations.h/.cpp` | UI-based move validation logic (yellow highlights, hover boxes) |
+| Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | UCI protocol wrapper, asynchronous evaluation parsing |
+| Stockfish Analysis Helper | `StockfishAnalysisHelper.h/.cpp` | Worker-facing analysis orchestration, result synchronization, move annotations, ACPL/Elo estimates |
+| Opening Fetcher | `OpeningFetcher.h/.cpp` | Cached Lichess Explorer lookup for ECO/opening metadata |
+| Lichess Sync Helper | `LichessSyncHelper.h/.cpp` | Bridges extractor FEN callbacks to opening lookup completion and video opening labels |
+| GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
+| Analysis Video | `AnalysisVideoGenerator.cpp`, `AnalysisVideoGenerator_FFmpeg.*`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.*` | Overlay asset rendering, FFmpeg composition, board/eval/text rendering utilities |
+| Template Manager | `TemplateManager.h/.cpp` | Overlay template loading, matching, persistence in AppData |
+| Overlay Editor | `OverlayEditorDialog.cpp`, `OverlayEditorDialog_DraggableOverlay.cpp`, `OverlayEditorDialog_Events.cpp` | Screenshot-based WYSIWYG editor, draggable/resizable overlay item, dialog event handling |
+| Theme Manager | `ThemeManager.h/.cpp`, `ThemeManager_StyleSheet.cpp` | Theme state/color selection and centralized global QSS generation |
+| Settings Dialog | `SettingsDialog.cpp`, `SettingsDialog_Connections.cpp`, `SettingsDialog_Persistence.cpp` | Settings UI construction, auto-save signal wiring, persistent settings mapping |
+| FFmpeg Filter Graph | `FFmpegFilterGraph.h/.cpp` | Builds filter_complex chains and manages CPU/GPU filter transitions |
+| FFmpeg Process Runner | `FfmpegProcessRunner.h/.cpp` | Runs FFmpeg with progress parsing, cancellation, and captured output tail |
+| Video Export Helper | `VideoExportHelper.h/.cpp` | PGN, SRT, and analysis-video export orchestration |
+| Main Window | `MainWindow*.cpp`, `MainWindow_QueueActions.cpp` | GUI setup, settings, queue management/actions, and processing orchestration |
+| Worker Utilities | `VideoProcessorWorker_Utils.h/.cpp` | Clock/subtitle formatting and FFmpeg availability checks |
+| Application Utilities | `HeadlessCliParser`, `GuiUtils`, `Logger`, `SysUtils` | CLI parsing, elapsed log prefixes, rotating logs, system thread and FFmpeg settings |
+| Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp` | General helpers (timestamp formatting, FEN expansion, path utils) |
 
 `UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
 

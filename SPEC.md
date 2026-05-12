@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ChessTube Analyzer is a **purely visual chess video analysis pipeline** implemented in C++20. It watches recorded chess videos (typically from chess.com streams), extracts every move played by observing UI elements (yellow highlights, hover boxes, clocks), validates them against legal chess moves, and produces structured JSON output with timestamps, FEN positions, and clock states.
+The ChessTube Analyzer is a **purely visual chess video analysis pipeline** implemented in C++20. It watches recorded chess videos (typically from chess.com streams), extracts every move played by observing UI elements (yellow highlights, hover boxes, clocks), validates them against legal chess moves, and produces in-memory game data with timestamps, FEN positions, and clock states for PGN, subtitle, and analysis-video output.
 
 The system is designed for **high accuracy** rather than speed — it treats the chess.com UI as a ground-truth state machine, using multiple independent visual signals to confirm each move before accepting it.
 
@@ -128,15 +128,16 @@ The system is designed for **high accuracy** rather than speed — it treats the
 
 ### 3.1 Module Organization
 
-Detector code is split into focused modules (soft limit: ~400 lines):
+Detector and orchestration code is split into focused modules (soft limit: ~400 lines, with complex algorithms isolated by purpose):
 
 | Module | File | Responsibility |
 |--------|------|----------------|
 | Board Localizer | `BoardLocalizer.h/.cpp` | GSS board localization, grid drawing |
-| Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow squares, piece counting, red squares, hover boxes |
+| Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow squares, piece counting, red squares, promotion classification |
+| Board Hover Detection | `BoardHoverDetection.cpp` | Hover-box/mid-drag detection |
 | Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
-| Clock Recognizer | `ClockRecognizer.h/.cpp` | Hu Moments digit recognizer, clock extraction, conditional caching |
-| Orchestrator | `ChessVideoExtractor.h/.cpp` | Video scanning loop, move verification, revert detection, JSON output |
+| Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock extraction, active-clock detection, Hu Moments digit recognition |
+| Extraction Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, map-reduce reducer loop, move verification, revert detection, in-memory `GameData` output |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp` | UCI engine integration, MultiPV evaluation, PGN variations |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
 

@@ -6,9 +6,10 @@ The ChessTube Analyzer pipeline is conceptually divided into several autonomous 
 
 **Files:**
 - `BoardLocalizer.h/.cpp` — `locate_board()` (GSS board localization)
-- `BoardAnalysis.h/.cpp` — Square means, yellow squares, piece counting, red squares, hover boxes
+- `BoardAnalysis.h/.cpp` - Square means, yellow squares, piece counting, red squares, promotion classification
+- `BoardHoverDetection.cpp` - hover boxes / mid-drag frame rejection
 - `ArrowDetector.h/.cpp` — `find_yellow_arrows()` (HSV masking + ray-casting)
-- `ClockRecognizer.h/.cpp` — `extract_clocks()` (Hu Moments OCR)
+- `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` - `extract_clocks()` and Hu Moments digit OCR
 
 Responsible for observing the raw video feed and translating it into structured sensory data.
 
@@ -20,7 +21,7 @@ Responsible for observing the raw video feed and translating it into structured 
 | **Yellow Square Detector** | `extract_move_from_yellow_squares()` | `BoardAnalysis.cpp` | Detects origin/destination highlights using mathematical yellowness `(R+G)/2 - B` |
 | **Red Square Detector** | `find_red_squares()` | `BoardAnalysis.cpp` | Finds streamer emphasis marks with dynamic thresholding |
 | **Yellow Arrow Detector** | `find_yellow_arrows()` | `ArrowDetector.cpp` | HSV masking + ray-casting to find drawn arrows |
-| **Hover Box Detector** | `find_misaligned_piece()` | `BoardAnalysis.cpp` | 1D projection on white edges to reject mid-drag frames |
+| **Hover Box Detector** | `find_misaligned_piece()` | `BoardHoverDetection.cpp` | 1D projection on white edges to reject mid-drag frames |
 | **Clock Extractor** | `extract_clocks()` | `ClockRecognizer.cpp` | Hu Moments digit recognizer (zero external dependencies) |
 | **Piece Counter** | `count_pieces_in_image()` | `BoardAnalysis.cpp` | Canny edge detection to count pieces on board |
 
@@ -30,8 +31,8 @@ It does not know the rules of chess on its own; it reports *what* changed, *when
 
 ## 2. The Verification Agent (Chess Engine Logic) — ✅ Implemented
 
-**Integrated in:** `ChessVideoExtractor.extract_moves_from_video()` (`ChessVideoExtractor.cpp`)
-**Supporting Files:** `MoveValidations.h/.cpp`
+**Integrated in:** `ChessVideoExtractor.extract_moves_from_video()` (`ChessVideoExtractor_Extraction.cpp`)
+**Supporting Files:** `ChessVideoExtractor.cpp`, `ChessVideoExtractor_Internal.*`, `MoveValidations.h/.cpp`
 
 Acts as the game logic authority and state machine filter.
 
@@ -139,19 +140,20 @@ Raw Video
 | Conceptual Agent | Implementation File(s) |
 |-----------------|------------------------|
 | Board Localization | `BoardLocalizer.h/.cpp` |
-| UI Detection (yellow, red, hover, pieces) | `BoardAnalysis.h/.cpp` |
+| UI Detection (yellow, red, pieces) | `BoardAnalysis.h/.cpp` |
+| Hover Box Detection | `BoardHoverDetection.cpp` |
 | Arrow Detection | `ArrowDetector.h/.cpp` |
 | Clock OCR | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` |
-| Verification + Orchestrator | `ChessVideoExtractor.h/.cpp` |
+| Verification + Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` |
 | Move Validation Logic | `MoveValidations.h/.cpp` |
 | Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp`, `SysUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp`, `StockfishAnalysisHelper.h/.cpp` |
 | Opening Metadata | `OpeningFetcher.h/.cpp`, `LichessSyncHelper.h/.cpp` |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` |
-| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp`, `FfmpegProcessRunner.h/.cpp` |
+| Video Compositing / Overlays | `AnalysisVideoGenerator.h/.cpp`, `AnalysisVideoGenerator_FFmpeg.*`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.h/.cpp`, `FFmpegFilterGraph.h/.cpp`, `FfmpegProcessRunner.h/.cpp` |
 | Output Generation | `PgnWriter.h/.cpp`, `ImageWriteUtils.h/.cpp`, `VideoExportHelper.h/.cpp`, `VideoProcessorWorker_Utils.h/.cpp` |
 | GUI & Orchestration | `MainWindow*.cpp`, `VideoProcessorWorker.h/.cpp`, `HeadlessCliParser.h/.cpp`, `GuiUtils.h/.cpp`, `Logger.h/.cpp` |
-| Configuration & Templates | `SettingsDialog.h/.cpp`, `ThemeManager.h/.cpp`, `TemplateManager.h/.cpp`, `OverlayEditorDialog.h/.cpp` |
+| Configuration & Templates | `SettingsDialog*.cpp`, `ThemeManager*.cpp`, `TemplateManager.h/.cpp`, `OverlayEditorDialog*.cpp` |
 
 ## Future: Parallel Agent Architecture
 
@@ -230,7 +232,8 @@ All UI styling **MUST** go through the universal theme system. **NO** individual
 | File | Purpose |
 |------|---------|
 | `cpp/include/ThemeManager.h` | Theme mode enum (System/Light/Dark), color definitions, QSS generator |
-| `cpp/src/ThemeManager.cpp` | Theme implementation, color values, QSS template, system dark mode detection |
+| `cpp/src/ThemeManager.cpp` | Theme implementation, color values, system dark mode detection |
+| `cpp/src/ThemeManager_StyleSheet.cpp` | Centralized global QSS template generated from theme colors |
 | `cpp/include/MainWindow.h` | Theme selector UI element (`themeComboBox_`) |
 | `cpp/src/MainWindow.cpp` | Theme application logic (`applyTheme()`, `onThemeChanged()`) |
 | `cpp/src/ToggleSwitch.cpp` | Example: Custom widget using theme colors |

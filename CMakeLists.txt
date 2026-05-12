@@ -382,10 +382,13 @@ enforce_project_msvc_runtime(chess)
 add_library(chess_extraction_core
     src/BoardLocalizer.cpp
     src/BoardAnalysis.cpp
+    src/BoardHoverDetection.cpp
     src/ArrowDetector.cpp
     src/ClockRecognizer.cpp
     src/DigitRecognizer.cpp
     src/ChessVideoExtractor.cpp
+    src/ChessVideoExtractor_Extraction.cpp
+    src/ChessVideoExtractor_Internal.cpp
     src/ExtractorUtils.cpp
     src/MoveValidations.cpp
     src/GPUAccelerator.cpp
@@ -416,6 +419,7 @@ configure_cuda_target(chess_extraction_core)
 add_library(chess_analysis_core
     src/StockfishAnalyzer.cpp
     src/AnalysisVideoGenerator.cpp
+    src/AnalysisVideoGenerator_FFmpeg.cpp
     src/PgnWriter.cpp
     src/ChessFenUtils.cpp
     src/ImageWriteUtils.cpp
@@ -493,9 +497,12 @@ if(Qt6_FOUND AND BUILD_GUI)
         src/MainWindow_UI.cpp
         src/MainWindow_Settings.cpp
         src/MainWindow_Queue.cpp
+        src/MainWindow_QueueActions.cpp
         src/MainWindow_Processing.cpp
         include/MainWindow.h
         src/SettingsDialog.cpp
+        src/SettingsDialog_Connections.cpp
+        src/SettingsDialog_Persistence.cpp
         include/SettingsDialog.h
         src/VideoProcessorWorker.cpp
         src/VideoProcessorWorker_Utils.cpp
@@ -503,8 +510,11 @@ if(Qt6_FOUND AND BUILD_GUI)
         src/ToggleSwitch.cpp
         include/ToggleSwitch.h
         src/ThemeManager.cpp
+        src/ThemeManager_StyleSheet.cpp
         include/ThemeManager.h
         src/OverlayEditorDialog.cpp
+        src/OverlayEditorDialog_DraggableOverlay.cpp
+        src/OverlayEditorDialog_Events.cpp
         include/OverlayEditorDialog.h
         src/TemplateManager.cpp
         include/TemplateManager.h

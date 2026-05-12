@@ -130,16 +130,20 @@ ChessTubeAnalyzer/
 |-- src/
 |   |-- BoardLocalizer.cpp
 |   |-- BoardAnalysis.cpp
+|   |-- BoardHoverDetection.cpp
 |   |-- ArrowDetector.cpp
 |   |-- ClockRecognizer.cpp
 |   |-- DigitRecognizer.cpp
 |   |-- ChessVideoExtractor.cpp
+|   |-- ChessVideoExtractor_Extraction.cpp
+|   |-- ChessVideoExtractor_Internal.cpp
 |   |-- OpeningFetcher.cpp
 |   |-- StockfishAnalyzer.cpp
 |   |-- StockfishAnalysisHelper.cpp
 |   |-- LichessSyncHelper.cpp
 |   |-- VideoExportHelper.cpp
 |   |-- AnalysisVideoGenerator.cpp
+|   |-- AnalysisVideoGenerator_FFmpeg.cpp
 |   |-- AnalysisVideoGenerator_Render.cpp
 |   |-- AnalysisVideoRenderUtils.cpp
 |   |-- FfmpegProcessRunner.cpp
@@ -150,7 +154,16 @@ ChessTubeAnalyzer/
 |   |-- MainWindow_UI.cpp
 |   |-- MainWindow_Settings.cpp
 |   |-- MainWindow_Queue.cpp
+|   |-- MainWindow_QueueActions.cpp
 |   |-- MainWindow_Processing.cpp
+|   |-- SettingsDialog.cpp
+|   |-- SettingsDialog_Connections.cpp
+|   |-- SettingsDialog_Persistence.cpp
+|   |-- ThemeManager.cpp
+|   |-- ThemeManager_StyleSheet.cpp
+|   |-- OverlayEditorDialog.cpp
+|   |-- OverlayEditorDialog_DraggableOverlay.cpp
+|   |-- OverlayEditorDialog_Events.cpp
 |   |-- VideoProcessorWorker.cpp
 |   |-- VideoProcessorWorker_Utils.cpp
 |   `-- main_gui.cpp

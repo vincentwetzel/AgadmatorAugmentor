@@ -65,6 +65,7 @@ signals:
 
 private:
     void setupUi();
+    void connectAutoSaveSignals();
 
     struct Ui {
         ToggleSwitch* pgnExportToggle = nullptr;
