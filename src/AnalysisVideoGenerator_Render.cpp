@@ -17,6 +17,12 @@ AnalysisVideoGenerator::AnalysisVideoGenerator(const std::string& assets_dir) {
     if (board_template_.empty()) {
         throw std::runtime_error("AnalysisVideoGenerator: Failed to load board asset at " + board_path);
     }
+
+    std::string thumbs_up_path = assets_dir + "/thumbs_up.png";
+    thumbs_up_icon_ = cv::imread(thumbs_up_path, cv::IMREAD_UNCHANGED);
+    if (thumbs_up_icon_.empty()) {
+        std::cerr << "Warning: Failed to load thumbs up asset at " << thumbs_up_path << std::endl;
+    }
     
     load_piece_assets(assets_dir);
 }
@@ -178,7 +184,7 @@ cv::Mat AnalysisVideoGenerator::render_board_state(const std::string& fen,
                 }
                 uci = line.pv_line.substr(0, uci_len);
                 sym = line.pv_line.substr(uci_len);
-                AnalysisVideoRenderUtils::drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h);
+                AnalysisVideoRenderUtils::drawMoveAnnotationOnBoard(board, uci, sym, sq_w, sq_h, &thumbs_up_icon_);
             }
         }
     }

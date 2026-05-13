@@ -119,7 +119,55 @@ void blend_arrow_on_bgra(cv::Mat& image,
     }
 }
 
-void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::string& sym, double sq_w, double sq_h) {
+namespace {
+
+void overlayIconCentered(cv::Mat& img, const cv::Mat& icon, cv::Point center, int max_size) {
+    if (icon.empty() || max_size <= 0) return;
+
+    double scale = static_cast<double>(max_size) / static_cast<double>(std::max(icon.cols, icon.rows));
+    cv::Size scaled_size(std::max(1, static_cast<int>(std::round(icon.cols * scale))),
+                         std::max(1, static_cast<int>(std::round(icon.rows * scale))));
+
+    cv::Mat scaled_icon;
+    cv::resize(icon, scaled_icon, scaled_size, 0, 0, cv::INTER_AREA);
+
+    const int start_x = center.x - scaled_icon.cols / 2;
+    const int start_y = center.y - scaled_icon.rows / 2;
+
+    for (int y = 0; y < scaled_icon.rows; ++y) {
+        const int dst_y = start_y + y;
+        if (dst_y < 0 || dst_y >= img.rows) continue;
+
+        const uchar* src_ptr = scaled_icon.ptr<uchar>(y);
+        uchar* dst_ptr = img.ptr<uchar>(dst_y);
+
+        for (int x = 0; x < scaled_icon.cols; ++x) {
+            const int dst_x = start_x + x;
+            if (dst_x < 0 || dst_x >= img.cols) continue;
+
+            const int src_offset = x * scaled_icon.channels();
+            const int dst_offset = dst_x * img.channels();
+            const double alpha = scaled_icon.channels() == 4 ? src_ptr[src_offset + 3] / 255.0 : 1.0;
+            if (alpha <= 0.0) continue;
+
+            dst_ptr[dst_offset + 0] = static_cast<uchar>(std::clamp(src_ptr[src_offset + 0] * alpha + dst_ptr[dst_offset + 0] * (1.0 - alpha), 0.0, 255.0));
+            dst_ptr[dst_offset + 1] = static_cast<uchar>(std::clamp(src_ptr[src_offset + 1] * alpha + dst_ptr[dst_offset + 1] * (1.0 - alpha), 0.0, 255.0));
+            dst_ptr[dst_offset + 2] = static_cast<uchar>(std::clamp(src_ptr[src_offset + 2] * alpha + dst_ptr[dst_offset + 2] * (1.0 - alpha), 0.0, 255.0));
+            if (img.channels() == 4) {
+                dst_ptr[dst_offset + 3] = 255;
+            }
+        }
+    }
+}
+
+} // namespace
+
+void drawMoveAnnotationOnBoard(cv::Mat& img,
+                               const std::string& uci,
+                               const std::string& sym,
+                               double sq_w,
+                               double sq_h,
+                               const cv::Mat* thumbs_up_icon) {
     if (uci.length() < 4) return;
     std::string clean_sym = sym;
     clean_sym.erase(0, clean_sym.find_first_not_of(" "));
@@ -182,51 +230,12 @@ void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::
         cv::fillPoly(img, std::vector<std::vector<cv::Point>>{left_page, right_page}, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
         cv::line(img, cv::Point(ax, ay - radius*0.1), cv::Point(ax, ay + radius*0.4), cv::Scalar(200, 200, 200, 255), 1, cv::LINE_AA);
     } else if (drawThumbsUp) {
-        // Rounded silhouette styled to read closer to the chess.com "Good" badge
-        // at very small sizes: chunky palm, upright thumb, and soft finger bumps.
-        std::vector<cv::Point> palm = {
-            cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.32)),
-            cv::Point(static_cast<int>(ax - radius * 0.02), static_cast<int>(ay + radius * 0.32)),
-            cv::Point(static_cast<int>(ax + radius * 0.18), static_cast<int>(ay + radius * 0.24)),
-            cv::Point(static_cast<int>(ax + radius * 0.30), static_cast<int>(ay + radius * 0.08)),
-            cv::Point(static_cast<int>(ax + radius * 0.30), static_cast<int>(ay - radius * 0.18)),
-            cv::Point(static_cast<int>(ax + radius * 0.15), static_cast<int>(ay - radius * 0.28)),
-            cv::Point(static_cast<int>(ax - radius * 0.08), static_cast<int>(ay - radius * 0.28)),
-            cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.10)),
-            cv::Point(static_cast<int>(ax - radius * 0.28), static_cast<int>(ay + radius * 0.02)),
-            cv::Point(static_cast<int>(ax - radius * 0.34), static_cast<int>(ay + radius * 0.18))
-        };
-        cv::fillConvexPoly(img, palm, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
-
-        std::vector<cv::Point> thumb = {
-            cv::Point(static_cast<int>(ax - radius * 0.24), static_cast<int>(ay - radius * 0.05)),
-            cv::Point(static_cast<int>(ax - radius * 0.12), static_cast<int>(ay - radius * 0.12)),
-            cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.56)),
-            cv::Point(static_cast<int>(ax - radius * 0.20), static_cast<int>(ay - radius * 0.64)),
-            cv::Point(static_cast<int>(ax - radius * 0.32), static_cast<int>(ay - radius * 0.56)),
-            cv::Point(static_cast<int>(ax - radius * 0.35), static_cast<int>(ay - radius * 0.18))
-        };
-        cv::fillConvexPoly(img, thumb, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
-
-        cv::circle(img, cv::Point(static_cast<int>(ax - radius * 0.18), static_cast<int>(ay - radius * 0.60)),
-                   std::max(1, static_cast<int>(radius * 0.11)), cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
-
-        const int fingerRadius = std::max(1, static_cast<int>(radius * 0.12));
-        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.23), static_cast<int>(ay - radius * 0.14)),
-                   fingerRadius, cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
-        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.16), static_cast<int>(ay + radius * 0.03)),
-                   fingerRadius, cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
-        cv::circle(img, cv::Point(static_cast<int>(ax + radius * 0.07), static_cast<int>(ay + radius * 0.17)),
-                   fingerRadius, cv::Scalar(255, 255, 255, 255), cv::FILLED, cv::LINE_AA);
-
-        cv::line(img,
-                 cv::Point(static_cast<int>(ax - radius * 0.07), static_cast<int>(ay - radius * 0.02)),
-                 cv::Point(static_cast<int>(ax + radius * 0.18), static_cast<int>(ay - radius * 0.06)),
-                 bgColor, 1, cv::LINE_AA);
-        cv::line(img,
-                 cv::Point(static_cast<int>(ax - radius * 0.03), static_cast<int>(ay + radius * 0.12)),
-                 cv::Point(static_cast<int>(ax + radius * 0.14), static_cast<int>(ay + radius * 0.10)),
-                 bgColor, 1, cv::LINE_AA);
+        if (thumbs_up_icon && !thumbs_up_icon->empty()) {
+            overlayIconCentered(img, *thumbs_up_icon, cv::Point(ax, ay), static_cast<int>(radius * 1.35));
+        } else {
+            cv::putText(img, "+", cv::Point(ax - radius / 3, ay + radius / 3),
+                        cv::FONT_HERSHEY_SIMPLEX, radius * 0.06, cv::Scalar(255, 255, 255, 255), 2, cv::LINE_AA);
+        }
     } else {
         std::string txt = clean_sym;
         int fontFace = cv::FONT_HERSHEY_SIMPLEX;
@@ -303,7 +312,8 @@ void render_main_board_arrows(cv::Mat& image,
                               const std::optional<StockfishResult>& analysis,
                               const std::string& fen,
                               int width, int height,
-                              int arrow_thickness_pct) {
+                              int arrow_thickness_pct,
+                              const cv::Mat* thumbs_up_icon) {
     image = cv::Mat::zeros(cv::Size(width, height), CV_8UC4);
     if (!analysis.has_value() || analysis->lines.empty()) return;
 
@@ -361,7 +371,7 @@ void render_main_board_arrows(cv::Mat& image,
                 }
                 uci = line.pv_line.substr(0, uci_len);
                 sym = line.pv_line.substr(uci_len);
-                drawMoveAnnotationOnBoard(image, uci, sym, sq_w, sq_h);
+                drawMoveAnnotationOnBoard(image, uci, sym, sq_w, sq_h, thumbs_up_icon);
             }
         }
     } catch(...) {}

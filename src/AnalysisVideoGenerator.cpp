@@ -328,7 +328,13 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                     // --- Render Main Arrows ---
                     cv::Mat cached_main_arrows;
                     if (draw_main_arrows) {
-                        AnalysisVideoRenderUtils::render_main_board_arrows(cached_main_arrows, current_analysis, current_fen, main_arrow_w, main_arrow_h, arrow_thickness_pct);
+                        AnalysisVideoRenderUtils::render_main_board_arrows(cached_main_arrows,
+                                                                           current_analysis,
+                                                                           current_fen,
+                                                                           main_arrow_w,
+                                                                           main_arrow_h,
+                                                                           arrow_thickness_pct,
+                                                                           &thumbs_up_icon_);
                     }
 
                     std::string board_img = "board_" + std::to_string(i) + ".bmp";

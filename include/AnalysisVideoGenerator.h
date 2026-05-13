@@ -48,6 +48,7 @@ public:
 
 private:
     cv::Mat board_template_;
+    cv::Mat thumbs_up_icon_;
     std::map<char, cv::Mat> piece_assets_;
 
     cv::Mat render_board_state(const std::string& fen, 

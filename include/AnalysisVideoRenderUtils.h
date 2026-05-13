@@ -29,14 +29,20 @@ cv::Scalar arrow_gradient_color_at(cv::Point start, cv::Point end, int x, int y,
 void drawEngineArrow(cv::Mat& overlay, cv::Point start, cv::Point end, cv::Scalar color, double squareSize, int thicknessPct);
 void blend_arrow_on_bgr(cv::Mat& image, cv::Point start, cv::Point end, const EngineArrowStyle& style, double squareSize);
 void blend_arrow_on_bgra(cv::Mat& image, cv::Point start, cv::Point end, const EngineArrowStyle& style, double squareSize);
-void drawMoveAnnotationOnBoard(cv::Mat& img, const std::string& uci, const std::string& sym, double sq_w, double sq_h);
+void drawMoveAnnotationOnBoard(cv::Mat& img,
+                               const std::string& uci,
+                               const std::string& sym,
+                               double sq_w,
+                               double sq_h,
+                               const cv::Mat* thumbs_up_icon = nullptr);
 void drawAnalysisBar(cv::Mat& img, cv::Rect rect, double cpScore);
 EngineArrowStyle compute_engine_arrow_style(int line_index, double diff_cp, int arrow_thickness_pct);
 void render_main_board_arrows(cv::Mat& image,
                               const std::optional<StockfishResult>& analysis,
                               const std::string& fen,
                               int width, int height,
-                              int arrow_thickness_pct);
+                              int arrow_thickness_pct,
+                              const cv::Mat* thumbs_up_icon = nullptr);
 
 } // namespace AnalysisVideoRenderUtils
 } // namespace cta
