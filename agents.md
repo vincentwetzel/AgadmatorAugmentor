@@ -117,24 +117,27 @@ Red square and yellow arrow detection are fully implemented and produce structur
 
 ## Data Flow
 
-```
+```text
 Raw Video
-    ↓
-[Extraction Agent] → Board coords, yellow squares, red squares, arrows, clocks
-    ↓                    (BoardAnalysis, ArrowDetector, ClockRecognizer)
-[Verification Agent] → Validated move list, FENs, timestamps, clocks
-    ↓                    (ChessVideoExtractor + libchess)
-        ├──→ analysis.json (Phase 1 output)
-        │                  
-        ↓                  
-[Stockfish Analysis Agent] → Engine evaluations, PV lines  (Phase 2 — Implemented)
-        ↓
-[Opening Metadata Agent] → ECO/opening names from cached Lichess Explorer lookups
-        ↓
-        ↓
-[Analysis Video Agent: Overlays] → Debug video with board, arrows, eval bar, PV text, and opening text (Phase 4 — Implemented)
-    ↓
-    └──→ output_with_analysis.mp4 (Phase 4 output)
+    |
+    v
+[Extraction Agent] -> Board coords, yellow squares, red squares, arrows, clocks
+    |                    (BoardAnalysis, ArrowDetector, ClockRecognizer)
+    v
+[Verification Agent] -> Validated move list, FENs, timestamps, clocks
+    |                    (ChessVideoExtractor + libchess)
+    +--> PGN/SRT output helpers
+    |
+    v
+[Stockfish Analysis Agent] -> Engine evaluations, PV lines
+    |
+    v
+[Opening Metadata Agent] -> ECO/opening names from cached Lichess Explorer lookups
+    |
+    v
+[Analysis Video Agent] -> Analysis video with board, arrows, eval bar, PV text, and opening text
+    |
+    +--> output_with_analysis.mp4
 ```
 
 ## Source Module Map
@@ -148,6 +151,9 @@ Raw Video
 | Clock OCR | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` |
 | Verification + Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` |
 | Move Validation Logic | `MoveValidations.h/.cpp` |
+| Video Chunk Mapping | `VideoChunkMapper.h/.cpp` |
+| Revert Management | `RevertManager.h/.cpp`, `RevertDetector.h/.cpp` |
+| Move Scoring Helpers | `MoveScorer.h/.cpp`, `MoveVerifier.h/.cpp` |
 | Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp`, `SysUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp`, `StockfishAnalysisHelper.h/.cpp` |
 | Opening Metadata | `OpeningFetcher.h/.cpp`, `LichessSyncHelper.h/.cpp` |

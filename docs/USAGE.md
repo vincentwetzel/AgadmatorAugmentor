@@ -96,6 +96,8 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 - `CTA_MAX_CHUNK_LOOKAHEAD`: maximum number of mapped chunks allowed ahead of the reducer.
 - `CTA_TRACE_REJECTS`: set to `1` to log detailed reasons rejected move candidates were filtered.
 
+The reducer also applies a bounded settle window, recent-square conflict checks, indexed revert lookup, hover-box rejection, and clock-turn validation before accepting a move. These checks are intentionally conservative so PGN output remains legal even when the video contains analysis reverts or dragging artifacts.
+
 ## Testing
 
 Unit tests are opt-in so the default application build does not need to download Google Test during configure.
@@ -104,4 +106,4 @@ Unit tests are opt-in so the default application build does not need to download
 python tests\run_tests.py
 ```
 
-The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. The short-game integration test reads expected moves from the sample PGN rather than a separate golden JSON artifact.
+The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. Integration tests read expected moves from the sample PGN files, so the old medium-game golden JSON artifact is no longer required.

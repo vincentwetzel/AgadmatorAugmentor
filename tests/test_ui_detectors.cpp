@@ -51,9 +51,9 @@ static std::vector<IntegrationTestResult> g_test_results;
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   0
-#define TEST_MEDIUM_GAME_REVERT   0
-#define TEST_FULL_GAME_1_EXTRACTION 0
-#define TEST_INTEGRATION_CLOCK_TIMES 1
+#define TEST_MEDIUM_GAME_REVERT   1
+#define TEST_FULL_GAME_1_EXTRACTION 1
+#define TEST_INTEGRATION_CLOCK_TIMES 0
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   0
@@ -849,11 +849,12 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 
 TEST_F(DetectorsTest, MediumGameWithRevert) {
     const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "medium_game_with_analysis_line_and_revert.mp4").string();
-    const std::string golden_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "golden_medium_game_with_revert.json").string();
+    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "game.pgn").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
 
     std::cout << "\nRunning integration test on medium game with revert...\n";
 
@@ -870,30 +871,8 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    std::vector<std::string> expected_moves;
-    if (std::filesystem::exists(golden_path)) {
-        std::ifstream ifs(golden_path);
-        nlohmann::json j;
-        ifs >> j;
-        expected_moves = j["moves"].get<std::vector<std::string>>();
-        
-        std::vector<std::string> expected_fens = j["fens"].get<std::vector<std::string>>();
-        EXPECT_EQ(data.fens, expected_fens) << "FENs do not match golden file!";
-        
-        std::cout << "  Loaded expected baseline from golden file.\n";
-    } else {
-        expected_moves = {
-            "d2d4", "d7d5", "c2c4", "e7e6", "g1f3", "g8f6", "g2g3", "f8b4",
-            "b1d2", "a7a5", "f1g2", "a5a4", "e1g1", "b8c6", "d1c2", "e8g8", "f1e1"
-        };
-        nlohmann::json j;
-        j["moves"] = data.moves;
-        j["fens"] = data.fens;
-        j["timestamps"] = data.timestamps;
-        std::ofstream ofs(golden_path);
-        ofs << j.dump(4);
-        std::cout << "  Generated new golden file: " << golden_path << "\n";
-    }
+    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    std::cout << "  Loaded expected baseline from PGN.\n";
 
     result.plies_expected = static_cast<int>(expected_moves.size());
     result.reverts_detected = 1; // This test is known to have one analysis revert

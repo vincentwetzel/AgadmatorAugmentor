@@ -137,7 +137,6 @@ void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const cha
     if (from_rank == to_rank && std::abs(to_file - from_file) > 1) alt_to = from_sq + (to_file > from_file ? 1 : -1);
     else if (from_file == to_file && std::abs(to_rank - from_rank) > 1) alt_to = from_sq + (to_rank > from_rank ? 8 : -8);
     if (alt_to >= 0) { const char* alt_to_name = utils::sq_name(alt_to); char alt_uci[5] = {from_name[0], from_name[1], alt_to_name[0], alt_to_name[1], '\0'}; try { (void)pos_ptr->parse_move(alt_uci); double y_alt = validation::check_yellowness(board_bgr, geo, alt_to_name), y_best = validation::check_yellowness(board_bgr, geo, to_name); if (y_alt >= 25.0 && y_alt > y_best + 10.0) { to_sq = alt_to; to_name = alt_to_name; } } catch (...) {} }
-    if (from_sq == 5 && to_sq == 3) { try { (void)pos_ptr->parse_move("f1e1"); to_sq = 4; to_name = utils::sq_name(to_sq); } catch (...) {} }
 }
 
 } // namespace cta::extractor_detail

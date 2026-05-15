@@ -413,9 +413,14 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             if (best.score <= min_move_score || best.from_sq < 0) {
                 break; // No more moves in this frame
             }
+            if (extracted_in_frame && (consumed_squares[best.from_sq] || consumed_squares[best.to_sq])) {
+                break;
+            }
 
             // ── Move settling: peek ahead to confirm the move has settled ──
             // Always peek ahead to capture the peak of the animation and prevent ghost diffs.
+            constexpr double kMaxSettleWindowSeconds = 0.75;
+            const double settle_start_t = t;
             while (true) {
                 bool found_settle = false;
                 CandidateFrame settle_cf;
@@ -430,6 +435,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 }
 
                 if (found_settle) {
+                    if (settle_cf.t - settle_start_t > kMaxSettleWindowSeconds) {
+                        break;
+                    }
+
                     static thread_local cv::Mat settle_diff;
                     GPUAccelerator::absdiff(settle_cf.board_gray, revert_mgr.get_latest_gray(), settle_diff);
                     auto settle_sq_means = compute_all_square_means(settle_diff, *geo_, margin_h_, margin_w_);
@@ -480,22 +489,43 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
                         bool can_evolve = false;
                         if (!is_same_move && settle_best_tmp.score > best.score) {
-                            const char* s_from = utils::sq_name(settle_best_tmp.from_sq);
-                            const char* s_to = utils::sq_name(settle_best_tmp.to_sq);
-                            char s_uci[6];
-                            s_uci[0] = s_from[0]; s_uci[1] = s_from[1];
-                            s_uci[2] = s_to[0];   s_uci[3] = s_to[1];
-                            if (settle_best_tmp.promotion != '\0') {
-                                s_uci[4] = settle_best_tmp.promotion;
-                                s_uci[5] = '\0';
-                            } else {
-                                s_uci[4] = '\0';
+                            const char* current_from = utils::sq_name(best.from_sq);
+                            const char* current_to = utils::sq_name(best.to_sq);
+                            bool current_move_is_registered = extractor_detail::passes_yellowness_check(board_bgr, *geo_, current_from, current_to);
+                            bool allow_registered_retarget = false;
+                            if (current_move_is_registered && settle_best_tmp.from_sq == best.from_sq) {
+                                std::array<char, 64> settle_board_map = utils::expand_fen(pos_ptr_->get_fen());
+                                char moving_piece = static_cast<char>(std::tolower(static_cast<unsigned char>(settle_board_map[best.from_sq])));
+                                if (moving_piece != 'b' && moving_piece != 'r' && moving_piece != 'q') {
+                                    allow_registered_retarget = true;
+                                } else {
+                                    const char* s_to = utils::sq_name(settle_best_tmp.to_sq);
+                                    double current_y_to = validation::check_yellowness(board_bgr, *geo_, current_to);
+                                    double settle_y_from = validation::check_yellowness(settle_cf.board_bgr, *geo_, current_from);
+                                    double settle_y_to = validation::check_yellowness(settle_cf.board_bgr, *geo_, s_to);
+                                    allow_registered_retarget = settle_y_from >= 25.0
+                                        && settle_y_to >= current_y_to + 12.0
+                                        && (settle_y_from + settle_y_to) >= 70.0;
+                                }
                             }
-                            try {
-                                (void)pos_ptr_->parse_move(s_uci); // Throws if illegal for CURRENT player turn
-                                can_evolve = true;
-                            } catch (...) {
-                                can_evolve = false;
+                            if (!current_move_is_registered || allow_registered_retarget) {
+                                const char* s_from = utils::sq_name(settle_best_tmp.from_sq);
+                                const char* s_to = utils::sq_name(settle_best_tmp.to_sq);
+                                char s_uci[6];
+                                s_uci[0] = s_from[0]; s_uci[1] = s_from[1];
+                                s_uci[2] = s_to[0];   s_uci[3] = s_to[1];
+                                if (settle_best_tmp.promotion != '\0') {
+                                    s_uci[4] = settle_best_tmp.promotion;
+                                    s_uci[5] = '\0';
+                                } else {
+                                    s_uci[4] = '\0';
+                                }
+                                try {
+                                    (void)pos_ptr_->parse_move(s_uci); // Throws if illegal for CURRENT player turn
+                                    can_evolve = true;
+                                } catch (...) {
+                                    can_evolve = false;
+                                }
                             }
                         }
 
@@ -540,6 +570,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     break;
                 }
             }
+            if (extracted_in_frame && (consumed_squares[best.from_sq] || consumed_squares[best.to_sq])) {
+                break;
+            }
 
             const char* from_name = utils::sq_name(best.from_sq);
             const char* to_name = utils::sq_name(best.to_sq);
@@ -568,9 +601,37 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 move_uci.back() = best.promotion; // Update the trailing 'q' with the true piece
             }
 
+            bool accepted_strong_inverse = false;
             if (extractor_detail::is_inverse_of_recent_move(data.moves, from_name, to_name)) {
-                all_validations_passed = false;
-                break;
+                double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
+                double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
+                bool strong_registered_inverse = best.score >= 60.0
+                    && y_from >= 35.0
+                    && y_to >= 35.0
+                    && (y_from + y_to) >= 80.0;
+                char inverse_piece = static_cast<char>(std::tolower(static_cast<unsigned char>(moving_piece)));
+                bool sliding_inverse = inverse_piece == 'b' || inverse_piece == 'r' || inverse_piece == 'q';
+                bool immediate_after_previous_move = !data.timestamps.empty() && (t - data.timestamps.back()) < 0.35;
+                if (!sliding_inverse || !strong_registered_inverse || immediate_after_previous_move) {
+                    all_validations_passed = false;
+                    break;
+                }
+                accepted_strong_inverse = true;
+            }
+
+            if (!data.moves.empty() && !data.timestamps.empty() && (t - data.timestamps.back()) < 1.0) {
+                const std::string& prev_move = data.moves.back();
+                if (prev_move.size() >= 4) {
+                    const bool touches_prev_move =
+                        (from_name[0] == prev_move[0] && from_name[1] == prev_move[1]) ||
+                        (from_name[0] == prev_move[2] && from_name[1] == prev_move[3]) ||
+                        (to_name[0] == prev_move[0] && to_name[1] == prev_move[1]) ||
+                        (to_name[0] == prev_move[2] && to_name[1] == prev_move[3]);
+                    if (touches_prev_move && move_uci != prev_move) {
+                        all_validations_passed = false;
+                        break;
+                    }
+                }
             }
 
             // Validate the move is legal in libchess
@@ -593,13 +654,20 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // ── Validation 2: Hover box rejection ────────────────────────────
             if (!scratch_) scratch_ = std::make_unique<ScratchBuffers>();
-            if (validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, from_name) ||
-                validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name)) {
-                if (debug_level_ != DebugLevel::None) {
-                    log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
+            bool hover_detected = validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, from_name) ||
+                                  validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name);
+            if (hover_detected) {
+                double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
+                double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
+                bool strong_registered_move = accepted_strong_inverse ||
+                                              (best.score >= 60.0 && y_from >= 40.0 && y_to >= 40.0 && (y_from + y_to) >= 90.0);
+                if (!strong_registered_move) {
+                    if (debug_level_ != DebugLevel::None) {
+                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
+                    }
+                    all_validations_passed = false;
+                    break;
                 }
-                all_validations_passed = false;
-                break;
             }
 
             // ── Validation 3: Clock turn check ───────────────────────────────

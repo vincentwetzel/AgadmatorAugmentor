@@ -61,7 +61,7 @@ Do not rerun CMake with a different generator platform against an existing `buil
 
 The project contains an optional CUDA/NPP acceleration layer (`GPUAccelerator` + `GPUPipeline`) that is auto-detected when the NVIDIA CUDA Toolkit is installed. The supported path keeps CPU fallbacks for every operation, so a normal OpenCV/vcpkg build does not require CUDA-enabled OpenCV.
 
-Current GPU work focuses on safe, targeted acceleration: hardware video decode requests through OpenCV/FFmpeg, and CPU-side scoring for precision-sensitive move validation. (NPP `absdiff` and `matchTemplate` were experimentally attempted but are currently disabled as fallbacks pending header compatibility fixes).
+Current GPU work focuses on safe, targeted acceleration: hardware video decode requests through OpenCV/FFmpeg plus an optional NPP grayscale `absdiff` fast path. CPU scoring remains the precision reference path, and `matchTemplate` stays on the OpenCV CPU path.
 
 ## Run
 
@@ -187,10 +187,10 @@ ChessTubeAnalyzer/
 ## Pipeline
 
 1. **Board Localization:** Golden Section Search across coarse, fine, and exact passes. Scale evaluation uses sparse sampled correlation to avoid dense full-frame template matching during search.
-2. **Chunked Visual Map Pass:** The video is split into time chunks and decoded by worker threads with hardware acceleration requested where OpenCV/FFmpeg supports it.
+2. **Chunked Visual Map Pass:** The video is split into time chunks and decoded by worker threads with hardware acceleration requested where OpenCV/FFmpeg supports it. Map workers coalesce motion/highlight bursts into settled candidates before handing them to the reducer.
 3. **Motion Filtering:** Workers crop to the board ROI, convert to grayscale, and keep candidate frames with meaningful visual changes.
-4. **Square Diffing:** Candidate frames are compared against verified board history with `absdiff` and direct square ROI means.
-5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, revert handling, hover rejection, and clock validation stay deterministic.
+4. **Square Diffing:** Candidate frames are compared against verified board history with `absdiff` and direct square ROI means. CUDA/NPP can accelerate compatible grayscale diffs, with OpenCV CPU fallback.
+5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, indexed revert handling, settle-window checks, hover rejection, and clock validation stay deterministic.
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`. The fetcher can use an optional Lichess API token from settings, verifies access before processing, stores 64-bit game totals, and records top matching games for rare or unique positions.
@@ -202,7 +202,7 @@ ChessTubeAnalyzer/
 python tests\run_tests.py
 ```
 
-The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. You can still run the target manually with CMake when you need lower-level control.
+The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts. You can still run the target manually with CMake when you need lower-level control.
 
 ## Performance Snapshot
 

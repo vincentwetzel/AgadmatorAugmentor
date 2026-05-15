@@ -1,12 +1,10 @@
-# Specification — ChessTube Analyzer (C++)
+# Specification - ChessTube Analyzer (C++)
 
 ## Overview
 
-The ChessTube Analyzer is a **purely visual chess video analysis pipeline** implemented in C++20. It watches recorded chess videos (typically from chess.com streams), extracts every move played by observing UI elements (yellow highlights, hover boxes, clocks), validates them against legal chess moves, and produces in-memory game data with timestamps, FEN positions, and clock states for PGN, subtitle, and analysis-video output.
+ChessTube Analyzer is a C++20 visual chess-video analysis pipeline. It watches recorded chess videos, localizes the chess.com board, extracts UI signals such as yellow highlights, hover boxes, arrows, red marks, and clocks, verifies candidate moves with `libchess`, and produces in-memory `GameData` for PGN, SRT, Stockfish analysis, opening metadata, and optional analysis-video output.
 
-The system is designed for **high accuracy** rather than speed — it treats the chess.com UI as a ground-truth state machine, using multiple independent visual signals to confirm each move before accepting it.
-
----
+The system optimizes for correctness first. Candidate moves must remain chess-legal and pass independent visual validation layers before they are accepted.
 
 ## 1. Functional Requirements
 
@@ -14,269 +12,147 @@ The system is designed for **high accuracy** rather than speed — it treats the
 
 | ID | Requirement |
 |----|-------------|
-| BL-1 | The system must locate the chess board within a video frame using template matching against a reference image (`assets/board/board.png`). |
-| BL-2 | Localization must use a **Golden Section Search (GSS)** across three passes: Coarse (0.3×–1.5×, 15 GSS iterations) → Fine (±0.05, 12 iterations) → Exact (±0.01, 12 iterations). Each pass shrinks the bracket interval by 0.618×. A linear fallback activates when both initial bracket points are out-of-bounds. |
-| BL-3 | The algorithm must use `TM_CCOEFF_NORMED` correlation via OpenCV `matchTemplate` (or use a sparse sampled correlation grid during GSS to avoid dense template matching overhead). GPU `nppiCrossCorrFull_Norm` is currently disabled. |
-| BL-4 | Passes 1–2 must operate at ¼ resolution for performance; Pass 3 operates at full resolution. |
-| BL-5 | Output must include: top-left corner `(bx, by)`, board dimensions `(bw, bh)`, and per-square dimensions `(sq_w, sq_h)`. |
-| BL-6 | GPU acceleration via NVIDIA NPP must be used when available, with automatic CPU fallback. |
+| BL-1 | The system must locate the chess board using `assets/board/board.png` as the reference board template. |
+| BL-2 | Localization must use Golden Section Search across coarse, fine, and exact passes, with a linear fallback for unusual frame dimensions. |
+| BL-3 | Scale evaluation must use OpenCV `TM_CCOEFF_NORMED` or sparse sampled correlation. NPP cross-correlation is not required. |
+| BL-4 | Early passes may downscale frames for speed; the final pass must resolve full-resolution board coordinates. |
+| BL-5 | Output must include top-left board coordinates, board dimensions, and per-square dimensions. |
 
-### 1.2 Visual Frame Polling
+### 1.2 Visual Scan And Reduction
 
 | ID | Requirement |
 |----|-------------|
-| VP-1 | Video must be sampled at configurable intervals (default: 5 FPS, `time_step = 0.2s`). |
-| VP-2 | Each frame must be compared against the **last settled board state** (from `board_image_history`), not a fixed baseline. |
-| VP-3 | The system must use an **adaptive FAST/FINE scanning** strategy: FAST mode polls every 2.0s; FINE mode polls every 0.2s after a change is detected. |
-| VP-4 | A move must be confirmed as "settled" by peeking ahead 0.2s before acceptance (skipped if confidence score > 50). |
+| VP-1 | The video must be scanned by parallel map workers over bounded time chunks. |
+| VP-2 | Map workers must compare frames against the previous sampled board state and emit settled candidate frames for meaningful motion or highlight changes. |
+| VP-3 | Map workers should coalesce animation/highlight bursts so the reducer receives one strong candidate instead of repeated near-duplicates. |
+| VP-4 | The reducer must consume candidates chronologically and compare them against the last verified board state. |
+| VP-5 | Move settling may inspect later candidates, but the settle window must be bounded so one animation cannot drift into unrelated moves. |
+| VP-6 | Environment variables `CTA_CHUNK_SECONDS`, `CTA_MAX_CHUNK_LOOKAHEAD`, and `CTA_TRACE_REJECTS` may tune chunk scheduling and rejection logging. |
 
 ### 1.3 UI Element Extraction
 
-#### 1.3.1 Yellow Squares (Move Highlights)
-
 | ID | Requirement |
 |----|-------------|
-| YS-1 | Yellowness must be computed as `(R + G) / 2.0 - B` per pixel (floating-point). |
-| YS-2 | Only the outer 12% corners of each square may be sampled for yellowness scoring. |
-| YS-3 | A move candidate is accepted only if it meets the **elastic yellowness threshold**: minimum 25.0 per square, with a combined score ≥ 70.0. |
-| YS-4 | Origin/destination disambiguation must use Canny edge detection: the square with more edges contains the piece (Destination); the other is empty (Origin). |
-
-#### 1.3.2 Red Squares (Streamer Emphasis)
-
-| ID | Requirement |
-|----|-------------|
-| RS-1 | Redness must be computed as `R - (G + B) / 2.0` per pixel. |
-| RS-2 | The threshold must be derived dynamically by comparing the baseline board template against a red reference board (if provided), or by adding +35.0 to the baseline mean. |
-| RS-3 | A square is flagged as red if **≥ 3 of its 4 corners** exceed the redness threshold. |
-
-#### 1.3.3 Yellow Arrows (Streamer Commentary)
-
-| ID | Requirement |
-|----|-------------|
-| YA-1 | HSV masking must isolate saturated yellow/orange pixels (H: 10–40, S > 165, V > 165). |
-| YA-2 | Morphological opening must be applied to remove noise. |
-| YA-3 | Active squares must be pre-filtered (> 1.5% of area covered by arrow pixels). |
-| YA-4 | Rays must be cast between all pairs of active squares; a ray is accepted if **> 60%** overlaps the arrow mask. |
-| YA-5 | Overlapping lines (> 45% already covered) must be suppressed. |
-| YA-6 | Arrow direction must be determined by comparing endpoint pixel mass (circular regions at each end). |
-
-#### 1.3.4 Hover Boxes (Dragged Piece Rejection)
-
-| ID | Requirement |
-|----|-------------|
-| HB-1 | White/bright pixels must be thresholded at BGR ≥ 160. |
-| HB-2 | Each square's 4 outer edges (~8% thickness) must be checked via 1D projection (`cv::reduce` with `REDUCE_MAX`). |
-| HB-3 | A square is flagged as an active hover box if **≥ 2 of 4 edges** have > 10% white pixel coverage. |
-| HB-4 | Any candidate move involving a hover-box square must be **rejected** (indicates mid-drag). |
-
-#### 1.3.5 Game Clocks & Turn Validation
-
-| ID | Requirement |
-|----|-------------|
-| GC-1 | Clock ROIs must be extracted relative to localized board coordinates (above and below the board). |
-| GC-2 | Active player must be determined by counting white pixels in each clock ROI (more white = active clock with dark text on bright background). |
-| GC-3 | OCR must use a **Hu Moments-based digit recognizer** with pre-computed 7-segment display templates. Character segmentation via vertical projection, classification via nearest-neighbor Euclidean distance matching on 7 log-transformed Hu moments with area/aspect ratio weighting. No external dependencies. |
-| GC-4 | A **ClockCache** must be used: if the current clock ROI grayscale differs from cached by < 5.0 mean pixel diff, cached times are reused. |
-| GC-5 | After a candidate move is proposed, the UI clock turn **must match** the expected active player; otherwise the frame is rejected. |
+| YS-1 | Yellow move highlights must be scored with `(R + G) / 2.0 - B`. |
+| YS-2 | Yellow scoring must sample square corners so pieces in the center do not hide highlights. |
+| YS-3 | A move highlight must satisfy an elastic threshold: each endpoint must be present and the combined yellow score must be strong enough for the candidate. |
+| RS-1 | Red streamer marks must be scored with `R - (G + B) / 2.0` and thresholded dynamically against the normal board colors. |
+| YA-1 | Yellow arrows must be detected through HSV masking, active-square filtering, ray casting, overlap validation, endpoint mass comparison, and suppression of duplicate branches. |
+| HB-1 | Hover boxes must detect white square outlines through edge-region projections. Candidates touching hover-box squares must be rejected unless the move is already strongly registered. |
+| GC-1 | Clock ROIs must be extracted relative to board geometry. |
+| GC-2 | Active player detection must use clock brightness as a cheap turn gate before OCR. |
+| GC-3 | Clock OCR must use the built-in component-shape and Hu Moments digit recognizers. Tesseract is not required. |
+| GC-4 | Clock OCR must cache unchanged clock ROIs and OCR only the side that changed for accepted moves when possible. |
 
 ### 1.4 Legal Move Verification
 
 | ID | Requirement |
 |----|-------------|
-| VM-1 | The system must maintain an internal chess position state using `libchess::Position`. |
-| VM-2 | For every frame with significant square diffs, all legal moves must be generated and scored by summing diff values of origin + destination squares. |
-| VM-3 | Special moves (castling, en passant) must include additional square diffs (rook for castling, captured pawn for en passant). |
-| VM-4 | The move with the **highest visual diff score** is selected. |
-| VM-5 | **Inverse move filter**: Reject moves that reverse any of the last 4 played moves (unless score > 70). |
-| VM-6 | **Minimum score threshold**: Only accept moves with combined origin+destination diff score > 25.0. |
+| VM-1 | The reducer must maintain a `libchess::Position` state. |
+| VM-2 | Legal moves must be scored against visual square diffs from the last verified board state. |
+| VM-3 | Special moves must include relevant extra squares, such as rook movement for castling and captured pawn squares for en passant. |
+| VM-4 | Candidate moves must pass yellow highlight validation, hover-box validation, clock-turn validation, legality checks, and recent-move conflict checks. |
+| VM-5 | Recent inverse moves must be rejected unless the visual registration is strong enough to indicate a real replay or analysis interaction. |
+| VM-6 | Promotion moves must preserve five-character UCI strings and classify the promoted piece when possible, with queen as the default fallback. |
 
 ### 1.5 History Reverts
 
 | ID | Requirement |
 |----|-------------|
-| HR-1 | When the board visually diverges from the engine state, the system must scan backwards through `board_image_history`. |
-| HR-2 | The best grayscale match must be found; the engine state, move list, timestamps, and clock history must be rolled back to that ply. |
-| HR-3 | Reverts must be logged with reason and number of rolled-back moves. |
+| HR-1 | The reducer must keep verified board images and FEN history for revert detection. |
+| HR-2 | Revert lookup must use coarse board hashes before full-image `absdiff` verification. |
+| HR-3 | A verified revert must roll back moves, timestamps, clocks, FENs, and the chess position to the matching ply. |
+| HR-4 | Reverts must be logged with enough detail to diagnose rolled-back moves. |
 
-### 1.6 Output Format
+### 1.6 Output
 
 | ID | Requirement |
 |----|-------------|
-| OF-1 | Output must primarily be a PGN file named after the video (`<video_basename>.pgn`). |
-| OF-2 | The PGN must contain the extracted moves, clock times via `[%clk ...]` tags, and optionally Stockfish engine analysis variations and evaluations bounded by configured depth, time, or node limits. The intermediate JSON representation is no longer required to be written to disk. |
-
----
+| OF-1 | The primary game output must be PGN. Intermediate JSON is not a normal output artifact. |
+| OF-2 | PGN output must include moves, timestamps, clock comments when available, optional opening headers, optional engine evaluations, variations, and move-quality annotations. |
+| OF-3 | Optional SRT subtitles must be generated from verified timestamps and SAN notation. |
+| OF-4 | Optional analysis video output must compose static overlays through FFmpeg and preserve source audio when available. |
 
 ## 2. Non-Functional Requirements
 
 | ID | Requirement |
 |----|-------------|
-| NF-1 | The system must be implemented in **C++20** with CMake 3.20+ build system. |
-| NF-2 | Windows builds must use one consistent MSVC runtime/triplet pair across the application and vcpkg dependencies. The supported default is `x64-windows` with dynamic runtime linkage (`/MD`, `/MDd` for Debug). |
-| NF-3 | Link-Time Optimization (LTO/IPO) must be enabled for Release builds. |
-| NF-4 | The stable Windows build must not require CUDA-enabled OpenCV or system CUDA/NPP. Experimental GPU acceleration, when enabled, must use NVIDIA NPP directly. |
-| NF-5 | Experimental GPU operations must have automatic CPU fallback on failure or unavailability. |
-| NF-6 | Video processing uses a parallel map-reduce model to process video chunks concurrently. The older single-threaded `FramePrefetcher` model has been removed. |
-| NF-7 | Per-frame heap allocations must be minimized via pre-allocated scratch buffers and device-side GPU memory pools (`GPUMat`). |
-| NF-8 | CPU scoring must remain the precision reference path. Optional GPU acceleration may assist with video decoding, but move scoring must preserve deterministic CPU-side validation behavior (NPP `absdiff` is currently disabled). |
-| NF-9 | The system must compile with vcpkg-managed dependencies: OpenCV, nlohmann_json, CLI11. |
-| NF-10 | A comprehensive test suite using Google Test must be maintained, with integration tests printing a summary table after each run. |
-
----
+| NF-1 | The project must build as C++20 with CMake 3.20 or newer. |
+| NF-2 | Windows builds must keep one MSVC runtime/vcpkg triplet pairing. The supported default is `x64-windows` with `/MD` or `/MDd`. |
+| NF-3 | Release builds should enable IPO/LTO where supported. |
+| NF-4 | CUDA/NPP support must remain optional. Builds without CUDA must compile and run through CPU fallbacks. |
+| NF-5 | NPP operations may accelerate compatible grayscale `absdiff` or device resize paths, but CPU move scoring remains the deterministic reference. |
+| NF-6 | The extraction pipeline must use the map-reduce chunking model; the old `FramePrefetcher` model is removed. |
+| NF-7 | Per-frame allocations should be minimized with scratch buffers, reusable Mats, and GPU buffers where applicable. |
+| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. |
+| NF-9 | Integration tests should derive expected UCI moves from sample PGN files instead of separate golden JSON files. |
 
 ## 3. Component Architecture
 
-### 3.1 Module Organization
-
-Detector and orchestration code is split into focused modules (soft limit: ~400 lines, with complex algorithms isolated by purpose):
-
 | Module | File | Responsibility |
 |--------|------|----------------|
-| Board Localizer | `BoardLocalizer.h/.cpp` | GSS board localization, grid drawing |
-| Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow squares, piece counting, red squares, promotion classification |
-| Board Hover Detection | `BoardHoverDetection.cpp` | Hover-box/mid-drag detection |
-| Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
-| Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock extraction, active-clock detection, Hu Moments digit recognition |
-| Extraction Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, map-reduce reducer loop, move verification, revert detection, in-memory `GameData` output |
-| Stockfish Analysis | `StockfishAnalyzer.h/.cpp` | UCI engine integration, MultiPV evaluation, PGN variations |
-| GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
+| Board Localizer | `BoardLocalizer.h/.cpp` | GSS board localization and board grid helpers |
+| Board Analysis | `BoardAnalysis.h/.cpp` | Square means, yellow/red squares, piece counting, promotion classification |
+| Board Hover Detection | `BoardHoverDetection.cpp` | Hover-box and mid-drag detection |
+| Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection |
+| Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock ROI extraction, active-clock detection, digit OCR |
+| Extraction Orchestrator | `ChessVideoExtractor*.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, sequential reducer, move validation, GameData generation |
+| Video Chunk Mapper | `VideoChunkMapper.h/.cpp` | Parallel chunk scanning and candidate coalescing |
+| Revert Management | `RevertManager.h/.cpp`, `RevertDetector.h/.cpp` | Indexed board-history lookup and full-image revert verification |
+| Move Helpers | `MoveScorer.h/.cpp`, `MoveVerifier.h/.cpp`, `MoveValidations.h/.cpp` | Legal move scoring and UI validation helpers |
+| Stockfish Analysis | `StockfishAnalyzer.h/.cpp`, `StockfishAnalysisHelper.h/.cpp` | UCI analysis, MultiPV, annotations, estimates |
+| Opening Metadata | `OpeningFetcher.h/.cpp`, `LichessSyncHelper.h/.cpp` | Cached Lichess Explorer lookups and synchronization |
+| GPU Pipeline | `GPUAccelerator.h/.cpp` | Optional CUDA/NPP wrappers and CPU fallbacks |
+| Analysis Video | `AnalysisVideoGenerator*`, `AnalysisVideoRenderUtils.*`, `FFmpegFilterGraph.*`, `FfmpegProcessRunner.*` | Overlay rendering and FFmpeg composition |
+| Output | `PgnWriter.h/.cpp`, `VideoExportHelper.h/.cpp`, `ImageWriteUtils.h/.cpp` | PGN, subtitles, images, and analysis-video export |
+| GUI | `MainWindow*.cpp`, `SettingsDialog*.cpp`, `OverlayEditorDialog*.cpp`, `TemplateManager.*`, `ThemeManager.*` | Qt UI, settings, templates, themes, and queue orchestration |
 
-`UIDetectors.h` serves as an umbrella header that includes all detector modules for backwards compatibility.
-
-### 3.2 Data Flow Diagram
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        main.cpp                              │
-│              (CLI11 argument parsing, entry point)           │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                  ChessVideoExtractor                         │
-│            (Orchestrator — extract_moves_from_video)         │
-│                                                              │
-│  ┌─────────────────────┐                                     │
-│  │   BoardGeometry     │                                     │
-│  │  (BoardLocalizer)   │                                     │
-│  └─────────┬───────────┘                                     │
-│            │                                                 │
-│            ▼                                                 │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │        Video Scanner (Map-Reduce or Sequential)         │  │
-│  └─────────────────────────┬───────────────────────────────┘  │
-│                            │                                   │
-│            ┌───────────────┼───────────────┐                   │
-│            ▼               ▼               ▼                   │
-│  ┌──────────────┐ ┌────────────────┐ ┌──────────────────┐     │
-│  │ Square Diff  │ │    Clocks      │ │  UI Detectors    │     │
-│  │  Scoring     │ │(ClockRecognizer│ │ (BoardAnalysis,  │     │
-│  │              │ │ + Hu Moments)  │ │  ArrowDetector)  │     │
-│  └──────┬───────┘ └──────┬─────────┘ └────────┬─────────┘     │
-│         │                │                     │                │
-│         ▼                ▼                     ▼                │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │           libchess::Position (Move Validation)          │  │
-│  │         (Legal moves, scoring, inverse filter)           │  │
-│  └─────────────────────────┬───────────────────────────────┘  │
-│                            │                                   │
-│                            ▼                                   │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │              Revert Detection & History                  │  │
-│  │        (Backward scan, state rollback, logging)          │  │
-│  └─────────────────────────┬───────────────────────────────┘  │
-│                            │                                   │
-└────────────────────────────┼───────────────────────────────────┘
-                             ▼
-              ┌──────────────────────────────┐
-              │   output/analysis.pgn        │
-              │  (via PgnWriter)             │
-              └──────────────────────────────┘
-
-  ┌─────────────────────────────────────────────┐
-  │        GPUAccelerator + GPUPipeline         │
-  │  GPUMat: RAII device memory, move-only      │
-  │  NPP: resize, absdiff, matchTemplate,       │
-  │       integral, threshold                   │
-  │  CPU fallback: integral, inRange            │
-  └─────────────────────────────────────────────┘
-```
-
----
+`UIDetectors.h` remains an umbrella header for detector compatibility.
 
 ## 4. Dependencies
 
-| Dependency | Version | Purpose |
-|------------|---------|---------|
-| OpenCV | vcpkg (latest) | Image processing, video I/O, template matching |
-| nlohmann_json | vcpkg (latest) | JSON serialization for output |
-| CLI11 | vcpkg (latest) | Command-line argument parsing |
-| libchess | External (`E:/libchess/`) | Chess move generation, legal move validation, FEN handling |
-| NVIDIA NPP | CUDA 13.2 (optional) | GPU-accelerated image processing (resize, absdiff, matchTemplate, integral) |
-| Stockfish | External executable | Used for position evaluation via UCI protocol |
-| Google Test | 1.14.0 (fetched) | Unit and integration testing |
-
-**Removed:** Tesseract — replaced with Hu Moments digit recognizer (zero external dependencies, microseconds per recognition).
-
----
+| Dependency | Purpose |
+|------------|---------|
+| OpenCV | Image processing and video I/O |
+| Qt6 | GUI framework |
+| nlohmann-json | Settings, cache, and template JSON |
+| CLI11 | Headless command-line parsing |
+| libchess | Legal move generation and FEN handling |
+| Stockfish | Optional engine analysis |
+| FFmpeg | Optional analysis-video composition and audio muxing |
+| WinHTTP | Windows Lichess Explorer lookup |
+| Google Test | Optional tests |
+| NVIDIA CUDA/NPP | Optional direct acceleration |
 
 ## 5. Platform Support
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Windows x64 | ✅ Primary | MSVC `/MD`, vcpkg `x64-windows`, CUDA 13.2 optional |
-| Linux x64 | 🔜 Future | Requires CMake adaptation |
-| macOS | 🔜 Future | Requires alternative to SEH for GPU detection |
+| Windows x64 | Primary | MSVC, vcpkg `x64-windows`, optional CUDA/NPP |
+| Linux x64 | Future | Requires CMake and platform adaptation |
+| macOS | Future | Requires alternatives for Windows-specific integration points |
 
----
+## 6. Configuration
 
-## 6. Future Scope
+The GUI is the primary interface. Headless mode is available through `ChessTube Analyzer.exe` with saved settings plus CLI overrides. See `docs/USAGE.md` for current command examples.
 
-For more detailed plans and actionable items related to these future scope features, please refer to the `TODO.md` file in the project root.
+Important environment toggles:
 
-| Feature | Status | Description |
-|---------|--------|-------------|
-| Stockfish Analysis | ✅ Implemented | Engine evaluation of positions (Phase 2) |
-| Overlay Rendering | ✅ Implemented | Visual overlays: eval bar, dynamic arrows, PV text (Phase 3) |
-| Video Compositing | ✅ Implemented | Composite overlays onto original video (Phase 4) |
-| Audio Integration | 🔜 Not started | Sound event detection, speech-to-text |
-| Piece Classification | 🔜 Not started | Determine piece types via contour matching (detailed plan in TODO.md) |
-| Parallel Agent Architecture | 🔜 Not started | Async, independent processing agents (detailed plan in TODO.md) |
+| Variable | Purpose |
+|----------|---------|
+| `CTA_CHUNK_SECONDS` | Override map chunk duration, clamped to 30-300 seconds |
+| `CTA_MAX_CHUNK_LOOKAHEAD` | Limit how far mapping can run ahead of the reducer |
+| `CTA_TRACE_REJECTS` | Log detailed rejected-candidate reasons |
+| `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
+| `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
 
----
+## 7. Accuracy Contract
 
-## 7. Configuration
+The analyzer only emits moves that survive all required validation layers:
 
-### Command-Line Interface
-
-```
-extract_moves <video_path> [OPTIONS]
-
-Options:
-  --board-asset PATH    Path to board template image (default: assets/board/board.png)
-  --output PATH         Path to output file (default: output/<video_name>.pgn)
-  --debug-level LEVEL   Debug verbosity: NONE, MOVES, FULL (default: MOVES)
-  --help                Show help message
-```
-
-### Debug Levels
-
-| Level | Description |
-|-------|-------------|
-| `NONE` | No debug output |
-| `MOVES` | Log accepted/rejected moves, revert events |
-| `FULL` | Log all frame-level processing, UI detections, scores |
-
----
-
-## 8. Accuracy Guarantees
-
-The system achieves **100% move accuracy** on supported chess.com videos by design:
-
-1. **Yellow square validation** ensures only completed (not mid-drag) moves are considered.
-2. **Hover box rejection** filters frames where a piece is being dragged.
-3. **Clock turn validation** ensures the active player matches the expected turn.
-4. **Legal move filtering** ensures only chess-legal moves are ever output.
-5. **History revert detection** ensures analysis undos are correctly tracked.
-
-False positives are eliminated by the combination of these independent validation layers — a move must pass **all** checks to be accepted.
+1. The move is legal in the current `libchess::Position`.
+2. The visual diff supports the legal move.
+3. Yellow highlights confirm the origin and destination when required.
+4. Hover-box checks do not indicate a mid-drag frame, unless the move is already strongly registered.
+5. Clock turn state matches the expected side to move when available.
+6. Revert checks can roll the game state back before new analysis-line moves are accepted.

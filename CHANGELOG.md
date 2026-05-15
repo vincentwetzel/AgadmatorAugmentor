@@ -69,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PGN Clock Formatting:** Normalized extracted clock strings before writing `[%clk ...]` comments, including duplicate-colon cleanup, minute rollover, and invalid seconds rejection.
 - **Mid-Drag Rejection:** Hover-box validation now checks both source and destination squares and rejects candidates with a single strongly visible hover edge.
 - **Video Capture Fallbacks:** Video open paths now fall back through FFmpeg and generic OpenCV capture without pinning a hardware device when accelerated open attempts fail.
+- **PGN-Backed Integration Baselines:** Medium and full-game extraction tests now read expected UCI moves from sample PGN files instead of maintaining separate golden JSON artifacts.
+- **Move Settling Guardrails:** Reducer settling now caps the settle window, avoids overlapping multi-move extraction from the same frame, and is stricter about immediate retargets that touch the previous move.
 
 ## [0.3.0] — 2026-04-25
 
@@ -116,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ClockRecognizer.cpp` (264 lines) — Hu Moments digit recognizer + clock extraction with conditional caching
 - `UIDetectors.h` converted to umbrella header for backwards compatibility.
 - **Split `ChessVideoExtractor.cpp`** — Moved utility functions (`ts`, `expand_fen`, path helpers) to `ExtractorUtils.cpp` and validation logic (`check_yellowness`, `check_hover_box`) to `MoveValidations.cpp` to improve modularity and reduce file size.
-- **Dead Code Elimination:** Removed obsolete architectural files (`RevertDetector.cpp/.h`, `MoveVerifier.cpp/.h`) as their logic is now fully integrated into the core `ChessVideoExtractor` state machine and O(1) hashing path. Removed unused SAN expansion helpers in `VideoProcessorWorker.cpp`.
+- **Move/Revert Module Cleanup:** Kept move and revert helper modules in the normal source tree while consolidating their orchestration inside `ChessVideoExtractor`; removed unused SAN expansion helpers in `VideoProcessorWorker.cpp`.
 
 ### Fixed
 
@@ -202,7 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 |---------|------|-------------|
 | 0.1.0 | 2026-03-XX | Initial Python implementation |
 | 0.2.0 | 2026-04-12 | Complete C++ rewrite with GPU acceleration, frame prefetching, adaptive scanning |
-| Unreleased | — | Documentation improvements |
+| Unreleased | — | Opening metadata, extraction performance, PGN-backed tests, and documentation updates |
 
 ---
 

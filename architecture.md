@@ -7,8 +7,8 @@ The ChessTube Analyzer uses a purely visual processing pipeline to analyze chess
 To ensure the system works across varying video resolutions, it locates the board dynamically using the first frame of the video.
 
 - **Golden Section Search (O(log N)):** Replaces the previous linear 67-step scale sweep with GSS across 3 passes: Coarse (0.3×–1.5×, 15 iterations) → Fine (±0.05, 12 iterations) → Exact (±0.01, 12 iterations). Each iteration shrinks the bracket interval by 0.618× (the golden ratio conjugate). **39 total evaluations vs 67 linear steps** (42% fewer `matchTemplate` calls).
-- **Multi-Pass Template Matching:** Uses OpenCV `matchTemplate` (TM_CCOEFF_NORMED) to compare the video frame against `assets/board/board.png`. (NPP `nppiCrossCorrFull_Norm` on GPU was attempted but is currently disabled).
-- **Downscaled Passes:** Passes 1–2 operate at ¼ resolution (16× faster matchTemplate), with the downscaling also handled by NPP `nppiResizeSqrPixel`.
+- **Multi-Pass Template Matching:** Uses OpenCV `matchTemplate` (TM_CCOEFF_NORMED) and sparse sampled correlation to compare the video frame against `assets/board/board.png`. NPP cross-correlation is not required for correctness.
+- **Downscaled Passes:** Passes 1-2 operate at reduced resolution for faster matching; the exact pass resolves full-resolution coordinates.
 - **Sparse Grid Evaluation:** To evaluate a given scale quickly, `eval_scale` resizes the template and samples a sparse uniform grid of points (e.g., 16x16 grid), performing a manual normalized cross-correlation only on those sampled coordinates. This completely circumvents the overhead of full dense template matching during the search iterations.
 - **Linear Fallback:** When both initial GSS bracket points are out-of-bounds (edge case for unusual video dimensions), a linear sweep activates automatically. This also has a GPU-resident equivalent.
 - **Output:** Top-left corner `(bx, by)`, board dimensions `(bh, bw)`, and per-square dimensions `(sq_h, sq_w)`.
@@ -20,6 +20,10 @@ The video is sampled at 5 FPS (configurable `time_step = 0.2s`). Each frame is c
 ### Pristine Snapshot Anchoring
 
 The key insight: comparing against `board_image_history[-1]` (the exact moment the last valid move settled) guarantees the origin square is never accidentally overwritten by a slow-dragging hand. A frame is only accepted if it passes all validation layers below.
+
+### Chunked Map-Reduce Scan
+
+The current extractor splits the video into time chunks. Map workers scan their chunks, coalesce related motion/highlight bursts, and emit settled candidates. A single chronological reducer owns the chess state, so move legality, revert handling, clock validation, and PGN-bound metadata remain deterministic. `CTA_CHUNK_SECONDS`, `CTA_MAX_CHUNK_LOOKAHEAD`, and `CTA_TRACE_REJECTS` are available for advanced tuning and diagnostics.
 
 ## 3. UI Element Extraction
 
@@ -92,9 +96,10 @@ For every frame with significant square diffs, the system:
 
 When the board visually diverges from the engine state (e.g., the streamer undoes moves to analyze):
 1. The system uses an **O(1) Perceptual Hash** (64-square brightness means) with early-exit heuristics to instantly filter non-matching historical states.
-2. Performs a full `cv::absdiff` verification only on surviving candidates.
-3. Snaps the engine state, move list, timestamps, and clock history back to that ply.
-4. Logs the revert with the reason and number of rolled-back moves.
+2. Revert indexing probes coarse-hash buckets and neighbor buckets before falling back to wider history scans.
+3. Performs a full `cv::absdiff` verification only on surviving candidates.
+4. Snaps the engine state, move list, timestamps, and clock history back to that ply.
+5. Logs the revert with the reason and number of rolled-back moves.
 
 ## 5. Output Format
 
@@ -139,12 +144,14 @@ Source code is split into focused modules to keep files manageable (soft limit: 
 | Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection (HSV, ray-casting, overlap suppression) |
 | Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock ROI extraction, active-clock detection, conditional caching, component-shape and Hu Moments digit OCR |
 | Extraction Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, map-reduce reduction loop, move scoring helpers, revert detection, PGN-bound game data |
-| Move Validation | `MoveValidations.h/.cpp` | UI-based move validation logic (yellow highlights, hover boxes) |
+| Video Chunk Mapper | `VideoChunkMapper.h/.cpp` | Parallel chunk scanning, adaptive quiet cadence, motion/highlight candidate coalescing |
+| Revert Management | `RevertManager.h/.cpp`, `RevertDetector.h/.cpp` | Coarse-hash indexed revert lookup and full-image verification |
+| Move Helpers | `MoveScorer.h/.cpp`, `MoveVerifier.h/.cpp`, `MoveValidations.h/.cpp` | Legal move scoring and UI validation helpers |
 | Stockfish Analyzer | `StockfishAnalyzer.h/.cpp` | UCI protocol wrapper, asynchronous evaluation parsing |
 | Stockfish Analysis Helper | `StockfishAnalysisHelper.h/.cpp` | Worker-facing analysis orchestration, result synchronization, move annotations, ACPL/Elo estimates |
 | Opening Fetcher | `OpeningFetcher.h/.cpp` | Cached Lichess Explorer lookup for ECO/opening metadata, optional token auth, top-game capture |
 | Lichess Sync Helper | `LichessSyncHelper.h/.cpp` | Bridges extractor FEN callbacks to opening lookup completion, connection checks, and video opening labels |
-| GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, GPUAccelerator (NPP ops, CPU fallback) |
+| GPU Pipeline | `GPUAccelerator.h/.cpp` | GPUMat, GPUPipeline, optional NPP `absdiff`/resize wrappers, CPU fallback |
 | Analysis Video | `AnalysisVideoGenerator.cpp`, `AnalysisVideoGenerator_FFmpeg.*`, `AnalysisVideoGenerator_Render.cpp`, `AnalysisVideoRenderUtils.*` | Overlay asset rendering, FFmpeg composition, board/eval/text rendering utilities |
 | Template Manager | `TemplateManager.h/.cpp` | Overlay template loading, matching, persistence in AppData |
 | Overlay Editor | `OverlayEditorDialog.cpp`, `OverlayEditorDialog_DraggableOverlay.cpp`, `OverlayEditorDialog_Events.cpp` | Screenshot-based WYSIWYG editor, draggable/resizable overlay item, dialog event handling |
@@ -169,7 +176,7 @@ The following optimizations were investigated but abandoned due to correctness r
 | Attempt | Approach | Result | Reason Abandoned |
 |---------|----------|--------|------------------|
 | **Adaptive Polling** | Increase polling interval from 0.2s to 0.3s/0.4s to scan fewer frames | ❌ Wrong moves | Some yellow highlight windows are only visible for <0.3s — wider intervals miss them entirely. Would require restructuring the entire sequential scan loop to detect-then-refine. |
-| **GPU MinMax Change Detection** | Use NPP `nppiAbsDiff` on GPU-resident frames, then download only the max pixel value (1 byte) instead of the 32F integral image | ❌ Move regressions | Subtle synchronization differences between the GPU fast-path and CPU scoring path caused incorrect move selection (e.g., `d1d2` vs `b1d2`, `c1d2` vs `b1d2`). |
+| **GPU MinMax Change Detection** | Use NPP `nppiAbsDiff` on GPU-resident frames, then download only the max pixel value (1 byte) instead of the 32F integral image | Rejected | Subtle synchronization differences between the GPU fast-path and CPU scoring path caused incorrect move selection (e.g., `d1d2` vs `b1d2`, `c1d2` vs `b1d2`). A narrow NPP grayscale `absdiff` path is allowed only where the CPU scoring reference is preserved. |
 | **Batch Frame Prefetch** | Prefetcher decodes 2–3 frames ahead instead of 1 to hide more FFmpeg I/O latency | 🤷 Marginal gains | Single-frame prefetch already overlaps decode with processing. Additional batching showed no proportional performance improvement. |
 | **Custom 64F GPU Integral Kernel** | Write a custom CUDA kernel for 64F integral computation to eliminate the 3.3MB 32F integral download | 🔧 Not started | Requires a separate `.cu` compilation unit and careful device memory management. ROI unclear given current 9.9x real-time performance. |
 
@@ -182,7 +189,7 @@ For more detailed plans and actionable items related to these future scope featu
 - **Video Compositing:** Composite overlays onto original video (Phase 4 — ✅ Implemented).
 - **Audio Integration:** Using sound templates (`sample_sounds/`) to classify move types (capture, castle, check) and supplement visual detection.
 - **Transcripts & Context:** Aligning detected red squares and yellow arrows with speech-to-text outputs to contextualize streamer commentary.
-- **Piece Classification:** Determining specific piece types (Knight, Bishop, etc.) using contour matching or color profiling for promotion move detection (detailed plan in TODO.md).
+- **Piece Classification:** Basic promotion classification is implemented; broader piece recognition remains future scope if needed for commentary or diagnostics.
 - **Parallel Agent Architecture:** Async, independent processing agents as described in `agents.md` (detailed plan in TODO.md).
 
 ## 11. Architectural Trade-offs & Rejected Optimizations

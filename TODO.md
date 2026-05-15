@@ -26,7 +26,7 @@
 | Build | ✅ Dynamic CRT, vcpkg x64-windows |
 | Map-Reduce Extraction | ✅ Stable and verified |
 | GPU Pipeline | ✅ Optional HW decode, CPU scoring fallback |
-| Tests | ✅ Golden JSON file validation integrated |
+| Tests | ✅ PGN-backed integration baselines |
 | Performance | ✅ Multi-threaded chunk mapping enabled |
 | CLI Mode / Headless | ✅ Implemented |
 | Settings Persistence | ✅ QSettings |
@@ -76,8 +76,7 @@
 - **Micro-Optimizations** — Eliminated IPC sleep latency, zero-allocation ray casting, pre-allocated synchronized result arrays, fixed memory leaks.
 
 ### Tests & Project Health
-- **Map-Reduce Testing** — Validated chunked extraction correctness against golden JSON outputs.
-- **Golden File Regression** — Established auto-generating golden baseline capabilities for integration tests.
+- **Map-Reduce Testing** - Validated chunked extraction correctness against PGN answer keys.
 - **Cache & Resource Limits** — Added tests validating board geometry cache and memory-limit scaling bounds.
 - **CMake Modernization** — Purged hardcoded paths and safely decoupled optional CUDA paths.
 
