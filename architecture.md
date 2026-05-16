@@ -12,6 +12,7 @@ To ensure the system works across varying video resolutions, it locates the boar
 - **Sparse Grid Evaluation:** To evaluate a given scale quickly, `eval_scale` resizes the template and samples a sparse uniform grid of points (e.g., 16x16 grid), performing a manual normalized cross-correlation only on those sampled coordinates. This completely circumvents the overhead of full dense template matching during the search iterations.
 - **Linear Fallback:** When both initial GSS bracket points are out-of-bounds (edge case for unusual video dimensions), a linear sweep activates automatically. This also has a GPU-resident equivalent.
 - **Output:** Top-left corner `(bx, by)`, board dimensions `(bh, bw)`, and per-square dimensions `(sq_h, sq_w)`.
+- **Cached Geometry:** Once a board is localized, the exact scale and square grid can be loaded from cache for repeat runs. This makes the grid deterministic for a known video/template pair, but later move verification still treats the per-square visual evidence as noisy because compression, antialiasing, highlight fade, piece occlusion, and transient analysis UI states can bleed energy into neighboring squares.
 
 ## 2. Visual Frame Polling
 
@@ -91,6 +92,9 @@ For every frame with significant square diffs, the system:
 
 - **Inverse Move Detection:** Rejects moves that reverse one of the last 4 played moves (unless the diff score is very high, indicating a genuine replay).
 - **Minimum Score Threshold:** Only accepts moves with a combined origin+destination diff score above 25.0.
+- **Endpoint Retargeting:** Legal move scoring occasionally identifies the correct source and movement line but a visually adjacent endpoint. The reducer applies narrow retargeting only when the board state, legal move parser, highlight strength, and square-diff evidence agree. Current guardrails cover rook rank/file endpoint ambiguity and immediate queen recaptures of a just-moved pawn.
+- **Immediate Touch Guard:** Moves detected less than one second after the previous move are rejected if they touch the previous source/destination square, unless they are a strong highlighted pawn recapture onto the previous destination. This prevents animation remnants and analysis-board flashes from becoming false plies.
+- **Variation Stability:** Reverted analysis lines are saved as variations, but one-ply lines must meet both score and minimum on-screen lifetime thresholds. Longer reverted lines are retained and supersede nested shorter lines when the streamer later rewinds to an earlier parent ply.
 
 ### History Reverts
 

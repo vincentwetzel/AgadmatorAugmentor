@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Video Capture Fallbacks:** Video open paths now fall back through FFmpeg and generic OpenCV capture without pinning a hardware device when accelerated open attempts fail.
 - **PGN-Backed Integration Baselines:** Medium and full-game extraction tests now read expected UCI moves from sample PGN files instead of maintaining separate golden JSON artifacts.
 - **Move Settling Guardrails:** Reducer settling now caps the settle window, avoids overlapping multi-move extraction from the same frame, and is stricter about immediate retargets that touch the previous move.
+- **Analysis Variation Accuracy:** Reverted branches now prune superseded nested variations and require one-ply variations to be stable on screen before they are counted, eliminating short-lived analysis flashes from extracted PGN move sets.
+- **Endpoint Disambiguation:** Tightened rook endpoint correction with square-diff evidence and narrowed queen immediate-recapture correction to just-moved pawn captures, fixing full-game variation extraction without altering the verified main line.
+- **Medium PGN Baseline:** Removed an erroneous trailing clock tag from the medium-game PGN baseline so its expected variation set matches the actual annotated game.
 
 ## [0.3.0] — 2026-04-25
 

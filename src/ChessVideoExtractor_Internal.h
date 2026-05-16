@@ -59,6 +59,7 @@ void adjust_rook_target(int& to_sq,
                         const char*& to_name,
                         int from_sq,
                         const char* from_name,
+                        const std::vector<double>& sq_diffs,
                         const cv::Mat& board_bgr,
                         const BoardGeometry& geo,
                         libchess::Position* pos_ptr);

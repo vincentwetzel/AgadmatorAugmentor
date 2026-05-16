@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <vector>
 #include <string>
+#include <set>
 #include <algorithm>
 #include <iostream>
 #include <chrono>
@@ -216,56 +217,19 @@ static std::string build_san_for_test(const libchess::Position& pos, const libch
     return san;
 }
 
-static std::string strip_pgn_markup(const std::string& pgn) {
-    std::string out;
-    out.reserve(pgn.size() + 100);
-    int brace_depth = 0;
-    int variation_depth = 0;
-    bool in_header = false;
+struct ExpectedGameData {
+    std::vector<std::string> main_line;
+    std::vector<std::string> variations;
+    std::vector<std::string> all_moves;
+};
 
-    for (char c : pgn) {
-        if (c == '[' && brace_depth == 0 && variation_depth == 0) {
-            in_header = true;
-            out += ' ';
-            continue;
-        }
-        if (in_header) {
-            if (c == ']') {
-                in_header = false;
-                out += ' ';
-            }
-            continue;
-        }
-        if (c == '{') {
-            ++brace_depth;
-            out += ' ';
-            continue;
-        }
-        if (c == '}' && brace_depth > 0) {
-            --brace_depth;
-            out += ' ';
-            continue;
-        }
-        if (brace_depth > 0) continue;
+struct PgnState {
+    libchess::Position pos;
+    std::vector<libchess::Position> history;
+    PgnState() : pos("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1") {}
+};
 
-        if (c == '(') {
-            ++variation_depth;
-            out += ' ';
-            continue;
-        }
-        if (c == ')' && variation_depth > 0) {
-            --variation_depth;
-            out += ' ';
-            continue;
-        }
-        if (variation_depth > 0) continue;
-
-        out += c;
-    }
-    return out;
-}
-
-static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::string& pgn_path) {
+static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_path) {
     std::ifstream ifs(pgn_path);
     if (!ifs.is_open()) {
         throw std::runtime_error("Could not open PGN: " + pgn_path);
@@ -274,16 +238,56 @@ static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::stri
     std::stringstream buffer;
     buffer << ifs.rdbuf();
 
-    std::vector<std::string> moves;
-    libchess::Position pos("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-    std::istringstream iss(strip_pgn_markup(buffer.str()));
-    std::string token;
+    ExpectedGameData result;
+    
+    std::string pgn = buffer.str();
+    std::string cleaned;
+    bool in_header = false;
+    int brace_depth = 0;
+    for (size_t i = 0; i < pgn.size(); ++i) {
+        char c = pgn[i];
+        if (c == '[' && brace_depth == 0) { in_header = true; continue; }
+        if (in_header && c == ']') { in_header = false; continue; }
+        if (in_header) continue;
 
+        if (c == '{') { ++brace_depth; continue; }
+        if (c == '}' && brace_depth > 0) { --brace_depth; continue; }
+        if (brace_depth > 0) continue;
+
+        if (c == '(' || c == ')') {
+            cleaned += ' ';
+            cleaned += c;
+            cleaned += ' ';
+        } else {
+            cleaned += c;
+        }
+    }
+
+    std::istringstream iss(cleaned);
+    std::string token;
+    
+    PgnState current_state;
+    std::vector<PgnState> state_stack;
+    
     while (iss >> token) {
         if (token == "*" || token == "1-0" || token == "0-1" || token == "1/2-1/2") continue;
         if (token.rfind("$", 0) == 0) continue;
 
-        // Remove leading move numbers safely without corrupting engine castling like "0-0"
+        if (token == "(") {
+            state_stack.push_back(current_state);
+            if (!current_state.history.empty()) {
+                current_state.pos = current_state.history.back();
+            }
+            continue;
+        }
+        if (token == ")") {
+            if (!state_stack.empty()) {
+                current_state = state_stack.back();
+                state_stack.pop_back();
+            }
+            continue;
+        }
+
         size_t first_dot = token.find('.');
         if (first_dot != std::string::npos) {
             size_t last_dot = first_dot;
@@ -292,7 +296,6 @@ static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::stri
         }
         if (token.empty()) continue;
 
-        // Skip stray move numbers that lack a dot (e.g. "12")
         bool is_all_digits = true;
         for (char c : token) { if (!std::isdigit(static_cast<unsigned char>(c))) { is_all_digits = false; break; } }
         if (is_all_digits) continue;
@@ -301,39 +304,16 @@ static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::stri
         if (wanted_san.empty()) continue;
 
         bool matched = false;
+        libchess::Move m;
         
-        try {
-            libchess::Move m = pos.parse_move(token);
-            std::string uci = static_cast<std::string>(m);
-            if (uci == "e1h1") uci = "e1g1";
-            else if (uci == "e1a1") uci = "e1c1";
-            else if (uci == "e8h8") uci = "e8g8";
-            else if (uci == "e8a8") uci = "e8c8";
-            moves.push_back(uci);
-            pos.makemove(m);
-            matched = true;
-        } catch (...) {
-            try {
-                libchess::Move m = pos.parse_move(wanted_san);
-                std::string uci = static_cast<std::string>(m);
-                if (uci == "e1h1") uci = "e1g1";
-                else if (uci == "e1a1") uci = "e1c1";
-                else if (uci == "e8h8") uci = "e8g8";
-                else if (uci == "e8a8") uci = "e8c8";
-                moves.push_back(uci);
-                pos.makemove(m);
-                matched = true;
-            } catch (...) {
-                for (const auto& legal_move : pos.legal_moves()) {
+        try { m = current_state.pos.parse_move(token); matched = true; } catch (...) {
+            try { m = current_state.pos.parse_move(wanted_san); matched = true; } catch (...) {
+                for (const auto& legal_move : current_state.pos.legal_moves()) {
                     std::string uci = static_cast<std::string>(legal_move);
-                    if (uci == "e1h1") uci = "e1g1";
-                    else if (uci == "e1a1") uci = "e1c1";
-                    else if (uci == "e8h8") uci = "e8g8";
-                    else if (uci == "e8a8") uci = "e8c8";
-                    const std::string legal_san = normalize_san_token(build_san_for_test(pos, legal_move, uci));
-                    if (legal_san == wanted_san) {
-                        moves.push_back(uci);
-                        pos.makemove(legal_move);
+                    if (uci == "e1h1") uci = "e1g1"; else if (uci == "e1a1") uci = "e1c1";
+                    else if (uci == "e8h8") uci = "e8g8"; else if (uci == "e8a8") uci = "e8c8";
+                    if (normalize_san_token(build_san_for_test(current_state.pos, legal_move, uci)) == wanted_san) {
+                        m = legal_move;
                         matched = true;
                         break;
                     }
@@ -341,12 +321,38 @@ static std::vector<std::string> load_expected_uci_moves_from_pgn(const std::stri
             }
         }
 
-        if (!matched) {
+        if (matched) {
+            std::string uci = static_cast<std::string>(m);
+            if (uci == "e1h1") uci = "e1g1"; else if (uci == "e1a1") uci = "e1c1";
+            else if (uci == "e8h8") uci = "e8g8"; else if (uci == "e8a8") uci = "e8c8";
+            
+            if (state_stack.empty()) {
+                result.main_line.push_back(uci);
+            } else {
+                result.variations.push_back(uci);
+            }
+            result.all_moves.push_back(uci);
+            
+            current_state.history.push_back(current_state.pos);
+            current_state.pos.makemove(m);
+        } else {
             throw std::runtime_error("Could not convert PGN SAN token to UCI: " + token);
         }
     }
 
-    return moves;
+    return result;
+}
+
+static std::multiset<std::string> extract_all_moves_multiset(const GameData& data) {
+    std::multiset<std::string> all(data.moves.begin(), data.moves.end());
+    for (const auto& item : data.variations) {
+        for (const auto& var : item.second) {
+            for (const auto& m : var.moves) {
+                all.insert(m);
+            }
+        }
+    }
+    return all;
 }
 
 static std::vector<std::string> list_files(const std::string& dir,
@@ -817,22 +823,28 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     const std::string pgn_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.pgn").string();
     ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
 
-    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    std::vector<std::string> expected_moves = expected_data.main_line;
+    std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
 
     result.plies_expected = static_cast<int>(expected_moves.size());
 
-    std::cout << "  Expected (" << expected_moves.size() << "): ";
+    std::cout << "  Expected Main Line (" << expected_moves.size() << "): ";
     for (const auto& m : expected_moves) std::cout << m << " ";
     std::cout << "\n";
 
-    std::cout << "  Extracted (" << data.moves.size() << "): ";
+    std::cout << "  Extracted Main Line (" << data.moves.size() << "): ";
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    result.passed = (data.moves == expected_moves);
+    std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
+
+    result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
     EXPECT_EQ(data.moves, expected_moves)
-        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+        << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
+    EXPECT_EQ(extracted_all, expected_all)
+        << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
 
     if (result.passed) {
         std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size() << " plies from the PGN.\n";
@@ -871,23 +883,29 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    std::vector<std::string> expected_moves = expected_data.main_line;
+    std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
 
     result.plies_expected = static_cast<int>(expected_moves.size());
     result.reverts_detected = 1; // This test is known to have one analysis revert
 
-    std::cout << "  Expected (" << expected_moves.size() << "): ";
+    std::cout << "  Expected Main Line (" << expected_moves.size() << "): ";
     for (const auto& m : expected_moves) std::cout << m << " ";
     std::cout << "\n";
 
-    std::cout << "  Extracted (" << data.moves.size() << "): ";
+    std::cout << "  Extracted Main Line (" << data.moves.size() << "): ";
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    result.passed = (data.moves == expected_moves);
+    std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
+
+    result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
     EXPECT_EQ(data.moves, expected_moves)
-        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+        << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
+    EXPECT_EQ(extracted_all, expected_all)
+        << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
 
     if (result.passed) {
         std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size()
@@ -933,23 +951,29 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    std::vector<std::string> expected_moves = expected_data.main_line;
+    std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
 
     result.plies_expected = static_cast<int>(expected_moves.size());
     result.reverts_detected = 0; // Can be updated if GameData tracks total reverts in the future
 
-    std::cout << "  Expected (" << expected_moves.size() << "): ";
+    std::cout << "  Expected Main Line (" << expected_moves.size() << "): ";
     for (const auto& m : expected_moves) std::cout << m << " ";
     std::cout << "\n";
 
-    std::cout << "  Extracted (" << data.moves.size() << "): ";
+    std::cout << "  Extracted Main Line (" << data.moves.size() << "): ";
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    result.passed = (data.moves == expected_moves);
+    std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
+
+    result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
     EXPECT_EQ(data.moves, expected_moves)
-        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+        << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
+    EXPECT_EQ(extracted_all, expected_all)
+        << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
 
     if (result.passed) {
         std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size() << " plies from the PGN.\n";
@@ -995,21 +1019,27 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
     result.plies_extracted = static_cast<int>(data.moves.size());
 
     // Extract and verify expected moves from PGN
-    std::vector<std::string> expected_moves = load_expected_uci_moves_from_pgn(pgn_path);
+    ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    std::vector<std::string> expected_moves = expected_data.main_line;
+    std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected moves from PGN.\n";
     result.plies_expected = static_cast<int>(expected_moves.size());
 
-    std::cout << "  Expected Moves (" << expected_moves.size() << "): ";
+    std::cout << "  Expected Main Line (" << expected_moves.size() << "): ";
     for (const auto& m : expected_moves) std::cout << m << " ";
     std::cout << "\n";
 
-    std::cout << "  Extracted Moves (" << data.moves.size() << "): ";
+    std::cout << "  Extracted Main Line (" << data.moves.size() << "): ";
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    bool moves_passed = (data.moves == expected_moves);
+    std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
+
+    bool moves_passed = (data.moves == expected_moves) && (extracted_all == expected_all);
     EXPECT_EQ(data.moves, expected_moves)
-        << "Extracted " << data.moves.size() << " moves, expected " << expected_moves.size();
+        << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
+    EXPECT_EQ(extracted_all, expected_all)
+        << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
 
     // Extract expected clocks from PGN's [%clk ...] tags
     std::vector<std::string> expected_clocks;

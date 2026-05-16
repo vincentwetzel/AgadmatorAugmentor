@@ -132,11 +132,101 @@ bool is_valid_libchess_move(libchess::Position& pos, const std::string& move_uci
     }
 }
 
-void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const char* from_name, const cv::Mat& board_bgr, const BoardGeometry& geo, libchess::Position* pos_ptr) {
+void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const char* from_name, const std::vector<double>& sq_diffs, const cv::Mat& board_bgr, const BoardGeometry& geo, libchess::Position* pos_ptr) {
     int from_file = from_sq & 7, from_rank = from_sq >> 3, to_file = to_sq & 7, to_rank = to_sq >> 3, alt_to = -1;
     if (from_rank == to_rank && std::abs(to_file - from_file) > 1) alt_to = from_sq + (to_file > from_file ? 1 : -1);
     else if (from_file == to_file && std::abs(to_rank - from_rank) > 1) alt_to = from_sq + (to_rank > from_rank ? 8 : -8);
-    if (alt_to >= 0) { const char* alt_to_name = utils::sq_name(alt_to); char alt_uci[5] = {from_name[0], from_name[1], alt_to_name[0], alt_to_name[1], '\0'}; try { (void)pos_ptr->parse_move(alt_uci); double y_alt = validation::check_yellowness(board_bgr, geo, alt_to_name), y_best = validation::check_yellowness(board_bgr, geo, to_name); if (y_alt >= 25.0 && y_alt > y_best + 10.0) { to_sq = alt_to; to_name = alt_to_name; } } catch (...) {} }
+
+    std::array<char, 64> board_map = utils::expand_fen(pos_ptr->get_fen());
+    const char moving_piece = board_map[from_sq];
+    auto is_occupied = [](char piece) {
+        return piece != ' ' && piece != '.';
+    };
+
+    if (alt_to < 0 && (from_rank == to_rank || from_file == to_file)) {
+        int step = 0;
+        if (from_rank == to_rank && std::abs(to_file - from_file) == 1) {
+            step = to_file > from_file ? 1 : -1;
+        } else if (from_file == to_file && std::abs(to_rank - from_rank) == 1) {
+            step = to_rank > from_rank ? 8 : -8;
+        }
+
+        if (step != 0) {
+            const double current_y = validation::check_yellowness(board_bgr, geo, to_name);
+            int best_far_sq = -1;
+            double best_far_y = current_y;
+            double best_far_evidence = 0.0;
+
+            for (int sq = to_sq + step; sq >= 0 && sq < 64; sq += step) {
+                if (step == 1 && (sq & 7) == 0) break;
+                if (step == -1 && (sq & 7) == 7) break;
+
+                const char* candidate_name = utils::sq_name(sq);
+                char candidate_uci[5] = {from_name[0], from_name[1], candidate_name[0], candidate_name[1], '\0'};
+                try {
+                    (void)pos_ptr->parse_move(candidate_uci);
+                } catch (...) {
+                    break;
+                }
+
+                const char target_piece = board_map[sq];
+                const bool captures_enemy = is_occupied(target_piece) &&
+                    (std::isupper(static_cast<unsigned char>(moving_piece)) !=
+                     std::isupper(static_cast<unsigned char>(target_piece)));
+                if (captures_enemy) {
+                    best_far_sq = sq;
+                    break;
+                }
+
+                const double y = validation::check_yellowness(board_bgr, geo, candidate_name);
+                if (y >= 35.0 && y > best_far_y + 15.0) {
+                    best_far_y = y;
+                    best_far_sq = sq;
+                } else {
+                    const int distance_steps = std::abs((sq - from_sq) / step);
+                    if (distance_steps >= 3 && (y >= 12.0 || sq_diffs[sq] >= 12.0)) {
+                        const double evidence = y + sq_diffs[sq];
+                        if (evidence > best_far_evidence) {
+                            best_far_evidence = evidence;
+                            best_far_sq = sq;
+                        }
+                    }
+                }
+
+                if (is_occupied(target_piece)) break;
+            }
+
+            if (best_far_sq >= 0 && (best_far_evidence <= 0.0 || best_far_evidence >= 22.0)) {
+                to_sq = best_far_sq;
+                to_name = utils::sq_name(best_far_sq);
+                return;
+            }
+        }
+    }
+
+    if (alt_to < 0) return;
+
+    const char target_piece = board_map[to_sq];
+    if (is_occupied(target_piece)) {
+        const bool same_side = std::isupper(static_cast<unsigned char>(moving_piece)) ==
+                               std::isupper(static_cast<unsigned char>(target_piece));
+        if (!same_side) return;
+    }
+
+    const char* alt_to_name = utils::sq_name(alt_to);
+    char alt_uci[5] = {from_name[0], from_name[1], alt_to_name[0], alt_to_name[1], '\0'};
+    try {
+        (void)pos_ptr->parse_move(alt_uci);
+        double y_alt = validation::check_yellowness(board_bgr, geo, alt_to_name);
+        double y_best = validation::check_yellowness(board_bgr, geo, to_name);
+        const int distance_steps = std::max(std::abs(to_file - from_file), std::abs(to_rank - from_rank));
+        const bool short_ambiguity = distance_steps <= 2;
+        if (short_ambiguity && y_alt >= 25.0 && y_alt > y_best + 10.0) {
+            to_sq = alt_to;
+            to_name = alt_to_name;
+        }
+    } catch (...) {
+    }
 }
 
 } // namespace cta::extractor_detail

@@ -46,6 +46,8 @@ Acts as the game logic authority and state machine filter.
   - **Hover box check:** Reject frames where a piece is mid-drag.
   - **Clock turn check:** Active player must match expected turn.
 - Detects **analysis reverts** by using an O(1) perceptual hash filter followed by a full-image structural comparison against `board_image_history`, snapping back to the correct ply when the streamer undoes moves.
+- Retains stable reverted move sequences as PGN variations while pruning superseded nested branches and ignoring short-lived one-ply flashes that do not survive long enough to be meaningful analysis lines.
+- Applies narrow endpoint disambiguation after legal move scoring when the UI evidence is visually adjacent but the chess state is clear, including rook rank/file endpoint ambiguity and immediate queen recaptures of just-moved pawns.
 - Filters out sensory hallucinations and false positives, ensuring the output is 100% legal and accurate.
 
 ### Output

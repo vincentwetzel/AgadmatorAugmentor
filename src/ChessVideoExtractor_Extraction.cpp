@@ -130,6 +130,60 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     data.fens.push_back(pos_ptr_->get_fen());
     data.video_fens.push_back(pos_ptr_->get_fen());
     if (fen_cb_) fen_cb_(pos_ptr_->get_fen());
+    std::vector<double> move_scores;
+
+    auto is_prefix = [](const std::vector<std::string>& maybe_prefix,
+                        const std::vector<std::string>& line) {
+        if (maybe_prefix.size() > line.size()) return false;
+        return std::equal(maybe_prefix.begin(), maybe_prefix.end(), line.begin());
+    };
+
+    auto prune_superseded_variations = [&](size_t parent_ply, const std::vector<std::string>& moves) {
+        for (auto it = data.variations.begin(); it != data.variations.end();) {
+            if (it->first <= parent_ply || it->first > parent_ply + moves.size()) {
+                ++it;
+                continue;
+            }
+
+            const size_t offset = it->first - parent_ply;
+            if (offset == moves.size()) {
+                it = data.variations.erase(it);
+                continue;
+            }
+            std::vector<VariationData>& vars = it->second;
+            vars.erase(std::remove_if(vars.begin(), vars.end(), [&](const VariationData& existing) {
+                if (offset + existing.moves.size() > moves.size()) return false;
+                return std::equal(existing.moves.begin(), existing.moves.end(), moves.begin() + offset);
+            }), vars.end());
+
+            if (vars.empty()) {
+                it = data.variations.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+
+    auto add_variation = [&](size_t parent_ply, VariationData var_data) {
+        prune_superseded_variations(parent_ply, var_data.moves);
+
+        std::vector<VariationData>& siblings = data.variations[parent_ply];
+        bool superseded_by_existing = false;
+        siblings.erase(std::remove_if(siblings.begin(), siblings.end(), [&](const VariationData& existing) {
+            if (is_prefix(existing.moves, var_data.moves)) return true;
+            if (is_prefix(var_data.moves, existing.moves)) {
+                superseded_by_existing = true;
+            }
+            return false;
+        }), siblings.end());
+
+        if (!superseded_by_existing) {
+            siblings.push_back(std::move(var_data));
+        }
+        if (siblings.empty()) {
+            data.variations.erase(parent_ply);
+        }
+    };
 
     // Extract initial clocks
     clock_cache_ = std::make_unique<ClockCache>();
@@ -363,18 +417,26 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     if (reverted_count > 0) {
                         log_info(utils::ts(elapsed()) + "   Saving " + std::to_string(reverted_count) + " analysis plies as a variation.");
 
-                        VariationData var_data;
-                        var_data.moves.assign(data.moves.begin() + best_ply, data.moves.end());
-                        var_data.timestamps.assign(data.timestamps.begin() + best_ply, data.timestamps.end());
-                        var_data.fens.assign(data.fens.begin() + best_ply, data.fens.end() - 1);
-                        var_data.clocks.assign(data.clocks.begin() + best_ply + 1, data.clocks.end());
-                        data.variations[best_ply].push_back(std::move(var_data));
+                        const double first_reverted_score = best_ply < move_scores.size() ? move_scores[best_ply] : 0.0;
+                        const double first_reverted_lifetime =
+                            best_ply < data.timestamps.size() ? (t - data.timestamps[best_ply]) : 0.0;
+                        const bool stable_single_ply_variation =
+                            first_reverted_score >= 57.0 && first_reverted_lifetime >= 0.75;
+                        if (reverted_count > 1 || stable_single_ply_variation) {
+                            VariationData var_data;
+                            var_data.moves.assign(data.moves.begin() + best_ply, data.moves.end());
+                            var_data.timestamps.assign(data.timestamps.begin() + best_ply, data.timestamps.end());
+                            var_data.fens.assign(data.fens.begin() + best_ply, data.fens.end() - 1);
+                            var_data.clocks.assign(data.clocks.begin() + best_ply + 1, data.clocks.end());
+                            add_variation(best_ply, std::move(var_data));
+                        }
                     }
 
                     data.moves.resize(best_ply);
                     data.timestamps.resize(best_ply);
                     data.fens.resize(best_ply + 1);
                     data.clocks.resize(best_ply + 1);
+                    move_scores.resize(best_ply);
                     revert_mgr.resize_history(best_history_idx + 1);
                     revert_history_ply_counts.resize(best_history_idx + 1);
 
@@ -580,7 +642,57 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             std::array<char, 64> current_board_map = utils::expand_fen(pos_ptr_->get_fen());
             char moving_piece = current_board_map[best.from_sq];
             if (std::tolower(static_cast<unsigned char>(moving_piece)) == 'r') {
-                extractor_detail::adjust_rook_target(best.to_sq, to_name, best.from_sq, from_name, board_bgr, *geo_, pos_ptr_.get());
+                extractor_detail::adjust_rook_target(best.to_sq, to_name, best.from_sq, from_name, sq_means, board_bgr, *geo_, pos_ptr_.get());
+            } else if (std::tolower(static_cast<unsigned char>(moving_piece)) == 'q') {
+                auto is_occupied = [](char piece) { return piece != ' ' && piece != '.'; };
+                char target_piece = current_board_map[best.to_sq];
+                if (!is_occupied(target_piece) && !data.moves.empty() && !data.timestamps.empty() &&
+                    (t - data.timestamps.back()) < 1.0) {
+                    const std::string& prev_move = data.moves.back();
+                    double current_y = validation::check_yellowness(board_bgr, *geo_, to_name);
+                    double current_evidence = current_y + sq_means[best.to_sq];
+                    int best_capture_sq = -1;
+                    double best_capture_evidence = current_evidence;
+                    int from_file = best.from_sq & 7;
+                    int from_rank = best.from_sq >> 3;
+                    for (int df = -1; df <= 1; ++df) {
+                        for (int dr = -1; dr <= 1; ++dr) {
+                            if (df == 0 && dr == 0) continue;
+                            int file = from_file + df;
+                            int rank = from_rank + dr;
+                            if (file < 0 || file >= 8 || rank < 0 || rank >= 8) continue;
+                            int sq = rank * 8 + file;
+                            char piece = current_board_map[sq];
+                            if (!is_occupied(piece)) continue;
+                            if (std::tolower(static_cast<unsigned char>(piece)) != 'p') continue;
+                            bool enemy = std::isupper(static_cast<unsigned char>(moving_piece)) !=
+                                         std::isupper(static_cast<unsigned char>(piece));
+                            if (!enemy) continue;
+                            const char* capture_name = utils::sq_name(sq);
+                            if (prev_move.size() < 4 ||
+                                capture_name[0] != prev_move[2] ||
+                                capture_name[1] != prev_move[3]) {
+                                continue;
+                            }
+                            char capture_uci[5] = {from_name[0], from_name[1], capture_name[0], capture_name[1], '\0'};
+                            try {
+                                (void)pos_ptr_->parse_move(capture_uci);
+                            } catch (...) {
+                                continue;
+                            }
+                            double y = validation::check_yellowness(board_bgr, *geo_, capture_name);
+                            double evidence = y + sq_means[sq] + 15.0;
+                            if ((y >= 18.0 || sq_means[sq] >= 18.0) && evidence > best_capture_evidence + 10.0) {
+                                best_capture_evidence = evidence;
+                                best_capture_sq = sq;
+                            }
+                        }
+                    }
+                    if (best_capture_sq >= 0) {
+                        best.to_sq = best_capture_sq;
+                        to_name = utils::sq_name(best_capture_sq);
+                    }
+                }
             }
 
             // Build UCI strings only when needed (avoid allocation in scoring loop)
@@ -628,8 +740,24 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         (to_name[0] == prev_move[0] && to_name[1] == prev_move[1]) ||
                         (to_name[0] == prev_move[2] && to_name[1] == prev_move[3]);
                     if (touches_prev_move && move_uci != prev_move) {
-                        all_validations_passed = false;
-                        break;
+                        const bool recaptures_previous_destination =
+                            to_name[0] == prev_move[2] && to_name[1] == prev_move[3];
+                        char target_piece = current_board_map[best.to_sq];
+                        const bool target_occupied = target_piece != ' ' && target_piece != '.';
+                        const bool captures_enemy = target_occupied &&
+                            (std::isupper(static_cast<unsigned char>(moving_piece)) !=
+                             std::isupper(static_cast<unsigned char>(target_piece)));
+                        const bool captures_pawn =
+                            std::tolower(static_cast<unsigned char>(target_piece)) == 'p';
+                        double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
+                        double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
+                        const bool strong_immediate_recapture =
+                            recaptures_previous_destination && captures_enemy && captures_pawn &&
+                            y_from >= 25.0 && y_to >= 35.0 && (y_from + y_to) >= 85.0;
+                        if (!strong_immediate_recapture) {
+                            all_validations_passed = false;
+                            break;
+                        }
                     }
                 }
             }
@@ -718,6 +846,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             data.timestamps.push_back(t);
             data.video_timestamps.push_back(t);
             data.video_moves.push_back(move_uci);
+            move_scores.push_back(best.score);
 
             std::ostringstream move_log_ss;
             move_log_ss << utils::ts(elapsed()) << " [Branch " << branch_counter << "] Ply " << data.moves.size()

@@ -18,13 +18,18 @@ namespace {
 std::wstring utf8_to_wide(const std::string& text) {
     if (text.empty()) return std::wstring();
     int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    if (size <= 0) {
-        size = MultiByteToWideChar(CP_ACP, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (size > 0) {
+        std::wstring wide(size, L'\0');
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wide.data(), size);
+        return wide;
     }
-    if (size <= 0) return std::wstring(text.begin(), text.end());
-    std::wstring wide(size, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
-    return wide;
+    size = MultiByteToWideChar(CP_ACP, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (size > 0) {
+        std::wstring wide(size, L'\0');
+        MultiByteToWideChar(CP_ACP, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
+        return wide;
+    }
+    return std::wstring(text.begin(), text.end());
 }
 
 std::string format_windows_error(DWORD error_code) {
@@ -49,6 +54,7 @@ void append_tail(std::string& tail, const char* data, size_t size) {
 } // namespace
 
 int FfmpegProcessRunner::run_with_progress(const std::string& cmd, int total_frames, std::atomic<bool>* cancel_flag, std::function<void(int, const std::string&)> progress_callback, std::string& out_tail) {
+    out_tail.clear();
     int result = -1;
 #ifdef _WIN32
     SECURITY_ATTRIBUTES saAttr; 
