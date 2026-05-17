@@ -60,6 +60,11 @@ static bool looks_like_clock_string(const std::string& s) {
            (s.find(':') != std::string::npos || s.find('.') != std::string::npos);
 }
 
+static bool looks_like_full_clock_string(const std::string& s) {
+    return s.length() >= 5 &&
+           std::count(s.begin(), s.end(), ':') >= 1;
+}
+
 static std::uint64_t clock_roi_fingerprint(const cv::Mat& bgr) {
     if (bgr.empty()) {
         return 0;
@@ -83,18 +88,62 @@ static std::uint64_t clock_roi_fingerprint(const cv::Mat& bgr) {
 }
 
 static std::string recognize_clock_time_with_hint(const cv::Mat& bgr, bool active_first) {
-    cv::Mat time_text = crop_right_aligned_clock_text(bgr);
-    std::string res = DigitRecognizer::recognize_time(time_text, active_first);
-    if (!looks_like_clock_string(res)) {
+    static constexpr std::array<double, 6> active_left_ratios{0.30, 0.40, 0.50, 0.55, 0.60, 0.12};
+    static constexpr std::array<double, 6> inactive_left_ratios{0.12, 0.30, 0.40, 0.50, 0.55, 0.60};
+    const auto& left_ratios = active_first ? active_left_ratios : inactive_left_ratios;
+    std::string fallback;
+    for (double left_ratio : left_ratios) {
+        cv::Mat time_text = crop_right_aligned_clock_text(bgr, left_ratio);
+        std::string res = DigitRecognizer::recognize_time(time_text, active_first);
+        if (looks_like_full_clock_string(res)) {
+            return res;
+        }
+        if (fallback.empty() && looks_like_clock_string(res)) fallback = res;
         res = DigitRecognizer::recognize_time(time_text, !active_first);
+        if (looks_like_full_clock_string(res)) {
+            return res;
+        }
+        if (fallback.empty() && looks_like_clock_string(res)) fallback = res;
     }
-    if (!looks_like_clock_string(res)) {
-        res = DigitRecognizer::recognize_time(bgr, active_first);
+
+    std::string res = DigitRecognizer::recognize_time(bgr, active_first);
+    if (looks_like_full_clock_string(res)) {
+        return res;
     }
-    if (!looks_like_clock_string(res)) {
-        res = DigitRecognizer::recognize_time(bgr, !active_first);
+    if (fallback.empty() && looks_like_clock_string(res)) fallback = res;
+    res = DigitRecognizer::recognize_time(bgr, !active_first);
+    if (looks_like_full_clock_string(res)) {
+        return res;
     }
-    return res;
+    if (fallback.empty() && looks_like_clock_string(res)) fallback = res;
+    return fallback;
+}
+
+std::vector<std::string> recognize_clock_time_candidates_from_roi(const cv::Mat& bgr,
+                                                                  bool active_first) {
+    static constexpr std::array<double, 6> active_left_ratios{0.30, 0.40, 0.50, 0.55, 0.60, 0.12};
+    static constexpr std::array<double, 6> inactive_left_ratios{0.12, 0.30, 0.40, 0.50, 0.55, 0.60};
+    const auto& left_ratios = active_first ? active_left_ratios : inactive_left_ratios;
+
+    std::vector<std::string> candidates;
+    auto add_candidate = [&](const std::string& value) {
+        if (!looks_like_clock_string(value)) {
+            return;
+        }
+        if (std::find(candidates.begin(), candidates.end(), value) == candidates.end()) {
+            candidates.push_back(value);
+        }
+    };
+
+    for (double left_ratio : left_ratios) {
+        cv::Mat time_text = crop_right_aligned_clock_text(bgr, left_ratio);
+        add_candidate(DigitRecognizer::recognize_time(time_text, active_first));
+        add_candidate(DigitRecognizer::recognize_time(time_text, !active_first));
+    }
+
+    add_candidate(DigitRecognizer::recognize_time(bgr, active_first));
+    add_candidate(DigitRecognizer::recognize_time(bgr, !active_first));
+    return candidates;
 }
 
 static std::string cached_recognize_clock_time(const cv::Mat& bgr,
@@ -137,16 +186,22 @@ ClockState extract_clocks_for_moved_player_from_rois(const cv::Mat& top_bgr,
     }
 
     if (moved_player == "white") {
-        state.white_time = cached_recognize_clock_time(
+        std::string recognized = cached_recognize_clock_time(
             bot_bgr, false, cache ? &cache->bot_ocr_cache : nullptr);
+        if (looks_like_clock_string(recognized)) {
+            state.white_time = recognized;
+        }
     } else if (moved_player == "black") {
-        state.black_time = cached_recognize_clock_time(
+        std::string recognized = cached_recognize_clock_time(
             top_bgr, false, cache ? &cache->top_ocr_cache : nullptr);
+        if (looks_like_clock_string(recognized)) {
+            state.black_time = recognized;
+        }
         if (state.black_time.empty() && state.active_player == "black") {
             cv::Mat tight_top_text = crop_right_aligned_clock_text(top_bgr, 0.40);
-        state.black_time = DigitRecognizer::recognize_time(tight_top_text, true);
+            state.black_time = DigitRecognizer::recognize_time(tight_top_text, true);
             if (state.black_time.empty()) {
-            state.black_time = DigitRecognizer::recognize_time(tight_top_text, false);
+                state.black_time = DigitRecognizer::recognize_time(tight_top_text, false);
             }
         }
     }
@@ -205,10 +260,16 @@ ClockState extract_clocks_from_rois(const cv::Mat& top_bgr,
     if (need_ocr) {
         bool top_active_first = state.active_player == "black";
         bool bot_active_first = state.active_player == "white";
-        state.white_time = cached_recognize_clock_time(
+        std::string recognized_white = cached_recognize_clock_time(
             bot_bgr, bot_active_first, cache ? &cache->bot_ocr_cache : nullptr);
-        state.black_time = cached_recognize_clock_time(
+        if (looks_like_clock_string(recognized_white)) {
+            state.white_time = recognized_white;
+        }
+        std::string recognized_black = cached_recognize_clock_time(
             top_bgr, top_active_first, cache ? &cache->top_ocr_cache : nullptr);
+        if (looks_like_clock_string(recognized_black)) {
+            state.black_time = recognized_black;
+        }
 
         if (state.black_time.empty() && state.active_player == "black") {
             auto tight_top_text = top_bgr(cv::Rect(
@@ -265,8 +326,8 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
 
     int top_roi_y1 = std::max(0, static_cast<int>(geo.by - geo.sq_h * 0.55));
     int top_roi_y2 = std::max(top_roi_y1 + 1, static_cast<int>(geo.by - geo.sq_h * 0.08));
-    int bot_roi_y1 = std::min(img_bgr.rows - 1, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.07));
-    int bot_roi_y2 = std::min(img_bgr.rows, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.40));
+    int bot_roi_y1 = std::min(img_bgr.rows - 1, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.18));
+    int bot_roi_y2 = std::min(img_bgr.rows, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.58));
 
     if (roi_x2 <= roi_x1 || top_roi_y2 <= top_roi_y1 || bot_roi_y2 <= bot_roi_y1) {
         return {};

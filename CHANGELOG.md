@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Opening Metadata:** Added a background Lichess Explorer fetcher with cached ECO/opening lookups for verified video FENs.
 - **Opening Overlays:** Added an optional opening-name overlay to analysis videos and the screenshot-based overlay template editor.
-- **Performance Estimate Headers:** PGN export can now include estimated Elo, ACPL, and accuracy headers derived from move-quality centipawn loss.
 - **Arrow Thickness Templates:** Overlay templates can now persist and edit the base thickness percentage for engine arrows.
 - **Clock-Time Integration Test:** Added a full video integration test that compares extracted move clocks against `[%clk ...]` PGN tags.
 - **Full-Game PGN Baseline Test:** Added an optional integration path that derives expected UCI moves directly from a sample full-game PGN.
@@ -42,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Settings Presets:** Replaced several advanced numeric spin boxes with curated dropdowns for engine strength, time cap, node cap, line length, video encoding, output size, quality, and RAM budget.
 - **Runtime Deployment:** The development preset now keeps Qt runtime deployment enabled so GUI builds are runnable from the build output.
 - **Elapsed Log Prefixes:** GUI and headless logs now add elapsed-time prefixes while preserving existing extractor timestamps.
+- **PGN Export:** PGNs now stay moves-and-clocks focused by default, while Stockfish-backed PGN move-quality labels are controlled by a separate opt-in toggle.
 - **Test Runner:** `tests/run_tests.py` now configures the build tree with `BUILD_TESTS=ON` before building and running `test_extract_moves`.
 - **FFmpeg Filter Graph Organization:** Moved `FFmpegFilterGraph` into `src/` and expanded it to track CPU/GPU stream state for analysis-video composition.
 - **Source Video Cleanup:** The optional post-processing cleanup now moves completed source videos to the trash instead of permanently deleting them.

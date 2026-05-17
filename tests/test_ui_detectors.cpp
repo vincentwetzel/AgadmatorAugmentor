@@ -13,6 +13,7 @@
 #include <sstream>
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <libchess/position.hpp>
 #include <libchess/move.hpp>
@@ -52,7 +53,7 @@ static std::vector<IntegrationTestResult> g_test_results;
 //
 // Integration tests (full video pipeline with ground-truth PGN):
 #define TEST_7_PLIES_EXTRACTION   0
-#define TEST_MEDIUM_GAME_REVERT   1
+#define TEST_MEDIUM_GAME_REVERT   0
 #define TEST_FULL_GAME_1_EXTRACTION 1
 #define TEST_INTEGRATION_CLOCK_TIMES 0
 //
@@ -223,6 +224,151 @@ struct ExpectedGameData {
     std::vector<std::string> all_moves;
 };
 
+struct ExpectedClockData {
+    std::vector<std::string> main_line;
+    std::vector<std::string> variations;
+};
+
+static ExpectedClockData load_expected_clocks_from_pgn(const std::string& pgn_path) {
+    std::ifstream ifs(pgn_path);
+    if (!ifs.is_open()) {
+        throw std::runtime_error("Could not open PGN: " + pgn_path);
+    }
+
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ExpectedClockData clocks;
+    bool in_header = false;
+    int brace_depth = 0;
+    int variation_depth = 0;
+
+    for (size_t i = 0; i < content.size(); ++i) {
+        char c = content[i];
+
+        if (c == '[' && brace_depth == 0) {
+            in_header = true;
+            continue;
+        }
+        if (in_header) {
+            if (c == ']') in_header = false;
+            continue;
+        }
+
+        if (c == '{') {
+            ++brace_depth;
+            continue;
+        }
+        if (c == '}' && brace_depth > 0) {
+            --brace_depth;
+            continue;
+        }
+
+        if (brace_depth == 0) {
+            if (c == '(') ++variation_depth;
+            else if (c == ')' && variation_depth > 0) --variation_depth;
+            continue;
+        }
+
+        if (variation_depth == 0 && content.compare(i, 6, "[%clk ") == 0) {
+            size_t start = i + 6;
+            size_t end = content.find(']', start);
+            if (end != std::string::npos) {
+                clocks.main_line.push_back(format_clock_for_test(content.substr(start, end - start)));
+                i = end;
+            }
+        } else if (variation_depth > 0 && content.compare(i, 6, "[%clk ") == 0) {
+            size_t start = i + 6;
+            size_t end = content.find(']', start);
+            if (end != std::string::npos) {
+                clocks.variations.push_back(format_clock_for_test(content.substr(start, end - start)));
+                i = end;
+            }
+        }
+    }
+
+    return clocks;
+}
+
+static std::string clock_for_ply(const ClockInfo& clock, size_t ply_index) {
+    std::string raw_clock = (ply_index % 2 == 0) ? clock.white_time : clock.black_time;
+    std::string formatted = format_clock_for_test(raw_clock);
+    return formatted.empty() ? "0:00:00" : formatted;
+}
+
+static ExpectedClockData extract_clocks_from_game_data(const GameData& data) {
+    ExpectedClockData clocks;
+    clocks.main_line.reserve(data.moves.size());
+
+    for (size_t i = 0; i < data.moves.size(); ++i) {
+        size_t clockIdx = i + 1;
+        const auto* clk_ptr = (clockIdx < data.clocks.size())
+            ? &data.clocks[clockIdx]
+            : (i < data.clocks.size()) ? &data.clocks[i] : nullptr;
+        clocks.main_line.push_back(clk_ptr ? clock_for_ply(*clk_ptr, i) : "0:00:00");
+    }
+
+    for (const auto& item : data.variations) {
+        size_t branch_ply = item.first;
+        for (const auto& var : item.second) {
+            for (size_t j = 0; j < var.moves.size(); ++j) {
+                clocks.variations.push_back(j < var.clocks.size()
+                    ? clock_for_ply(var.clocks[j], branch_ply + j)
+                    : "0:00:00");
+            }
+        }
+    }
+
+    return clocks;
+}
+
+static void print_multiset_delta(const std::multiset<std::string>& extracted,
+                                 const std::multiset<std::string>& expected,
+                                 const std::string& label);
+
+static bool verify_clocks(const std::string& pgn_path, const GameData& data) {
+    ExpectedClockData expected_clocks = load_expected_clocks_from_pgn(pgn_path);
+    ExpectedClockData extracted_clocks = extract_clocks_from_game_data(data);
+
+    std::cout << "  Loaded expected clocks from PGN.\n";
+    std::cout << "  Expected Main-Line Clocks (" << expected_clocks.main_line.size() << "): ";
+    for (const auto& c : expected_clocks.main_line) std::cout << c << " ";
+    std::cout << "\n";
+
+    std::cout << "  Extracted Main-Line Clocks (" << extracted_clocks.main_line.size() << "): ";
+    for (const auto& c : extracted_clocks.main_line) std::cout << c << " ";
+    std::cout << "\n";
+
+    std::cout << "  Expected Variation Clocks (" << expected_clocks.variations.size() << "): ";
+    for (const auto& c : expected_clocks.variations) std::cout << c << " ";
+    std::cout << "\n";
+
+    std::cout << "  Extracted Variation Clocks (" << extracted_clocks.variations.size() << "): ";
+    for (const auto& c : extracted_clocks.variations) std::cout << c << " ";
+    std::cout << "\n";
+
+    for (size_t i = 0; i < std::min(expected_clocks.main_line.size(), extracted_clocks.main_line.size()); ++i) {
+        if (expected_clocks.main_line[i] != extracted_clocks.main_line[i]) {
+            std::cout << "  First main-line clock mismatch at ply " << (i + 1)
+                      << ": expected " << expected_clocks.main_line[i]
+                      << ", extracted " << extracted_clocks.main_line[i] << "\n";
+            break;
+        }
+    }
+
+    std::multiset<std::string> expected_variation_clocks(expected_clocks.variations.begin(), expected_clocks.variations.end());
+    std::multiset<std::string> extracted_variation_clocks(extracted_clocks.variations.begin(), extracted_clocks.variations.end());
+    print_multiset_delta(extracted_variation_clocks, expected_variation_clocks, "variation clocks");
+
+    EXPECT_EQ(extracted_clocks.main_line, expected_clocks.main_line)
+        << "Extracted " << extracted_clocks.main_line.size() << " main-line clocks, expected "
+        << expected_clocks.main_line.size();
+    EXPECT_EQ(extracted_variation_clocks, expected_variation_clocks)
+        << "Extracted " << extracted_clocks.variations.size() << " variation clocks, expected "
+        << expected_clocks.variations.size();
+
+    return extracted_clocks.main_line == expected_clocks.main_line
+        && extracted_variation_clocks == expected_variation_clocks;
+}
+
 struct PgnState {
     libchess::Position pos;
     std::vector<libchess::Position> history;
@@ -353,6 +499,29 @@ static std::multiset<std::string> extract_all_moves_multiset(const GameData& dat
         }
     }
     return all;
+}
+
+static void print_multiset_delta(const std::multiset<std::string>& extracted,
+                                 const std::multiset<std::string>& expected,
+                                 const std::string& label) {
+    std::vector<std::string> extra;
+    std::vector<std::string> missing;
+    std::set_difference(extracted.begin(), extracted.end(),
+                        expected.begin(), expected.end(),
+                        std::back_inserter(extra));
+    std::set_difference(expected.begin(), expected.end(),
+                        extracted.begin(), extracted.end(),
+                        std::back_inserter(missing));
+    if (extra.empty() && missing.empty()) {
+        return;
+    }
+
+    std::cout << "  " << label << " extra (" << extra.size() << "): ";
+    for (const auto& item : extra) std::cout << item << " ";
+    std::cout << "\n";
+    std::cout << "  " << label << " missing (" << missing.size() << "): ";
+    for (const auto& item : missing) std::cout << item << " ";
+    std::cout << "\n";
 }
 
 static std::vector<std::string> list_files(const std::string& dir,
@@ -756,8 +925,8 @@ TEST_F(DetectorsTest, GameClocks) {
 
         int top_roi_y1 = std::max(0, static_cast<int>(img_geo.by - img_geo.sq_h * 0.40));
         int top_roi_y2 = std::max(0, static_cast<int>(img_geo.by - img_geo.sq_h * 0.08));
-        int bot_roi_y1 = std::min(debug_img.rows, static_cast<int>(img_geo.by + img_geo.bh + img_geo.sq_h * 0.08));
-        int bot_roi_y2 = std::min(debug_img.rows, static_cast<int>(img_geo.by + img_geo.bh + img_geo.sq_h * 0.40));
+        int bot_roi_y1 = std::min(debug_img.rows, static_cast<int>(img_geo.by + img_geo.bh + img_geo.sq_h * 0.18));
+        int bot_roi_y2 = std::min(debug_img.rows, static_cast<int>(img_geo.by + img_geo.bh + img_geo.sq_h * 0.58));
 
         cv::rectangle(debug_img, cv::Point(roi_x1, top_roi_y1), cv::Point(roi_x2, top_roi_y2), cv::Scalar(0, 0, 255), 2); // Red for top (black clock)
         cv::rectangle(debug_img, cv::Point(roi_x1, bot_roi_y1), cv::Point(roi_x2, bot_roi_y2), cv::Scalar(0, 255, 0), 2); // Green for bot (white clock)
@@ -969,14 +1138,18 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
 
     std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
 
-    result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
+    bool moves_passed = (data.moves == expected_moves) && (extracted_all == expected_all);
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
+    print_multiset_delta(extracted_all, expected_all, "moves");
     EXPECT_EQ(extracted_all, expected_all)
         << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
 
+    bool clocks_passed = verify_clocks(pgn_path, data);
+    result.passed = moves_passed && clocks_passed;
+
     if (result.passed) {
-        std::cout << "PASS: Extracted moves perfectly match the expected " << expected_moves.size() << " plies from the PGN.\n";
+        std::cout << "PASS: Extracted moves and clocks perfectly match the expected PGN, including variation clocks.\n";
     }
 
     g_test_results.push_back(result);
@@ -1041,56 +1214,7 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
     EXPECT_EQ(extracted_all, expected_all)
         << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
 
-    // Extract expected clocks from PGN's [%clk ...] tags
-    std::vector<std::string> expected_clocks;
-    {
-        std::ifstream ifs(pgn_path);
-        ASSERT_TRUE(ifs.is_open()) << "Could not open PGN: " << pgn_path;
-        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-        size_t pos = 0;
-        while ((pos = content.find("[%clk ", pos)) != std::string::npos) {
-            pos += 6;
-            size_t end_pos = content.find("]", pos);
-            if (end_pos != std::string::npos) {
-                expected_clocks.push_back(content.substr(pos, end_pos - pos));
-                pos = end_pos;
-            }
-        }
-    }
-    
-    std::cout << "  Loaded expected clocks from PGN.\n";
-
-    std::cout << "  Expected Clocks (" << expected_clocks.size() << "): ";
-    for (const auto& c : expected_clocks) std::cout << c << " ";
-    std::cout << "\n";
-
-    // Map GameData clocks into standard PGN strings for each ply
-    std::vector<std::string> extracted_clocks;
-    for (size_t i = 0; i < data.moves.size(); ++i) {
-        size_t clockIdx = i + 1;
-        const auto* clk_ptr = (clockIdx < data.clocks.size()) ? &data.clocks[clockIdx] : (i < data.clocks.size()) ? &data.clocks[i] : nullptr;
-        std::string raw_clock = clk_ptr ? ((i % 2 == 0) ? clk_ptr->white_time : clk_ptr->black_time) : "0:00:00";
-        
-        std::string formatted = format_clock_for_test(raw_clock);
-        extracted_clocks.push_back(formatted.empty() ? "0:00:00" : formatted);
-    }
-
-    // It's common for the final frame to settle before the clock updates its final tick.
-    // Trim any trailing zeroed clocks, and resize the expected array to match.
-    while (!extracted_clocks.empty() && extracted_clocks.back() == "0:00:00") {
-        extracted_clocks.pop_back();
-    }
-    if (expected_clocks.size() > extracted_clocks.size()) {
-        expected_clocks.resize(extracted_clocks.size());
-    }
-
-    std::cout << "  Extracted Clocks (" << extracted_clocks.size() << "): ";
-    for (const auto& c : extracted_clocks) std::cout << c << " ";
-    std::cout << "\n";
-
-    bool clocks_passed = (extracted_clocks == expected_clocks);
-    EXPECT_EQ(extracted_clocks, expected_clocks)
-        << "Extracted " << extracted_clocks.size() << " clocks, expected " << expected_clocks.size();
+    bool clocks_passed = verify_clocks(pgn_path, data);
 
     result.passed = moves_passed && clocks_passed;
 

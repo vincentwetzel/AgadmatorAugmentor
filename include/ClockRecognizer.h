@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace cta {
 
@@ -56,6 +57,12 @@ ClockState extract_clocks_for_moved_player_from_rois(const cv::Mat& top_bgr,
                                                      const std::string& moved_player,
                                                      ClockCache* cache = nullptr,
                                                      const std::string& active_player_hint = "");
+
+/// Returns all unique OCR strings considered for a right-aligned clock ROI.
+/// This is used by the reducer when the first OCR choice conflicts with
+/// nearby game-state evidence.
+std::vector<std::string> recognize_clock_time_candidates_from_roi(const cv::Mat& bgr,
+                                                                  bool active_first);
 
 /// Cheap active-clock detection from cropped clock pill ROIs. This performs no OCR.
 std::string detect_active_clock_from_rois(const cv::Mat& top_bgr,

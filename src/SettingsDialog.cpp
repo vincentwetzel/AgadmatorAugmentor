@@ -180,13 +180,23 @@ void SettingsDialog::setupUi() {
     togglesGroup->setToolTip("Choose which files ChessTube Analyzer should create for each video.");
     auto* togglesLayout = new QVBoxLayout(togglesGroup);
     togglesLayout->addWidget(createHelpText(
-        "Start with the moves-only PGN. Move labels and engine-backed video overlays will run Stockfish automatically.",
+        "Start with the moves-only PGN. Engine-backed video overlays will run Stockfish automatically.",
         "Explains the recommended output choices."
     ));
     togglesLayout->addWidget(createToggleRow("Moves-only PGN", "Create a compact PGN containing the extracted legal moves.", ui.pgnExportToggle, true));
     togglesLayout->addWidget(createToggleRow("Move subtitles", "Embed synced move subtitles into the analysis video.", ui.subtitlesToggle, false));
 
-    auto* annotationsRow = createToggleRow("Move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to the PGN and video text. This runs Stockfish automatically.", ui.moveAnnotationsToggle, true);
+    bool pgnAnnotationsEnabled = QSettings().value("pgnAnnotationsToggle", false).toBool();
+    ToggleSwitch* pgnAnnotationsToggle = nullptr;
+    auto* pgnAnnotationsRow = createToggleRow("PGN move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to the exported PGN file. This runs Stockfish automatically.", pgnAnnotationsToggle, pgnAnnotationsEnabled);
+    pgnAnnotationsToggle->setObjectName("pgnAnnotationsToggle");
+    connect(pgnAnnotationsToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
+        QSettings().setValue("pgnAnnotationsToggle", checked);
+        saveSettings();
+    });
+    togglesLayout->addWidget(pgnAnnotationsRow);
+
+    auto* annotationsRow = createToggleRow("Video move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to the analysis video text. This runs Stockfish automatically.", ui.moveAnnotationsToggle, true);
     ui.moveAnnotationsToggle->setObjectName("moveAnnotationsToggle");
     togglesLayout->addWidget(annotationsRow);
 

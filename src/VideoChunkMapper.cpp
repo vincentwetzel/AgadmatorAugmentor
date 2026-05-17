@@ -13,12 +13,12 @@ VideoChunkMapper::VideoChunkMapper(const std::string& safe_video_path, double du
       geo_(geo), margin_h_(margin_h), margin_w_(margin_w), debug_level_(debug_level), has_clocks_(has_clocks),
       max_lookahead_(max_lookahead), num_threads_(num_threads), frame_width_(frame_width), frame_height_(frame_height),
       chunk_results_(total_chunks), chunk_done_(total_chunks, false) {
-    roi_x1_ = std::max(0, static_cast<int>(geo_.bx + geo_.bw * 0.76));
+    roi_x1_ = std::max(0, static_cast<int>(geo_.bx + geo_.bw * 0.70));
     roi_x2_ = std::min(frame_width_, static_cast<int>(geo_.bx + geo_.bw));
     top_roi_y1_ = std::max(0, static_cast<int>(geo_.by - geo_.sq_h * 0.55));
     top_roi_y2_ = std::max(top_roi_y1_ + 1, static_cast<int>(geo_.by - geo_.sq_h * 0.08));
-    bot_roi_y1_ = std::min(frame_height_ - 1, static_cast<int>(geo_.by + geo_.bh + geo_.sq_h * 0.07));
-    bot_roi_y2_ = std::min(frame_height_, static_cast<int>(geo_.by + geo_.bh + geo_.sq_h * 0.40));
+    bot_roi_y1_ = std::min(frame_height_ - 1, static_cast<int>(geo_.by + geo_.bh + geo_.sq_h * 0.18));
+    bot_roi_y2_ = std::min(frame_height_, static_cast<int>(geo_.by + geo_.bh + geo_.sq_h * 0.58));
 }
 
 VideoChunkMapper::~VideoChunkMapper() {

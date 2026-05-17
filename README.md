@@ -4,7 +4,7 @@ A C++20 application that analyzes chess videos, reconstructs legal games from th
 
 ## Overview
 
-ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data and optional engine variations.
+ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data, optional opening tags, and optional move-quality labels.
 
 The extraction path is optimized around a map-reduce scan: workers decode timeline chunks and emit visual candidates, while a reducer maintains the strict chess state, validates moves, and detects analysis reverts. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches.
 
@@ -17,8 +17,8 @@ Advanced extraction tuning is available through environment variables for benchm
 - **UI Detection:** Detect yellow highlights, red emphasis marks, yellow arrows, clocks, hover boxes, and piece-count changes.
 - **Clock Recognition:** Zero-dependency clock OCR using component-shape and Hu Moments digit recognition.
 - **Promotion Handling:** Preserve 5-character UCI promotion moves such as `e7e8q`, with auto-queen as the current default.
-- **PGN Export:** Generate PGN with extracted moves, clock tags, quality annotations, and Stockfish variations when enabled.
-- **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits, including a Fast Preview mode.
+- **PGN Export:** Generate PGN with extracted moves, clock tags, optional opening tags, and optional move-quality labels.
+- **Stockfish Analysis:** Configurable MultiPV plus depth, time, node, and variation-length limits for analysis video overlays and optional labels, including a Fast Preview mode.
 - **Opening Metadata:** Background Lichess Explorer lookup can add ECO/opening tags to PGN output and opening-name overlays to analysis videos, with optional API-token authentication for restricted networks.
 - **Analysis Video Generation:** Render synchronized analysis board, eval bar, PV text, opening text, configurable engine arrows, and optional move subtitles into an annotated MP4.
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
@@ -76,7 +76,7 @@ Headless:
 
 ```cmd
 cd build\Release
-"ChessTube Analyzer.exe" "path\to\video.mp4" --move-labels --multi-pv 3 --pgn
+"ChessTube Analyzer.exe" "path\to\video.mp4" --multi-pv 3 --pgn
 ```
 
 Multiple videos can be passed as a semicolon-separated list:
@@ -194,7 +194,7 @@ ChessTubeAnalyzer/
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`. The fetcher can use an optional Lichess API token from settings, verifies access before processing, stores 64-bit game totals, and records top matching games for rare or unique positions.
-9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, estimated performance headers, and optional Stockfish analysis. Analysis video generation composites static overlays through FFmpeg, embeds temporary move subtitles when requested, then removes the temporary SRT file.
+9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, and optional Stockfish-backed move-quality labels. Analysis video generation composites static overlays through FFmpeg, embeds temporary move subtitles when requested, then removes the temporary SRT file.
 
 ## Testing
 

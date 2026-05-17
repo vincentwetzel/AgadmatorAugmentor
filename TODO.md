@@ -92,7 +92,7 @@
 "ChessTube Analyzer.exe" path/to/video.mp4
 
 # Full control with CLI flags
-"ChessTube Analyzer.exe" video.mp4 --move-labels --multi-pv 3 --threads 8 --pgn --time 1000 --nodes 500000
+"ChessTube Analyzer.exe" video.mp4 --multi-pv 3 --threads 8 --pgn --time 1000 --nodes 500000
 
 # Show version
 "ChessTube Analyzer.exe" --version

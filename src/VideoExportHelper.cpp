@@ -137,6 +137,8 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
         pgn.add_header("BlackAccuracy", ss.str());
     }
 
+    bool pgnAnnotationsEnabled = QSettings().value("pgnAnnotationsToggle", false).toBool();
+
     for (size_t i = 0; i < gameData.moves.size(); ++i) {
         std::string clockStr;
         size_t clockIdx = i + 1;
@@ -145,7 +147,12 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
         
         std::string main_eval_str = (settings.enableMoveAnnotations && !sfResults.mainLineResults.empty() && i + 1 < sfResults.mainLineResults.size() && !sfResults.mainLineResults[i + 1].lines.empty()) 
             ? ChessFenUtils::format_eval_string(sfResults.mainLineResults[i + 1].lines[0], sfResults.mainLineResults[i + 1].fen) : "";
-        pgn.add_ply(gameData.moves[i] + sfResults.moveAnnotations[i], Utils::format_clock_string(clockStr), main_eval_str);
+        
+        std::string move_with_annotation = gameData.moves[i];
+        if (pgnAnnotationsEnabled && i < sfResults.moveAnnotations.size()) {
+            move_with_annotation += sfResults.moveAnnotations[i];
+        }
+        pgn.add_ply(move_with_annotation, Utils::format_clock_string(clockStr), main_eval_str);
 
         auto it = gameData.variations.find(i);
         if (it != gameData.variations.end()) {

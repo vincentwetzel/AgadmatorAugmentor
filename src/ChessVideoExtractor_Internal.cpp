@@ -10,6 +10,7 @@
 #include <cmath>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 namespace cta::extractor_detail {
 
@@ -156,6 +157,12 @@ void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const cha
             int best_far_sq = -1;
             double best_far_y = current_y;
             double best_far_evidence = 0.0;
+            struct FlatRookSquare {
+                int sq;
+                double y;
+            };
+            std::vector<FlatRookSquare> edge_rank_run;
+            const bool edge_rank_rescue = from_rank == to_rank && (from_file == 0 || from_file == 7);
 
             for (int sq = to_sq + step; sq >= 0 && sq < 64; sq += step) {
                 if (step == 1 && (sq & 7) == 0) break;
@@ -182,6 +189,7 @@ void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const cha
                 if (y >= 35.0 && y > best_far_y + 15.0) {
                     best_far_y = y;
                     best_far_sq = sq;
+                    edge_rank_run.clear();
                 } else {
                     const int distance_steps = std::abs((sq - from_sq) / step);
                     if (distance_steps >= 3 && (y >= 12.0 || sq_diffs[sq] >= 12.0)) {
@@ -190,15 +198,83 @@ void adjust_rook_target(int& to_sq, const char*& to_name, int from_sq, const cha
                             best_far_evidence = evidence;
                             best_far_sq = sq;
                         }
+                        if (edge_rank_rescue && sq_diffs[sq] <= 5.0 && y >= 25.0) {
+                            edge_rank_run.push_back({sq, y});
+                        } else {
+                            edge_rank_run.clear();
+                        }
+                    } else if (edge_rank_rescue && distance_steps == 2 &&
+                               sq_diffs[sq] <= 5.0 && y >= 25.0) {
+                        edge_rank_run.push_back({sq, y});
+                    } else {
+                        edge_rank_run.clear();
                     }
                 }
 
                 if (is_occupied(target_piece)) break;
             }
 
+            if (edge_rank_run.size() >= 2) {
+                auto [min_it, max_it] = std::minmax_element(
+                    edge_rank_run.begin(), edge_rank_run.end(),
+                    [](const FlatRookSquare& a, const FlatRookSquare& b) {
+                        return a.y < b.y;
+                    });
+                if (max_it->y - min_it->y <= 8.0) {
+                    best_far_sq = edge_rank_run[edge_rank_run.size() / 2].sq;
+                    best_far_evidence = 22.0;
+                }
+            }
+
             if (best_far_sq >= 0 && (best_far_evidence <= 0.0 || best_far_evidence >= 22.0)) {
                 to_sq = best_far_sq;
                 to_name = utils::sq_name(best_far_sq);
+                return;
+            }
+        }
+    }
+
+    if (alt_to >= 0) {
+        int step = 0;
+        if (from_rank == to_rank) {
+            step = to_file > from_file ? 1 : -1;
+        } else if (from_file == to_file) {
+            step = to_rank > from_rank ? 8 : -8;
+        }
+
+        if (step != 0) {
+            const double current_y = validation::check_yellowness(board_bgr, geo, to_name);
+            const double current_evidence = current_y + sq_diffs[to_sq];
+            const int neighbors[2] = {to_sq - step, to_sq + step};
+            int best_neighbor = -1;
+            double best_neighbor_evidence = current_evidence;
+            for (int candidate_sq : neighbors) {
+                if (candidate_sq < 0 || candidate_sq >= 64 || candidate_sq == from_sq) continue;
+                if (from_rank == to_rank && ((candidate_sq >> 3) != from_rank)) continue;
+                if (from_file == to_file && ((candidate_sq & 7) != from_file)) continue;
+
+                const char* candidate_name = utils::sq_name(candidate_sq);
+                char candidate_uci[5] = {from_name[0], from_name[1], candidate_name[0], candidate_name[1], '\0'};
+                try {
+                    (void)pos_ptr->parse_move(candidate_uci);
+                } catch (...) {
+                    continue;
+                }
+
+                const double y = validation::check_yellowness(board_bgr, geo, candidate_name);
+                const double evidence = y + sq_diffs[candidate_sq];
+                const bool one_step_before_endpoint = candidate_sq == to_sq - step;
+                const bool credible_short_landing =
+                    one_step_before_endpoint && y >= 18.0 && evidence >= current_evidence + 4.0;
+                if ((y >= 25.0 && evidence > best_neighbor_evidence + 10.0) || credible_short_landing) {
+                    best_neighbor = candidate_sq;
+                    best_neighbor_evidence = evidence;
+                }
+            }
+
+            if (best_neighbor >= 0) {
+                to_sq = best_neighbor;
+                to_name = utils::sq_name(best_neighbor);
                 return;
             }
         }

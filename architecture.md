@@ -107,9 +107,9 @@ When the board visually diverges from the engine state (e.g., the streamer undoe
 
 ## 5. Output Format
 
-The primary output is a PGN file that contains the extracted moves, clock times, and optional Stockfish analysis. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the export helpers.
+The primary output is a PGN file that contains the extracted moves, clock times, optional opening tags, and optional move-quality labels. The application no longer produces a separate JSON file as a final output; the `GameData` struct is an in-memory data structure that is passed directly to the export helpers.
 
-`VideoProcessorWorker` now acts mostly as the Qt-facing orchestrator. It delegates engine evaluation and move-quality statistics to `StockfishAnalysisHelper`, opening lookup synchronization to `LichessSyncHelper`, and PGN/SRT/analysis-video output to `VideoExportHelper`. Shared subtitle and FFmpeg checks live in `VideoProcessorWorker_Utils`, so the worker can keep cancellation and signal wiring readable.
+`VideoProcessorWorker` now acts mostly as the Qt-facing orchestrator. It delegates engine evaluation to `StockfishAnalysisHelper` for video overlays and optional labels, opening lookup synchronization to `LichessSyncHelper`, and PGN/SRT/analysis-video output to `VideoExportHelper`. Shared subtitle and FFmpeg checks live in `VideoProcessorWorker_Utils`, so the worker can keep cancellation and signal wiring readable.
 
 When enabled, `VideoExportHelper` also writes a synced SRT subtitle file beside the configured output path. Subtitle cues are generated from verified move timestamps and converted from UCI to SAN with move numbers, so players and video editors can enable a lightweight move track without rendering a full analysis overlay.
 
@@ -188,7 +188,7 @@ The following optimizations were investigated but abandoned due to correctness r
 
 For more detailed plans and actionable items related to these future scope features, please refer to the `TODO.md` file in the project root.
 
-- **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — ✅ Implemented). Integrated into PGN generation with configurable MultiPV, depth, and time limits.
+- **Stockfish Analysis:** Engine evaluation of positions via UCI protocol (Phase 2 — ✅ Implemented). Integrated into analysis video generation with configurable MultiPV, depth, and time limits.
 - **Overlay Rendering:** Visual overlays: eval bar, arrows, PV text (Phase 4 — ✅ Implemented).
 - **Video Compositing:** Composite overlays onto original video (Phase 4 — ✅ Implemented).
 - **Audio Integration:** Using sound templates (`sample_sounds/`) to classify move types (capture, castle, check) and supplement visual detection.

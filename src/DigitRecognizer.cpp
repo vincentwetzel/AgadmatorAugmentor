@@ -365,6 +365,7 @@ static char classify_clock_glyph_shape(const cv::Mat& glyph) {
     double bot = fill(4, 26, 12, 6);
 
     if (holes == 1) {
+        if (ml > 0.60 && bl > 0.55 && mid > 0.40) return '6';
         if (mid < 0.38) return '0';
         if (top < 0.55 && bot < 0.45) return '4';
         if (tl > 0.58 && bl > 0.70 && tr < 0.52) return '6';
@@ -375,6 +376,7 @@ static char classify_clock_glyph_shape(const cv::Mat& glyph) {
     if (top > 0.85 && bot < 0.70 && bl < 0.20) return '7';
     if (ml < 0.12 && bot > 0.80) return '2';
     if (tl > 0.50 && top > 0.85 && mid > 0.58 && br > 0.65) return '5';
+    if (tl > 0.55 && tr < 0.55 && mid > 0.65 && bot > 0.85 && br > 0.70) return '5';
     return '3';
 }
 
@@ -441,12 +443,12 @@ static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
         if (digit_boxes.size() > 5) {
             digit_boxes.erase(digit_boxes.begin(), digit_boxes.end() - 5);
         }
-        if (digit_boxes.size() != 5) {
+        if (digit_boxes.size() < 3 || digit_boxes.size() > 5) {
             continue;
         }
 
         std::string digits;
-        digits.reserve(5);
+        digits.reserve(digit_boxes.size());
         bool all_ok = true;
         for (const cv::Rect& box : digit_boxes) {
             char c = classify_clock_glyph_shape(thresh(box));
@@ -457,7 +459,13 @@ static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
             digits += c;
         }
         if (all_ok) {
-            return std::string(1, digits[0]) + ":" + digits.substr(1, 2) + ":" + digits.substr(3, 2);
+            if (digits.size() == 5) {
+                return std::string(1, digits[0]) + ":" + digits.substr(1, 2) + ":" + digits.substr(3, 2);
+            }
+            if (digits.size() == 4) {
+                return digits.substr(0, 2) + ":" + digits.substr(2, 2);
+            }
+            return std::string(1, digits[0]) + ":" + digits.substr(1, 2);
         }
     }
 
