@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Arrow Thickness Templates:** Overlay templates can now persist and edit the base thickness percentage for engine arrows.
 - **Clock-Time Integration Test:** Added a full video integration test that compares extracted move clocks against `[%clk ...]` PGN tags.
 - **Full-Game PGN Baseline Test:** Added an optional integration path that derives expected UCI moves directly from a sample full-game PGN.
+- **Diagnostic Reducer Replay:** Added generic timestamp cutoffs and bounded TSV traces for candidate, settle, revert, historical-state, and variation events.
+- **Fixture-Independence Guard:** The test runner now scans production sources for fixture-specific detector overrides before building or running tests.
+- **Clock Provenance:** Added explicit observed/missing clock state so replayed analysis branches can retain continuity without fabricating OCR readings.
+- **State-Based Variation Reconciliation:** Variations are validated from root FEN transitions, preserve visual confidence, and prune only proven replays or superseded tails.
 
 ### Performance
 
@@ -32,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cheap Clock Activity Gate:** Candidate validation now detects the active clock without OCR and runs digit recognition only for accepted moves.
 - **Bounded Clock OCR Scaling:** Clock digit recognition now caps ROI upscaling at a target text height instead of always tripling the image.
 - **Single-Side Clock OCR:** Accepted moves now OCR only the player clock that changed and reuse the opponent time from cache.
-- **True Zero-Copy Decoding:** Implemented native FFmpeg C API (libavcodec) with CUDA to decode frames directly into `CUdeviceptr`, eliminating PCIe ping-pong and further accelerating the GPU pipeline.
+- **GPU-Resident Diff Path:** Kept compatible grayscale `absdiff` buffers on the CUDA/NPP path while retaining CPU scoring and CPU fallbacks as the correctness reference.
 - **NPP AbsDiff Fast Path:** Re-enabled CUDA/NPP `absdiff` for compatible grayscale buffers while retaining the OpenCV CPU fallback.
 
 ### Changed
@@ -46,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FFmpeg Filter Graph Organization:** Moved `FFmpegFilterGraph` into `src/` and expanded it to track CPU/GPU stream state for analysis-video composition.
 - **Source Video Cleanup:** The optional post-processing cleanup now moves completed source videos to the trash instead of permanently deleting them.
 - **Test Build Isolation:** `tests/run_tests.py` now uses `build_tests/` by default, supports `CTA_TEST_BUILD_DIR`, reuses a cached Google Test source tree when present, and disables MSBuild file tracking for fewer Windows temp-path issues.
+- **Correctness-First Mapper Default:** Mapper concurrency is capped at one by default; `CTA_MAX_WORKERS` remains available for controlled performance experiments because decoder seek boundaries can vary across workers.
 
 ### Refactored
 
@@ -87,13 +92,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stockfish Search Limits:** Users can now bound Stockfish engine analysis by specifying maximum time per move (ms) or total nodes searched, in addition to search depth.
 - **GUI Application:** Fully featured Qt6-based interface with settings persistence, theme manager (Light/Dark/System), and headless CLI execution mode.
 - **Analysis Video Generation:** Added `AnalysisVideoGenerator` class to generate a copy of the source video with a synchronized analysis board overlay in the top-right corner. This feature can be toggled in the GUI.
-- Comprehensive `spec.md` documenting all functional and non-functional requirements
+- Comprehensive [`docs/SPEC.md`](docs/SPEC.md) documenting all functional and non-functional requirements
 - **Streamlined GUI:** Removed the Red Board Template file picker from the GUI. The backend now relies entirely on its robust dynamic fallback threshold for detecting streamer red square highlights.
 - **Move Quality Annotations:** Added an optional feature to generate chess.com-style move quality symbols (`!!`, `!`, `?`, `??`, `(Book)`) based on Stockfish centipawn loss evaluations. These are dynamically injected into exported PGNs and Analysis Video overlays.
 - **WebM & VP9 Support:** Added export options for `libvpx-vp9` video and `libopus` audio codecs within WebM/MKV containers, optimized for web playback.
 - **Memory Limit Control:** Added an advanced setting to limit the number of parallel map-reduce workers to control peak RAM usage.
-- `changelog.md` for tracking project history
-- **File size soft limit** convention (~400 lines) documented in TODO.md
+- `CHANGELOG.md` for tracking project history
+- **File size soft limit** convention (~400 lines) documented in [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Universal Tooltips:** Added comprehensive hover tooltips to all GUI elements to improve user experience.
 - **Universal Engine Variation Length:** The Stockfish variation length setting now universally applies to both the generated PGN files and the text overlays in the Analysis Video. Video text automatically scales down to fit longer variations.
 

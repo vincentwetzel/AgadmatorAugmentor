@@ -4,7 +4,7 @@ This document explains how to build and run the ChessTube Analyzer C++ applicati
 
 ## Prerequisites
 
-- **C++ Compiler:** C++20-compatible compiler such as MSVC 2022, GCC 11+, or Clang 13+.
+- **C++ Compiler:** MSVC 2022 on Windows (the supported development platform).
 - **CMake:** Version 3.20 or higher.
 - **vcpkg:** The documented Windows setup uses `E:\vcpkg`.
 - **FFmpeg:** Required for analysis video generation and must be available in `PATH`.
@@ -62,7 +62,7 @@ Processing logs include elapsed-time prefixes, which makes it easier to compare 
 
 ## Headless Mode
 
-Both executables can run from the command line. The GUI executable is recommended for headless mode because it persists user settings.
+The GUI executable supports headless processing when a video path is supplied. It loads persisted settings and accepts output, engine, debug, thread, and memory overrides. The lower-level `extract_moves` target is also available, but only exposes the extraction-oriented options shown by its own `--help` output.
 
 ```cmd
 cd build\Release
@@ -78,9 +78,13 @@ Override saved settings with command-line flags:
 "ChessTube Analyzer.exe" --version
 ```
 
+The GUI headless options include `--pgn`, `--analysis-video`, `--move-labels`, `--multi-pv`, `--depth`, `--analysis-depth`, `--time`, `--nodes`, `--threads`, `--memory-limit`, `--output`, `--board-asset`, and `--debug-level`. Options override saved settings for that run; they do not rewrite the settings file.
+
 ## Output Files
 
 The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves, clock times, and any ECO/opening metadata found through the cached Lichess Explorer lookup. PGN move-quality labels are controlled by their own output toggle and run Stockfish when enabled.
+
+Stable analysis reverts are written as PGN variations. Main-line clock observations retain their provenance; a replayed variation may inherit the branch-point clock for continuity, but an inherited value is not presented as a new OCR observation.
 
 If move subtitles are enabled, the analyzer creates a temporary SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next move or a short default duration. The temporary SRT file is removed after export completes.
 
@@ -94,7 +98,12 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 
 - `CTA_CHUNK_SECONDS`: chunk duration in seconds, clamped to 30-300.
 - `CTA_MAX_CHUNK_LOOKAHEAD`: maximum number of mapped chunks allowed ahead of the reducer.
-- `CTA_TRACE_REJECTS`: set to `1` to log detailed reasons rejected move candidates were filtered.
+- `CTA_MAX_WORKERS`: optional mapper concurrency cap. The default is `1` because decoder concurrency can change boundary frames; increase it only for controlled performance experiments.
+- `CTA_STOP_AFTER_SECONDS`: diagnostic-only cutoff for bounded replay; normal extraction still processes the full video.
+- `CTA_TRACE_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`: write a timestamp-bounded reducer trace for investigation.
+- `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`: add historical-state, nearest-state, or settle diagnostics to a trace.
+- `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, and `CTA_DEBUG_CLOCK_ROI_DIR`: emit clock candidate diagnostics or save a selected clock ROI.
+- `CTA_REVERT_EXHAUSTIVE_FALLBACK`: enable the slower exhaustive revert lookup for comparison/debugging.
 
 The reducer also applies a bounded settle window, recent-square conflict checks, indexed revert lookup, hover-box rejection, and clock-turn validation before accepting a move. These checks are intentionally conservative so PGN output remains legal even when the video contains analysis reverts or dragging artifacts.
 
@@ -106,4 +115,20 @@ Unit tests are opt-in so the default application build does not need to download
 python tests\run_tests.py
 ```
 
-The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. Integration tests read expected moves from the sample PGN files, so the old medium-game golden JSON artifact is no longer required.
+The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. Integration tests read expected moves from the sample PGN files, so the old medium-game golden JSON artifact is no longer required. Before building, the helper scans production sources and fails if fixture-specific detector overrides are introduced.
+
+For a faster focused replay while diagnosing a long fixture, use the generic timestamp cutoff and GoogleTest filter:
+
+```cmd
+python tests\run_tests.py --gtest-filter DetectorsTest.FullGame1Extraction --stop-after 520 --trace-file build_diag\transition.tsv --trace-start 498 --trace-end 520
+```
+
+This only shortens the diagnostic run; it does not alter production detection rules or expected results.
+
+Once the test target is built, use `--no-build` for repeated diagnostic replays. This skips CMake and MSBuild entirely:
+
+```cmd
+python tests\run_tests.py --build-dir build_diag --no-build --gtest-filter DetectorsTest.FullGame1Extraction --stop-after 520
+```
+
+`--build-dir` selects an existing CMake tree; it defaults to `build_tests` or `CTA_TEST_BUILD_DIR`.

@@ -18,6 +18,14 @@ struct ClockInfo {
     std::string active;
     std::string white_time;
     std::string black_time;
+    // True only when the clock belonging to the move that produced this
+    // state was read directly and passed temporal sanity checks. Revert and
+    // replay handling may retain a settled parent clock for continuity, but
+    // must not turn that inherited value into a new clock observation.
+    bool moved_time_observed = false;
+    // The moved clock could not be parsed at all. This is distinct from a
+    // parsed reading that failed a temporal sanity check.
+    bool moved_time_missing = false;
 };
 
 // A struct to hold a single analysis branch (a sequence of moves not on the main line)
@@ -25,6 +33,13 @@ struct VariationData {
     std::vector<std::string> moves;
     std::vector<double> timestamps;
     std::vector<std::string> fens;
+    // True when this line was observed while the board was being replayed
+    // rather than played as an independently clocked game continuation.
+    bool replay_observation = false;
+    // Visual move confidence captured when the branch was observed.  This is
+    // kept with the variation so later replay/revert normalization can make
+    // decisions from detector evidence instead of UCI notation.
+    std::vector<double> scores;
     // Use the same ClockInfo struct as GameData for consistency
     std::vector<ClockInfo> clocks;
 };
@@ -38,6 +53,9 @@ struct GameData {
     std::map<size_t, std::vector<VariationData>> variations;
 
     std::vector<std::string> video_fens;
+    // Timestamps used by analysis-video overlays. These intentionally follow
+    // the source board's visual update time, which may be earlier than the
+    // settled verification timestamp in timestamps.
     std::vector<double> video_timestamps;
     std::vector<std::string> video_moves;
 };

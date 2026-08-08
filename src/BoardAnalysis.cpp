@@ -88,6 +88,40 @@ static double mean_corner_yellowness(const cv::Mat& board_bgr, int row, int col,
     return score / 4.0;
 }
 
+static double mean_corner_redness(const cv::Mat& board_bgr, int row, int col,
+                                  double sq_h, double sq_w) {
+    int y1 = static_cast<int>(row * sq_h);
+    int y2 = static_cast<int>((row + 1) * sq_h);
+    int x1 = static_cast<int>(col * sq_w);
+    int x2 = static_cast<int>((col + 1) * sq_w);
+    int ch = static_cast<int>(sq_h * 0.12);
+    int cw = static_cast<int>(sq_w * 0.12);
+
+    double score = 0.0;
+    const std::vector<cv::Rect> patches = {
+        {x1, y1, cw, ch},
+        {x2 - cw, y1, cw, ch},
+        {x1, y2 - ch, cw, ch},
+        {x2 - cw, y2 - ch, cw, ch}
+    };
+
+    for (const auto& p : patches) {
+        cv::Mat patch = board_bgr(p);
+        double sum_red = 0.0;
+        for (int r = 0; r < patch.rows; ++r) {
+            const auto* ptr = patch.ptr<cv::Vec3b>(r);
+            for (int pc = 0; pc < patch.cols; ++pc) {
+                const double b = ptr[pc][0];
+                const double g = ptr[pc][1];
+                const double red = ptr[pc][2];
+                sum_red += red - (g + b) / 2.0;
+            }
+        }
+        score += sum_red / (patch.rows * patch.cols);
+    }
+    return score / 4.0;
+}
+
 static double get_edge_score(const cv::Mat& board_gray, int row, int col,
                              double sq_h, double sq_w) {
     int y1 = static_cast<int>(row * sq_h + sq_h * 0.15);
@@ -122,6 +156,38 @@ std::string extract_move_from_yellow_squares(const cv::Mat& img_bgr,
     std::sort(sq_scores.begin(), sq_scores.end(), std::greater<>());
     int idx1 = sq_scores[0].second;
     int idx2 = sq_scores[1].second;
+
+    // Some boards use the same square-outline UI in red when emphasizing a
+    // move. Treat that as equivalent highlight evidence when two red corners
+    // clearly exceed the board's normal red-channel baseline. This remains
+    // fixture-independent and avoids confusing ordinary wood grain with UI.
+    const double board_redness = cv::mean(board_template)[2] -
+        (cv::mean(board_template)[1] + cv::mean(board_template)[0]) / 2.0;
+    std::vector<std::pair<double, int>> red_scores;
+    red_scores.reserve(64);
+    for (int row = 0; row < 8; ++row) {
+        for (int col = 0; col < 8; ++col) {
+            red_scores.emplace_back(
+                mean_corner_redness(board_img, row, col, geo.sq_h, geo.sq_w),
+                row * 8 + col);
+        }
+    }
+    std::sort(red_scores.begin(), red_scores.end(), std::greater<>());
+    std::vector<double> red_values;
+    red_values.reserve(red_scores.size());
+    for (const auto& item : red_scores) red_values.push_back(item.first);
+    const double red_median = red_values[red_values.size() / 2];
+    // A board theme can have a high absolute red-channel baseline.  Compare
+    // the candidate highlights with both that baseline and the board's own
+    // robust median so a red UI outline remains detectable after scaling or
+    // color correction without hard-coding a fixture's coordinates/colors.
+    const double red_threshold = std::max(board_redness + 25.0, red_median + 35.0);
+    if (red_scores.size() >= 2 &&
+        red_scores[0].first >= red_threshold &&
+        red_scores[1].first >= red_threshold) {
+        idx1 = red_scores[0].second;
+        idx2 = red_scores[1].second;
+    }
 
     int row1 = idx1 / 8, col1 = idx1 % 8;
     int row2 = idx2 / 8, col2 = idx2 % 8;

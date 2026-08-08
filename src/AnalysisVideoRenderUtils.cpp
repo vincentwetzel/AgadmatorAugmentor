@@ -121,15 +121,74 @@ void blend_arrow_on_bgra(cv::Mat& image,
 
 namespace {
 
-void overlayIconCentered(cv::Mat& img, const cv::Mat& icon, cv::Point center, int max_size) {
+std::vector<uchar> findEdgeConnectedWhitePixels(const cv::Mat& image) {
+    std::vector<uchar> mask(static_cast<size_t>(image.rows * image.cols), 0);
+    if (image.empty()) return mask;
+
+    auto is_edge_white = [&image](int x, int y) {
+        const uchar* ptr = image.ptr<uchar>(y) + x * image.channels();
+        const bool opaque = image.channels() < 4 || ptr[3] > 240;
+        return opaque && ptr[0] >= 245 && ptr[1] >= 245 && ptr[2] >= 245;
+    };
+
+    std::vector<cv::Point> stack;
+    auto enqueue = [&](int x, int y) {
+        if (x < 0 || x >= image.cols || y < 0 || y >= image.rows) return;
+        const size_t idx = static_cast<size_t>(y * image.cols + x);
+        if (mask[idx] || !is_edge_white(x, y)) return;
+        mask[idx] = 1;
+        stack.emplace_back(x, y);
+    };
+
+    for (int x = 0; x < image.cols; ++x) {
+        enqueue(x, 0);
+        enqueue(x, image.rows - 1);
+    }
+    for (int y = 1; y < image.rows - 1; ++y) {
+        enqueue(0, y);
+        enqueue(image.cols - 1, y);
+    }
+
+    while (!stack.empty()) {
+        const cv::Point p = stack.back();
+        stack.pop_back();
+        enqueue(p.x + 1, p.y);
+        enqueue(p.x - 1, p.y);
+        enqueue(p.x, p.y + 1);
+        enqueue(p.x, p.y - 1);
+    }
+
+    return mask;
+}
+
+void overlayIconCentered(cv::Mat& img, const cv::Mat& icon, cv::Point center, int max_size, bool remove_edge_white = false) {
     if (icon.empty() || max_size <= 0) return;
 
-    double scale = static_cast<double>(max_size) / static_cast<double>(std::max(icon.cols, icon.rows));
-    cv::Size scaled_size(std::max(1, static_cast<int>(std::round(icon.cols * scale))),
-                         std::max(1, static_cast<int>(std::round(icon.rows * scale))));
+    cv::Mat source_icon = icon;
+    if (remove_edge_white) {
+        const std::vector<uchar> source_edge_white = findEdgeConnectedWhitePixels(icon);
+        cv::Rect content_bounds;
+        for (int y = 0; y < icon.rows; ++y) {
+            for (int x = 0; x < icon.cols; ++x) {
+                const size_t mask_offset = static_cast<size_t>(y * icon.cols + x);
+                if (!source_edge_white.empty() && source_edge_white[mask_offset]) continue;
+                content_bounds |= cv::Rect(x, y, 1, 1);
+            }
+        }
+        if (content_bounds.width > 0 && content_bounds.height > 0) {
+            source_icon = icon(content_bounds);
+        }
+    }
+
+    double scale = static_cast<double>(max_size) / static_cast<double>(std::max(source_icon.cols, source_icon.rows));
+    cv::Size scaled_size(std::max(1, static_cast<int>(std::round(source_icon.cols * scale))),
+                         std::max(1, static_cast<int>(std::round(source_icon.rows * scale))));
 
     cv::Mat scaled_icon;
-    cv::resize(icon, scaled_icon, scaled_size, 0, 0, cv::INTER_AREA);
+    cv::resize(source_icon, scaled_icon, scaled_size, 0, 0, cv::INTER_AREA);
+    const std::vector<uchar> edge_white_mask = remove_edge_white
+        ? findEdgeConnectedWhitePixels(scaled_icon)
+        : std::vector<uchar>();
 
     const int start_x = center.x - scaled_icon.cols / 2;
     const int start_y = center.y - scaled_icon.rows / 2;
@@ -147,6 +206,9 @@ void overlayIconCentered(cv::Mat& img, const cv::Mat& icon, cv::Point center, in
 
             const int src_offset = x * scaled_icon.channels();
             const int dst_offset = dst_x * img.channels();
+            const size_t mask_offset = static_cast<size_t>(y * scaled_icon.cols + x);
+            if (!edge_white_mask.empty() && edge_white_mask[mask_offset]) continue;
+
             const double alpha = scaled_icon.channels() == 4 ? src_ptr[src_offset + 3] / 255.0 : 1.0;
             if (alpha <= 0.0) continue;
 
@@ -201,6 +263,12 @@ void drawMoveAnnotationOnBoard(cv::Mat& img,
     else if (clean_sym == "(Book)") { bgColor = cv::Scalar(150, 180, 200, 255); drawBook = true; } // Tan Book
     else return; 
 
+    const bool hasThumbsUpIcon = drawThumbsUp && thumbs_up_icon && !thumbs_up_icon->empty();
+    if (hasThumbsUpIcon) {
+        overlayIconCentered(img, *thumbs_up_icon, cv::Point(ax, ay), radius * 2, true);
+        return;
+    }
+
     cv::circle(img, cv::Point(ax, ay), radius, bgColor, cv::FILLED, cv::LINE_AA);
     cv::circle(img, cv::Point(ax, ay), radius, cv::Scalar(20, 20, 20, 255), 1, cv::LINE_AA); // Dark outline
 
@@ -230,12 +298,8 @@ void drawMoveAnnotationOnBoard(cv::Mat& img,
         cv::fillPoly(img, std::vector<std::vector<cv::Point>>{left_page, right_page}, cv::Scalar(255, 255, 255, 255), cv::LINE_AA);
         cv::line(img, cv::Point(ax, ay - radius*0.1), cv::Point(ax, ay + radius*0.4), cv::Scalar(200, 200, 200, 255), 1, cv::LINE_AA);
     } else if (drawThumbsUp) {
-        if (thumbs_up_icon && !thumbs_up_icon->empty()) {
-            overlayIconCentered(img, *thumbs_up_icon, cv::Point(ax, ay), static_cast<int>(radius * 1.35));
-        } else {
-            cv::putText(img, "+", cv::Point(ax - radius / 3, ay + radius / 3),
-                        cv::FONT_HERSHEY_SIMPLEX, radius * 0.06, cv::Scalar(255, 255, 255, 255), 2, cv::LINE_AA);
-        }
+        cv::putText(img, "+", cv::Point(ax - radius / 3, ay + radius / 3),
+                    cv::FONT_HERSHEY_SIMPLEX, radius * 0.06, cv::Scalar(255, 255, 255, 255), 2, cv::LINE_AA);
     } else {
         std::string txt = clean_sym;
         int fontFace = cv::FONT_HERSHEY_SIMPLEX;

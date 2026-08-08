@@ -1,5 +1,6 @@
 #include "VideoChunkMapper.h"
 #include "BoardAnalysis.h"
+#include "ArrowDetector.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -109,6 +110,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
             if (debug_level_ != 0) cf.full_bgr = frame.clone();
             if (has_clocks_) { cf.clock_top_bgr = frame(cv::Rect(roi_x1_, top_roi_y1_, roi_x2_ - roi_x1_, top_roi_y2_ - top_roi_y1_)).clone(); cf.clock_bot_bgr = frame(cv::Rect(roi_x1_, bot_roi_y1_, roi_x2_ - roi_x1_, bot_roi_y2_ - bot_roi_y1_)).clone(); }
             cf.board_bgr = bgr_view.clone(); cf.board_gray = gray.clone(); cf.board_hash = compute_all_square_means(cf.board_gray, geo_, margin_h_, margin_w_);
+            cf.yellow_arrows = find_yellow_arrows(frame, cv::Mat(), geo_);
             local_candidates.push_back(std::move(cf)); map_candidates_emitted_.fetch_add(1, std::memory_order_relaxed);
         };
 
@@ -152,6 +154,15 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                 has_pending_motion = true;
             }
             else if (has_motion) { 
+                // Preserve the leading edge of a UI update as well as its
+                // settled tail.  Chess sites often paint the yellow move
+                // registration on the first changed frame and remove it by
+                // the time the board has become quiet; keeping only the tail
+                // loses otherwise valid moves during fast analysis playback.
+                if (!has_pending_motion && local_t > last_emit_t + 0.02) {
+                    emit_candidate(local_t, frame, board_bgr_view, board_gray);
+                    last_emit_t = local_t;
+                }
                 has_pending_motion = true; 
                 // Cap burst durations to 0.3s so slow drags don't hide mid-animation states indefinitely.
                 if (local_t - last_emit_t > 0.3) {

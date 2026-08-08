@@ -3,20 +3,88 @@ import re
 import shutil
 import subprocess
 import sys
+import argparse
+from pathlib import Path
 
-BUILD_DIR_NAME = os.environ.get("CTA_TEST_BUILD_DIR", "build_tests")
 TEST_TARGET = "test_extract_moves"
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Configure, build, and run the ChessTube Analyzer tests."
+    )
+    parser.add_argument(
+        "--gtest-filter",
+        help="Pass a GoogleTest filter, for example DetectorsTest.FullGame1Extraction.",
+    )
+    parser.add_argument(
+        "--build-dir",
+        default=os.environ.get("CTA_TEST_BUILD_DIR", "build_tests"),
+        help="CMake build directory to use (default: build_tests).",
+    )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Run an already-built test executable without configuring or compiling.",
+    )
+    parser.add_argument(
+        "--stop-after",
+        type=float,
+        help="Diagnostic-only extraction cutoff in video seconds.",
+    )
+    parser.add_argument("--trace-file", help="Diagnostic extraction trace TSV path.")
+    parser.add_argument("--trace-start", type=float, help="First timestamp to trace.")
+    parser.add_argument("--trace-end", type=float, help="Last timestamp to trace.")
+    return parser.parse_args()
+
+
+def assert_no_fixture_specific_production_overrides(root_dir):
+    """Keep the universal detector contract executable, not just documented."""
+    banned_patterns = (
+        re.compile(r"test_full_game", re.IGNORECASE),
+        re.compile(r"expected_main_clocks", re.IGNORECASE),
+        re.compile(r"add_expected_variation", re.IGNORECASE),
+        re.compile(r"\bb6f2\b", re.IGNORECASE),
+    )
+    violations = []
+    for source_root in (Path(root_dir) / "src", Path(root_dir) / "include"):
+        for path in source_root.rglob("*"):
+            if path.suffix.lower() not in {".cpp", ".h", ".hpp"}:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for pattern in banned_patterns:
+                if pattern.search(text):
+                    violations.append(f"{path}: {pattern.pattern}")
+    if violations:
+        raise RuntimeError(
+            "Fixture-specific production detector override detected:\n" +
+            "\n".join(violations)
+        )
+
 def main():
+    args = parse_args()
     # Go one level up from the 'tests' directory to get the project root
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    build_dir = os.path.join(root_dir, BUILD_DIR_NAME)
+    try:
+        assert_no_fixture_specific_production_overrides(root_dir)
+    except RuntimeError as error:
+        print(error)
+        sys.exit(1)
+    build_dir = os.path.join(root_dir, args.build_dir)
     temp_dir = os.path.join(build_dir, "tmp")
     test_file = os.path.join(root_dir, "tests", "test_ui_detectors.cpp")
     os.makedirs(temp_dir, exist_ok=True)
     build_env = os.environ.copy()
     build_env["TEMP"] = temp_dir
     build_env["TMP"] = temp_dir
+    if args.stop_after is not None:
+        build_env["CTA_STOP_AFTER_SECONDS"] = str(args.stop_after)
+    if args.trace_file:
+        build_env["CTA_TRACE_FILE"] = os.path.abspath(args.trace_file)
+    if args.trace_start is not None:
+        build_env["CTA_TRACE_START"] = str(args.trace_start)
+    if args.trace_end is not None:
+        build_env["CTA_TRACE_END"] = str(args.trace_end)
     
     # 1. Parse the C++ file to see which tests are toggled ON
     print("--- Active Tests ---")
@@ -36,42 +104,45 @@ def main():
     print("--------------------\n")
 
     # 2. Ensure the build tree includes the test target, then compile it.
-    os.makedirs(build_dir, exist_ok=True)
-    print("Configuring test build target...")
-    configure_cmd = [
-        "cmake",
-        "-S", root_dir,
-        "-B", build_dir,
-        "-DBUILD_TESTS=ON",
-        "-DENABLE_SYSTEM_CUDA=" + os.environ.get("CTA_ENABLE_SYSTEM_CUDA", "ON"),
-    ]
-    cached_gtest = os.path.join(root_dir, "build", "_deps", "googletest-src")
-    if os.path.isdir(cached_gtest):
-        configure_cmd.append("-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=" + cached_gtest)
-    try:
-        subprocess.run(configure_cmd, cwd=root_dir, env=build_env, check=True)
-    except subprocess.CalledProcessError:
-        print("\nCMake configuration failed. Please check the errors above.")
-        sys.exit(1)
+    if not args.no_build:
+        os.makedirs(build_dir, exist_ok=True)
+        print("Configuring test build target...")
+        configure_cmd = [
+            "cmake",
+            "-S", root_dir,
+            "-B", build_dir,
+            "-DBUILD_TESTS=ON",
+            "-DENABLE_SYSTEM_CUDA=" + os.environ.get("CTA_ENABLE_SYSTEM_CUDA", "ON"),
+        ]
+        cached_gtest = os.path.join(root_dir, "build", "_deps", "googletest-src")
+        if os.path.isdir(cached_gtest):
+            configure_cmd.append("-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=" + cached_gtest)
+        try:
+            subprocess.run(configure_cmd, cwd=root_dir, env=build_env, check=True)
+        except subprocess.CalledProcessError:
+            print("\nCMake configuration failed. Please check the errors above.")
+            sys.exit(1)
 
-    print("Compiling tests (this will be fast if only the toggles changed)...")
-    for dirpath, dirnames, _ in os.walk(build_dir):
-        for dirname in list(dirnames):
-            if dirname.endswith(".tlog"):
-                shutil.rmtree(os.path.join(dirpath, dirname), ignore_errors=True)
-    build_cmd = [
-        "cmake", "--build", build_dir,
-        "--config", "Release",
-        "--target", TEST_TARGET,
-        "--",
-        "/m:1",
-        "/p:TrackFileAccess=false",
-    ]
-    try:
-        subprocess.run(build_cmd, cwd=root_dir, env=build_env, check=True)
-    except subprocess.CalledProcessError:
-        print("\nBuild failed. Please check the compilation errors.")
-        sys.exit(1)
+        print("Compiling tests (this will be fast if only the toggles changed)...")
+        for dirpath, dirnames, _ in os.walk(build_dir):
+            for dirname in list(dirnames):
+                if dirname.endswith(".tlog"):
+                    shutil.rmtree(os.path.join(dirpath, dirname), ignore_errors=True)
+        build_cmd = [
+            "cmake", "--build", build_dir,
+            "--config", "Release",
+            "--target", TEST_TARGET,
+            "--",
+            "/m:1",
+            "/p:TrackFileAccess=false",
+        ]
+        try:
+            subprocess.run(build_cmd, cwd=root_dir, env=build_env, check=True)
+        except subprocess.CalledProcessError:
+            print("\nBuild failed. Please check the compilation errors.")
+            sys.exit(1)
+    else:
+        print("Skipping configure/build (--no-build).")
 
     # 3. Run the executable
     exe_name = TEST_TARGET + (".exe" if os.name == "nt" else "")
@@ -89,7 +160,10 @@ def main():
     
     print("\nStarting Test Run...\n" + "="*40)
     try:
-        subprocess.run([exe_path], cwd=exe_dir, env=build_env, check=True)
+        run_cmd = [exe_path]
+        if args.gtest_filter:
+            run_cmd.append("--gtest_filter=" + args.gtest_filter)
+        subprocess.run(run_cmd, cwd=exe_dir, env=build_env, check=True)
     except subprocess.CalledProcessError as e:
         print(f"\nTest run finished with exit code {e.returncode}.")
         sys.exit(e.returncode)

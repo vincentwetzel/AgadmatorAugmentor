@@ -206,15 +206,26 @@ bool VideoExportHelper::generateSubtitles(const ProcessingSettings& settings, co
         }
 
         std::string fen = gameData.video_fens[i];
-        bool is_white = (fen.find(" w ") != std::string::npos);
         
         int full_move = 1;
-        size_t last_space = fen.find_last_of(' ');
-        if (last_space != std::string::npos) {
-            try { full_move = std::stoi(fen.substr(last_space + 1)); } catch (...) {}
+        bool is_white = true;
+        std::istringstream fen_ss(fen);
+        std::vector<std::string> fen_parts;
+        std::string part;
+        while (fen_ss >> part) {
+            fen_parts.push_back(part);
         }
-        
-        int ply_index = (full_move - 1) * 2 + (is_white ? 0 : 1);
+        if (fen_parts.size() >= 2) {
+            is_white = (fen_parts[1] == "w");
+        } else {
+            is_white = (fen.find(" w ") != std::string::npos);
+        }
+        if (fen_parts.size() >= 6) {
+            try { full_move = std::stoi(fen_parts[5]); } catch (...) {}
+        }
+
+        // Use 1-based ply index to map correctly to PgnWriter-style move numbers
+        int ply_index = (full_move - 1) * 2 + (is_white ? 1 : 2);
         std::string san_move = ChessFenUtils::uci_to_san_line(gameData.video_moves[i], fen);
 
         srtFile << sub_index++ << "\n";

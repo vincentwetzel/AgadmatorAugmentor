@@ -20,6 +20,7 @@
 #include "BoardLocalizer.h"
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
+#include "../src/ChessVideoExtractor_Internal.h"
 
 // ─── Test result tracking ────────────────────────────────────────────────────
 struct IntegrationTestResult {
@@ -40,28 +41,42 @@ static std::vector<IntegrationTestResult> g_test_results;
 // Every test MUST have a toggle here — no exceptions.
 //
 // Unit tests (detector accuracy on sample images):
-#define TEST_LOCATE_BOARD         0
-#define TEST_DRAW_GRID            0
-#define TEST_YELLOW_SQUARES       0
-#define TEST_PIECE_COUNTS         0
-#define TEST_RED_SQUARES          0
-#define TEST_YELLOW_ARROWS        0
-#define TEST_MISALIGNED_PIECE     0
-#define TEST_GAME_CLOCKS          0
-#define TEST_MEMORY_LIMIT         0
-#define TEST_CACHE_CORRECTNESS    0
+#define TEST_LOCATE_BOARD         1
+#define TEST_DRAW_GRID            1
+#define TEST_YELLOW_SQUARES       1
+#define TEST_PIECE_COUNTS         1
+#define TEST_RED_SQUARES          1
+#define TEST_YELLOW_ARROWS        1
+#define TEST_MISALIGNED_PIECE     1
+#define TEST_GAME_CLOCKS          1
+#define TEST_MEMORY_LIMIT         1
+#define TEST_CACHE_CORRECTNESS    1
 //
 // Integration tests (full video pipeline with ground-truth PGN):
-#define TEST_7_PLIES_EXTRACTION   0
-#define TEST_MEDIUM_GAME_REVERT   0
+#define TEST_7_PLIES_EXTRACTION   1
+#define TEST_MEDIUM_GAME_REVERT   1
 #define TEST_FULL_GAME_1_EXTRACTION 1
-#define TEST_INTEGRATION_CLOCK_TIMES 0
+#define TEST_INTEGRATION_CLOCK_TIMES 1
 //
 // Smoke tests (constructor/validation):
 #define TEST_CONSTRUCTOR_THROWS   0
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace cta {
+
+TEST(ExtractionInternalTest, FindsMostRecentBoundedInverseMove) {
+    const std::vector<std::string> moves = {
+        "a2a4", "h7h5", "a4a5", "g7g5", "b2b3"
+    };
+
+    const std::optional<size_t> inverse =
+        extractor_detail::find_recent_inverse_move_index(moves, "a5", "a4");
+
+    ASSERT_TRUE(inverse.has_value());
+    EXPECT_EQ(*inverse, 2U);
+    EXPECT_TRUE(extractor_detail::is_inverse_of_recent_move(moves, "a5", "a4"));
+    EXPECT_FALSE(extractor_detail::find_recent_inverse_move_index(moves, "h5", "h4").has_value());
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -222,6 +237,7 @@ struct ExpectedGameData {
     std::vector<std::string> main_line;
     std::vector<std::string> variations;
     std::vector<std::string> all_moves;
+    std::vector<std::pair<size_t, std::vector<std::string>>> variation_sequences;
 };
 
 struct ExpectedClockData {
@@ -310,9 +326,9 @@ static ExpectedClockData extract_clocks_from_game_data(const GameData& data) {
         size_t branch_ply = item.first;
         for (const auto& var : item.second) {
             for (size_t j = 0; j < var.moves.size(); ++j) {
-                clocks.variations.push_back(j < var.clocks.size()
-                    ? clock_for_ply(var.clocks[j], branch_ply + j)
-                    : "0:00:00");
+                if (j < var.clocks.size()) {
+                    clocks.variations.push_back(clock_for_ply(var.clocks[j], branch_ply + j));
+                }
             }
         }
     }
@@ -414,6 +430,33 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
     
     PgnState current_state;
     std::vector<PgnState> state_stack;
+    std::vector<size_t> active_variation_sequences;
+    auto try_parse_move = [](const PgnState& state, const std::string& token, libchess::Move& move_out) {
+        const std::string wanted_san = normalize_san_token(token);
+        if (wanted_san.empty()) return false;
+
+        try {
+            move_out = state.pos.parse_move(token);
+            return true;
+        } catch (...) {
+            try {
+                move_out = state.pos.parse_move(wanted_san);
+                return true;
+            } catch (...) {
+                for (const auto& legal_move : state.pos.legal_moves()) {
+                    std::string uci = static_cast<std::string>(legal_move);
+                    if (uci == "e1h1") uci = "e1g1"; else if (uci == "e1a1") uci = "e1c1";
+                    else if (uci == "e8h8") uci = "e8g8"; else if (uci == "e8a8") uci = "e8c8";
+                    if (normalize_san_token(build_san_for_test(state.pos, legal_move, uci)) == wanted_san) {
+                        move_out = legal_move;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    };
     
     while (iss >> token) {
         if (token == "*" || token == "1-0" || token == "0-1" || token == "1/2-1/2") continue;
@@ -421,6 +464,8 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
 
         if (token == "(") {
             state_stack.push_back(current_state);
+            result.variation_sequences.emplace_back(current_state.history.size(), std::vector<std::string>{});
+            active_variation_sequences.push_back(result.variation_sequences.size() - 1);
             if (!current_state.history.empty()) {
                 current_state.pos = current_state.history.back();
             }
@@ -430,6 +475,9 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
             if (!state_stack.empty()) {
                 current_state = state_stack.back();
                 state_stack.pop_back();
+            }
+            if (!active_variation_sequences.empty()) {
+                active_variation_sequences.pop_back();
             }
             continue;
         }
@@ -446,24 +494,19 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
         for (char c : token) { if (!std::isdigit(static_cast<unsigned char>(c))) { is_all_digits = false; break; } }
         if (is_all_digits) continue;
 
-        const std::string wanted_san = normalize_san_token(token);
-        if (wanted_san.empty()) continue;
-
         bool matched = false;
         libchess::Move m;
-        
-        try { m = current_state.pos.parse_move(token); matched = true; } catch (...) {
-            try { m = current_state.pos.parse_move(wanted_san); matched = true; } catch (...) {
-                for (const auto& legal_move : current_state.pos.legal_moves()) {
-                    std::string uci = static_cast<std::string>(legal_move);
-                    if (uci == "e1h1") uci = "e1g1"; else if (uci == "e1a1") uci = "e1c1";
-                    else if (uci == "e8h8") uci = "e8g8"; else if (uci == "e8a8") uci = "e8c8";
-                    if (normalize_san_token(build_san_for_test(current_state.pos, legal_move, uci)) == wanted_san) {
-                        m = legal_move;
-                        matched = true;
-                        break;
-                    }
-                }
+
+        if (normalize_san_token(token).empty()) continue;
+
+        matched = try_parse_move(current_state, token, m);
+        if (!matched && !state_stack.empty()) {
+            // Some hand-authored baselines use parentheses for a checked line
+            // continuation rather than an alternative to the previous move.
+            PgnState continuation_state = state_stack.back();
+            if (try_parse_move(continuation_state, token, m)) {
+                current_state = continuation_state;
+                matched = true;
             }
         }
 
@@ -478,6 +521,9 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
                 result.variations.push_back(uci);
             }
             result.all_moves.push_back(uci);
+            if (!active_variation_sequences.empty()) {
+                result.variation_sequences[active_variation_sequences.back()].second.push_back(uci);
+            }
             
             current_state.history.push_back(current_state.pos);
             current_state.pos.makemove(m);
@@ -1007,6 +1053,21 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
+    size_t first_mismatch = 0;
+    while (first_mismatch < data.moves.size() &&
+           first_mismatch < expected_moves.size() &&
+           data.moves[first_mismatch] == expected_moves[first_mismatch]) {
+        ++first_mismatch;
+    }
+    if (first_mismatch < data.moves.size() || first_mismatch < expected_moves.size()) {
+        std::cout << "  First main-line mismatch at ply " << (first_mismatch + 1)
+                  << ": expected "
+                  << (first_mismatch < expected_moves.size() ? expected_moves[first_mismatch] : "(none)")
+                  << ", extracted "
+                  << (first_mismatch < data.moves.size() ? data.moves[first_mismatch] : "(none)")
+                  << "\n";
+    }
+
     std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
 
     result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
@@ -1116,7 +1177,6 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
 
     ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
     GameData data = extractor.extract_moves_from_video(video_path, "test_full_game_1");
-
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
@@ -1136,14 +1196,71 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
+    size_t first_mismatch = 0;
+    while (first_mismatch < data.moves.size() &&
+           first_mismatch < expected_moves.size() &&
+           data.moves[first_mismatch] == expected_moves[first_mismatch]) {
+        ++first_mismatch;
+    }
+    if (first_mismatch < data.moves.size() || first_mismatch < expected_moves.size()) {
+        std::cout << "  First main-line mismatch at ply " << (first_mismatch + 1)
+                  << ": expected "
+                  << (first_mismatch < expected_moves.size() ? expected_moves[first_mismatch] : "(none)")
+                  << ", extracted "
+                  << (first_mismatch < data.moves.size() ? data.moves[first_mismatch] : "(none)")
+                  << "\n";
+    }
 
-    bool moves_passed = (data.moves == expected_moves) && (extracted_all == expected_all);
+    std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
+    std::multiset<std::string> detected_timeline;
+    for (const std::string& move : data.video_moves) {
+        if (move != "REVERT") {
+            detected_timeline.insert(move);
+        }
+    }
+
+    bool moves_passed = (data.moves == expected_moves) &&
+                        (extracted_all == expected_all) &&
+                        (detected_timeline == expected_all);
+    if (!moves_passed) {
+        std::ofstream variation_dump("full_game_variations_debug.txt", std::ios::trunc);
+        if (variation_dump.is_open()) {
+            for (const auto& [parent_ply, variations] : data.variations) {
+                for (const auto& variation : variations) {
+                    variation_dump << parent_ply << "\t";
+                    for (size_t i = 0; i < variation.moves.size(); ++i) {
+                        if (i != 0) variation_dump << ',';
+                        variation_dump << variation.moves[i];
+                    }
+                    variation_dump << "\n";
+                }
+            }
+        }
+        std::cout << "  Expected variation moves from PGN parser:\n";
+        for (const auto& move : expected_data.variations) std::cout << "    " << move << "\n";
+        std::cout << "  Expected variation sequences by parent ply:\n";
+        for (const auto& [parent_ply, moves] : expected_data.variation_sequences) {
+            std::cout << "    parent " << parent_ply << ": ";
+            for (const auto& move : moves) std::cout << move << " ";
+            std::cout << "\n";
+        }
+        std::cout << "  Extracted variation tree:\n";
+        for (const auto& [parent_ply, variations] : data.variations) {
+            for (const auto& variation : variations) {
+                std::cout << "    parent " << parent_ply << ": ";
+                for (const auto& move : variation.moves) std::cout << move << " ";
+                std::cout << "\n";
+            }
+        }
+    }
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
     print_multiset_delta(extracted_all, expected_all, "moves");
     EXPECT_EQ(extracted_all, expected_all)
         << "Mismatch in total extracted moves (including variations). App may have hallucinated or missed analysis lines.";
+    print_multiset_delta(detected_timeline, expected_all, "timeline moves");
+    EXPECT_EQ(detected_timeline, expected_all)
+        << "Mismatch in accepted move timeline. App may have transiently detected moves that are absent from the PGN.";
 
     bool clocks_passed = verify_clocks(pgn_path, data);
     result.passed = moves_passed && clocks_passed;

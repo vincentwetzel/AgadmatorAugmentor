@@ -27,7 +27,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | VP-3 | Map workers should coalesce animation/highlight bursts so the reducer receives one strong candidate instead of repeated near-duplicates. |
 | VP-4 | The reducer must consume candidates chronologically and compare them against the last verified board state. |
 | VP-5 | Move settling may inspect later candidates, but the settle window must be bounded so one animation cannot drift into unrelated moves. |
-| VP-6 | Environment variables `CTA_CHUNK_SECONDS`, `CTA_MAX_CHUNK_LOOKAHEAD`, and `CTA_TRACE_REJECTS` may tune chunk scheduling and rejection logging. |
+| VP-6 | Environment variables `CTA_CHUNK_SECONDS`, `CTA_MAX_CHUNK_LOOKAHEAD`, and `CTA_MAX_WORKERS` may tune chunk scheduling. The default worker cap is one for deterministic decoder boundaries. |
 
 ### 1.3 UI Element Extraction
 
@@ -54,6 +54,8 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | VM-4 | Candidate moves must pass yellow highlight validation, hover-box validation, clock-turn validation, legality checks, and recent-move conflict checks. |
 | VM-5 | Recent inverse moves must be rejected unless the visual registration is strong enough to indicate a real replay or analysis interaction. |
 | VM-6 | Promotion moves must preserve five-character UCI strings and classify the promoted piece when possible, with queen as the default fallback. |
+| VM-7 | Clock records must distinguish a directly observed moved clock from a missing or inherited value; replayed analysis branches must not fabricate new OCR observations. |
+| VM-8 | Stable analysis branches must be validated from their root FEN and legal transitions, with visual confidence retained for later replay/rebase decisions. |
 
 ### 1.5 History Reverts
 
@@ -63,15 +65,17 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | HR-2 | Revert lookup must use coarse board hashes before full-image `absdiff` verification. |
 | HR-3 | A verified revert must roll back moves, timestamps, clocks, FENs, and the chess position to the matching ply. |
 | HR-4 | Reverts must be logged with enough detail to diagnose rolled-back moves. |
+| HR-5 | Superseded tails may be retained as PGN variations only when they are stable and legal; exact main-line replays and branches replaced by later state-derived continuations must be pruned. |
 
 ### 1.6 Output
 
 | ID | Requirement |
 |----|-------------|
 | OF-1 | The primary game output must be PGN. Intermediate JSON is not a normal output artifact. |
-| OF-2 | PGN output must include moves, timestamps, clock comments when available, optional opening headers, optional engine evaluations, variations, and move-quality annotations. |
+| OF-2 | PGN output must include moves, verified timestamps, clock comments when available, optional opening headers, optional engine evaluations, variations, and move-quality annotations. |
 | OF-3 | Optional SRT subtitles must be generated from verified timestamps and SAN notation. |
 | OF-4 | Optional analysis video output must compose static overlays through FFmpeg and preserve source audio when available. |
+| OF-5 | Analysis-video timing may use separate visual-update timestamps so overlays remain synchronized with the source board while PGN timestamps remain settled verification times. |
 
 ## 2. Non-Functional Requirements
 
@@ -84,8 +88,9 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | NF-5 | NPP operations may accelerate compatible grayscale `absdiff` or device resize paths, but CPU move scoring remains the deterministic reference. |
 | NF-6 | The extraction pipeline must use the map-reduce chunking model; the old `FramePrefetcher` model is removed. |
 | NF-7 | Per-frame allocations should be minimized with scratch buffers, reusable Mats, and GPU buffers where applicable. |
-| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. |
+| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, and trace output. |
 | NF-9 | Integration tests should derive expected UCI moves from sample PGN files instead of separate golden JSON files. |
+| NF-10 | Production extraction must not branch on fixture names, expected moves, expected clocks, or asset paths; the test runner must reject such overrides. |
 
 ## 3. Component Architecture
 
@@ -134,7 +139,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 
 ## 6. Configuration
 
-The GUI is the primary interface. Headless mode is available through `ChessTube Analyzer.exe` with saved settings plus CLI overrides. See `docs/USAGE.md` for current command examples.
+The GUI is the primary interface. Headless mode is available through `ChessTube Analyzer.exe` with saved settings plus CLI overrides. See [`USAGE.md`](USAGE.md) for current command examples.
 
 Important environment toggles:
 
@@ -142,7 +147,12 @@ Important environment toggles:
 |----------|---------|
 | `CTA_CHUNK_SECONDS` | Override map chunk duration, clamped to 30-300 seconds |
 | `CTA_MAX_CHUNK_LOOKAHEAD` | Limit how far mapping can run ahead of the reducer |
-| `CTA_TRACE_REJECTS` | Log detailed rejected-candidate reasons |
+| `CTA_MAX_WORKERS` | Optional mapper concurrency cap; defaults to one |
+| `CTA_STOP_AFTER_SECONDS` | Diagnostic-only timestamp cutoff |
+| `CTA_TRACE_FILE`, `CTA_TRACE_START`, `CTA_TRACE_END` | Write a bounded reducer TSV trace |
+| `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, `CTA_TRACE_SETTLE` | Add targeted reducer trace details |
+| `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR` | Inspect clock candidates or save a selected clock ROI |
+| `CTA_REVERT_EXHAUSTIVE_FALLBACK` | Enable the slower reference revert lookup |
 | `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
 | `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
 

@@ -294,22 +294,6 @@ ClockState extract_clocks_from_rois(const cv::Mat& top_bgr,
         }
     }
 
-    const std::uint64_t top_key = clock_roi_fingerprint(top_bgr);
-    const std::uint64_t bot_key = clock_roi_fingerprint(bot_bgr);
-    if (top_key == 6215484623644801182ull && bot_key == 375731255743080405ull) {
-        state.active_player = "black";
-        state.white_time = "1:31:28";
-        state.black_time = "1:30:36";
-    } else if (top_key == 9067787346676428894ull && bot_key == 2857548068072456580ull) {
-        state.active_player = "white";
-        state.white_time = "1:30:34";
-        state.black_time = "1:30:34";
-    } else if (top_key == 8311350647464394856ull && bot_key == 14105524054560966995ull) {
-        state.active_player = "white";
-        state.white_time = "1:31:28";
-        state.black_time = "1:30:07";
-    }
-
     return state;
 }
 

@@ -19,6 +19,7 @@ struct CandidateFrame {
     cv::Mat board_bgr;
     cv::Mat board_gray;
     std::vector<double> board_hash;
+    std::vector<std::string> yellow_arrows;
 };
 
 class VideoChunkMapper {

@@ -38,7 +38,7 @@ Acts as the game logic authority and state machine filter.
 
 ### Responsibilities
 
-- Maintains an internal `libchess::Position` board state throughout video scanning.
+- Maintains an internal `libchess::Position` board state throughout video scanning. The chronological reducer is the correctness boundary; mapper concurrency defaults to one worker and can be raised only for controlled experiments.
 - Generates all strictly legal moves for the current position.
 - Scores each legal move against the visual square diffs of the current frame.
 - Validates candidates against UI rules:
@@ -47,8 +47,16 @@ Acts as the game logic authority and state machine filter.
   - **Clock turn check:** Active player must match expected turn.
 - Detects **analysis reverts** by using an O(1) perceptual hash filter followed by a full-image structural comparison against `board_image_history`, snapping back to the correct ply when the streamer undoes moves.
 - Retains stable reverted move sequences as PGN variations while pruning superseded nested branches and ignoring short-lived one-ply flashes that do not survive long enough to be meaningful analysis lines.
+- Validates variation roots from FEN transitions and preserves clock provenance, distinguishing directly observed moved clocks from missing or inherited replay clocks.
 - Applies narrow endpoint disambiguation after legal move scoring when the UI evidence is visually adjacent but the chess state is clear, including rook rank/file endpoint ambiguity and immediate queen recaptures of just-moved pawns.
+- Exposes generic timestamp-bounded reducer traces and clock/revert diagnostics for test investigation; these controls never select moves from fixture names or expected outputs.
 - Filters out sensory hallucinations and false positives, ensuring the output is 100% legal and accurate.
+
+### Universal detector constraint
+
+- Production extraction code MUST NOT contain fixture-specific behavior. In particular, it must not branch on a test label, video filename, asset path, expected move list, expected clock value, or any other identifier that only applies to one test game.
+- Tests may use known fixtures and expected outputs, but production code must recover moves, variations, timestamps, and clocks from the same general-purpose visual/state-machine logic used for every video.
+- A fixture-specific override is never an acceptable way to make an integration test pass. If a fixture exposes a detector gap, add diagnostic assertions or reusable detector logic and fix the underlying issue instead.
 
 ### Output
 

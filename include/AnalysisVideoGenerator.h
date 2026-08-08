@@ -27,7 +27,8 @@ public:
      * @param output_video_path Destination path for the new MP4
      * @param geo The geometry of the main board in the video
      * @param fens List of FEN strings (starting pos + subsequent moves)
-     * @param timestamps List of timestamps (in seconds) corresponding to each move
+     * @param timestamps Source-board visual transition timestamps in seconds.
+     *                   Every generated overlay stream uses this same timeline.
      * @param stockfish_results Analysis data from Stockfish
      * @param arrow_thickness_pct Thickness of engine arrows as a percentage
      * @param overlay_config The visual overlay configuration (positions, scales, toggles)

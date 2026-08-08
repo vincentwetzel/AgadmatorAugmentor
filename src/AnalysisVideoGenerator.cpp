@@ -210,7 +210,13 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     opening_txt.imbue(std::locale::classic());
     if (draw_main_arrows) main_arrows_txt.imbue(std::locale::classic());
 
-    size_t num_states = timestamps.size() + 1;
+    const size_t num_states = timestamps.size() + 1;
+    if (!fens.empty() && fens.size() != num_states) {
+        if (progress_callback) {
+            progress_callback(-1, "Analysis overlay timing mismatch: FEN state count does not match transition timestamp count.");
+        }
+        return false;
+    }
     std::vector<size_t> states_to_render;
 
     for (size_t i = 0; i < num_states; ++i) {

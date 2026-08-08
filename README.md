@@ -6,9 +6,9 @@ A C++20 application that analyzes chess videos, reconstructs legal games from th
 
 ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data, optional opening tags, and optional move-quality labels.
 
-The extraction path is optimized around a map-reduce scan: workers decode timeline chunks and emit visual candidates, while a reducer maintains the strict chess state, validates moves, and detects analysis reverts. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches.
+The extraction path uses a map-reduce scan: chunk workers emit visual candidates, while one chronological reducer maintains the strict chess state, validates moves, and detects analysis reverts. The correctness-first default uses one mapper worker; bounded concurrency can be enabled for controlled experiments with `CTA_MAX_WORKERS`. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches.
 
-Advanced extraction tuning is available through environment variables for benchmarking difficult storage paths: `CTA_CHUNK_SECONDS` controls map chunk duration (30-300 seconds), and `CTA_MAX_CHUNK_LOOKAHEAD` controls how far mapping workers can run ahead of the reducer.
+Advanced extraction tuning is available through environment variables for benchmarking difficult storage paths: `CTA_CHUNK_SECONDS` controls map chunk duration (30-300 seconds), `CTA_MAX_CHUNK_LOOKAHEAD` controls reducer lookahead, and `CTA_MAX_WORKERS` caps mapper concurrency. The worker default is one for deterministic correctness.
 
 ## Features
 
@@ -24,6 +24,8 @@ Advanced extraction tuning is available through environment variables for benchm
 - **GUI Application:** Qt6 GUI with queue processing, persistent settings, theme support, and a screenshot-based overlay template editor.
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
+- **Analysis Variations:** Preserve stable, legal analysis branches with their originating FEN, timestamps, confidence scores, and inherited branch clocks.
+- **Diagnostic Replay:** Bound a run to a timestamp and export reducer events to TSV without changing production detector rules.
 
 ## Quick Start
 
@@ -174,10 +176,13 @@ ChessTubeAnalyzer/
 |   |-- board/red_board.png
 |   `-- sample_games_*/
 |-- docs/
-|   `-- USAGE.md
-|-- TODO.md
-|-- architecture.md
-|-- SPEC.md
+|   |-- README.md
+|   |-- USAGE.md
+|   |-- ARCHITECTURE.md
+|   |-- SPEC.md
+|   |-- ROADMAP.md
+|   |-- DEVELOPMENT.md
+|   `-- TROUBLESHOOTING.md
 |-- CHANGELOG.md
 `-- agents.md
 ```
@@ -202,7 +207,9 @@ ChessTubeAnalyzer/
 python tests\run_tests.py
 ```
 
-The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts. You can still run the target manually with CMake when you need lower-level control.
+The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
+
+For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--trace-start`, and `--trace-end`. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`.
 
 ## Performance Snapshot
 
@@ -213,4 +220,4 @@ The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `bui
 | Analysis video generation | Static overlays plus FFmpeg mux/composite (~1000x speedup vs per-frame) |
 | Integration coverage | 7-ply, medium-game revert, full-game, and clock-time scenarios |
 
-See [architecture.md](architecture.md), [SPEC.md](SPEC.md), and [docs/USAGE.md](docs/USAGE.md) for more detail.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SPEC.md](docs/SPEC.md), [docs/USAGE.md](docs/USAGE.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more detail. The planned work is tracked in [docs/ROADMAP.md](docs/ROADMAP.md).

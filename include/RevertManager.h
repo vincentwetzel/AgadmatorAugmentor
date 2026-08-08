@@ -26,6 +26,7 @@ public:
                         bool exhaustive_fallback);
 
     const cv::Mat& get_latest_gray() const { return board_image_history_.back(); }
+    const cv::Mat& get_history_gray(size_t index) const { return board_image_history_.at(index); }
     size_t history_size() const { return board_image_history_.size(); }
 
 private:
@@ -41,7 +42,7 @@ private:
 
     static constexpr double kRevertMaxSquareHashDiff = 15.0;
     static constexpr double kRevertMeanHashDiff = 8.0;
-    static constexpr double kRevertFullImageMeanDiff = 3.0;
+    static constexpr double kRevertFullImageMeanDiff = 3.5;
 
     void rebuild_history_hash_index();
     std::vector<std::uint64_t> make_revert_index_keys(const std::vector<double>& hash) const;
