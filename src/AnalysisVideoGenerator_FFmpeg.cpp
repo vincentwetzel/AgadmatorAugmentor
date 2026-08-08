@@ -168,6 +168,13 @@ bool compose_analysis_video(const std::string& input_video_path,
     // Step 2: Have FFmpeg perform the composition
     if (progress_callback) progress_callback(80, "Compositing video streams with FFmpeg...");
 
+    // Use one normalized filesystem path for the FFmpeg command and for the
+    // post-process validation.  On Windows, constructing a path and calling
+    // generic_string() can normalize/convert the path, so checking the raw
+    // input string afterward can inspect a different path than FFmpeg wrote.
+    const std::filesystem::path output_path(actual_output_path);
+    const std::string output_path_arg = output_path.generic_string();
+
     int safe_bx = geo.bx - (geo.bx % 2);
     int safe_by = geo.by - (geo.by % 2);
 
@@ -328,15 +335,17 @@ bool compose_analysis_video(const std::string& input_video_path,
                  "-filter_complex_threads " + std::to_string(num_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" " +
                  map_args +
-                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs + " -c:t copy \"" + std::filesystem::path(actual_output_path).generic_string() + "\"";
+                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs + " -c:t copy \"" + output_path_arg + "\"";
 
     std::string ffmpeg_tail;
     int result = FfmpegProcessRunner::run_with_progress(ffmpeg_cmd, total_frames, cancel_flag, progress_callback, ffmpeg_tail);
 
     if (result == 0) {
         std::error_code ec;
-        if (!std::filesystem::exists(actual_output_path, ec) || std::filesystem::file_size(actual_output_path, ec) == 0) {
-            std::filesystem::remove(actual_output_path, ec);
+        const bool output_exists = std::filesystem::exists(output_path, ec);
+        const auto output_size = output_exists ? std::filesystem::file_size(output_path, ec) : 0;
+        if (ec || !output_exists || output_size == 0) {
+            std::filesystem::remove(output_path, ec);
             if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail + "\nError: FFmpeg exited successfully but output file is missing or empty."));
             return false;
         }
@@ -344,7 +353,7 @@ bool compose_analysis_video(const std::string& input_video_path,
         return true;
     } else {
         std::error_code ec;
-        std::filesystem::remove(actual_output_path, ec);
+        std::filesystem::remove(output_path, ec);
         if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail));
         return false;
     }

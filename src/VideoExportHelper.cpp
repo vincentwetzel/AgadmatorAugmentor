@@ -195,15 +195,32 @@ bool VideoExportHelper::generateSubtitles(const ProcessingSettings& settings, co
         if (gameData.video_moves[i] == "REVERT") continue;
 
         double start_t = gameData.video_timestamps[i];
+        // Revert/replay reduction can leave a stale timestamp adjacent to a
+        // restored move.  Never emit a non-finite timestamp: FFmpeg's SRT
+        // demuxer cannot represent it and may pass an invalid packet duration
+        // to the MP4 muxer.
+        if (!std::isfinite(start_t)) continue;
+        start_t = std::max(0.0, start_t);
+
         double end_t = start_t + 5.0; // Default 5 seconds duration
 
         // Cap the subtitle duration when the next move happens
         for (size_t j = i + 1; j < gameData.video_timestamps.size(); ++j) {
             if (gameData.video_moves[j] != "REVERT") {
-                end_t = std::min(start_t + 5.0, gameData.video_timestamps[j]);
-                break;
+                const double next_t = gameData.video_timestamps[j];
+                // The next logical move is not necessarily later after an
+                // analysis branch is restored.  Using it unconditionally can
+                // create an SRT cue with a negative duration, which FFmpeg
+                // later reports as a huge wrapped duration (for example
+                // 4294682796000) while muxing MP4 subtitles.
+                if (std::isfinite(next_t) && next_t > start_t) {
+                    end_t = std::min(end_t, next_t);
+                    break;
+                }
             }
         }
+
+        if (!(end_t > start_t)) continue;
 
         std::string fen = gameData.video_fens[i];
         

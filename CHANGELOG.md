@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows Analysis-Video Output Validation:** FFmpeg composition now uses the same normalized filesystem path for writing and post-process validation, preventing successful exports from being reported as missing on Windows.
+- **Replay Subtitle Timing:** SRT generation now skips non-finite timestamps and ignores stale or non-increasing timestamps after analysis reverts, preventing invalid or negative-duration subtitle cues from breaking MP4 muxing.
 - **FFmpeg Error Reporting:** Analysis video composition now captures the tail of FFmpeg output and reports Windows process-launch failures with the underlying system error.
 - **Analysis Video Failure Flow:** Processing now stops after PGN save or analysis-video generation failures instead of continuing as though the batch completed successfully.
 - **Export Helper Video Path:** Restored analysis-video generation and synced subtitle writing inside `VideoExportHelper`, including cleanup of temporary SRT files after export.

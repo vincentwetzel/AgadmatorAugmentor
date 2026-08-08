@@ -86,7 +86,7 @@ The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output direc
 
 Stable analysis reverts are written as PGN variations. Main-line clock observations retain their provenance; a replayed variation may inherit the branch-point clock for continuity, but an inherited value is not presented as a new OCR observation.
 
-If move subtitles are enabled, the analyzer creates a temporary SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next move or a short default duration. The temporary SRT file is removed after export completes.
+If move subtitles are enabled, the analyzer creates a temporary SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next later move or a short default duration. Non-finite timestamps and timestamps that would create a non-positive cue duration are skipped, which keeps replayed analysis branches from producing invalid subtitle packets. The temporary SRT file is removed after export completes.
 
 If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Engine-backed overlays such as eval bars, PV text, and engine arrows run Stockfish automatically. Opening-name overlays are optional and only display when opening metadata is available. If hardware-accelerated video composition fails, the worker retries with the CPU H.264 encoder before reporting failure.
 

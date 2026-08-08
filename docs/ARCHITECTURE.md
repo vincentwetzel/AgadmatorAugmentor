@@ -73,7 +73,7 @@ Clock provenance is explicit. A moved clock can be directly observed, missing, o
 
 `GameData` is an in-memory handoff object. It contains main-line moves, FENs, settled verification timestamps, `ClockInfo` records, variation trees, and separate video-overlay moves/FENs/timestamps. The separate video timeline keeps overlays synchronized with an earlier visual board update when it precedes settled verification.
 
-`VideoExportHelper` writes the PGN and optionally creates a temporary SRT track from verified timestamps and SAN. The temporary SRT is removed after it is embedded in an analysis video. PGN annotations run Stockfish only when their output toggle is enabled; analysis-video overlays run Stockfish when the selected overlay set needs engine data.
+`VideoExportHelper` writes the PGN and optionally creates a temporary SRT track from verified timestamps and SAN. Subtitle cues use only finite timestamps and later logical timestamps, so stale timestamps adjacent to restored analysis branches cannot create negative-duration cues for the MP4 muxer. The temporary SRT is removed after it is embedded in an analysis video. PGN annotations run Stockfish only when their output toggle is enabled; analysis-video overlays run Stockfish when the selected overlay set needs engine data.
 
 `OpeningFetcher` performs cached Lichess Explorer lookups through WinHTTP on Windows. It can use the optional API token from Advanced settings, stores results under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`, and stops once a position is likely unique.
 
@@ -81,7 +81,7 @@ Clock provenance is explicit. A moved clock can be directly observed, missing, o
 
 The analysis video is rendered from static per-state overlay images rather than drawing every frame. The template controls the analysis board, evaluation bar, principal variation text, opening text, engine-arrow destination, and base arrow thickness. A queue item snapshots its selected template before processing, so mixed-channel batches remain independent.
 
-FFmpeg composes the static overlays with the source video and preserves source audio when available. CPU filters are used for alpha overlays that are incompatible with CUDA filter formats; compatible NVIDIA decode/filter/encode paths remain optional and fall back to CPU H.264 when needed.
+FFmpeg composes the static overlays with the source video and preserves source audio when available. The exporter normalizes the output filesystem path once and reuses it for both the FFmpeg command and post-process existence/size validation. CPU filters are used for alpha overlays that are incompatible with CUDA filter formats; compatible NVIDIA decode/filter/encode paths remain optional and fall back to CPU H.264 when needed.
 
 ## 8. Source modules
 
