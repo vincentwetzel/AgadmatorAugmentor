@@ -131,7 +131,9 @@ bool is_inverse_of_recent_move(const std::vector<std::string>& moves, const char
 bool passes_yellowness_check(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* from_name, const char* to_name) {
     double y_from = validation::check_yellowness(board_bgr, geo, from_name);
     double y_to = validation::check_yellowness(board_bgr, geo, to_name);
-    return !(y_from < 25.0 || y_to < 25.0 || (y_from + y_to) < 70.0);
+    return !(y_from < validation::kYellowEndpointThreshold ||
+             y_to < validation::kYellowEndpointThreshold ||
+             (y_from + y_to) < validation::kYellowPairThreshold);
 }
 
 double square_piece_edge_score(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* sq_name) {

@@ -28,6 +28,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | VP-4 | The reducer must consume candidates chronologically and compare them against the last verified board state. |
 | VP-5 | Move settling may inspect later candidates, but the settle window must be bounded so one animation cannot drift into unrelated moves. |
 | VP-6 | Environment variables `CTA_CHUNK_SECONDS`, `CTA_MAX_CHUNK_LOOKAHEAD`, and `CTA_MAX_WORKERS` may tune chunk scheduling. The default worker cap is one for deterministic decoder boundaries. |
+| VP-7 | Diagnostic extraction must be opt-in and must not change ordinary move selection; structured JSONL records must retain observation IDs, mapper provenance, detector assessments, board features, and reducer events. |
 
 ### 1.3 UI Element Extraction
 
@@ -88,7 +89,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | NF-5 | NPP operations may accelerate compatible grayscale `absdiff` or device resize paths, but CPU move scoring remains the deterministic reference. |
 | NF-6 | The extraction pipeline must use the map-reduce chunking model; the old `FramePrefetcher` model is removed. |
 | NF-7 | Per-frame allocations should be minimized with scratch buffers, reusable Mats, and GPU buffers where applicable. |
-| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, and trace output. |
+| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, structured JSONL/TSV output, failure bundles, and replay-trace comparison. |
 | NF-9 | Integration tests should derive expected UCI moves from sample PGN files instead of separate golden JSON files. |
 | NF-10 | Production extraction must not branch on fixture names, expected moves, expected clocks, or asset paths; the test runner must reject such overrides. |
 
@@ -102,9 +103,10 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | Arrow Detector | `ArrowDetector.h/.cpp` | Yellow arrow detection |
 | Clock Recognizer | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` | Clock ROI extraction, active-clock detection, digit OCR |
 | Extraction Orchestrator | `ChessVideoExtractor*.cpp`, `ChessVideoExtractor_Internal.*` | Video setup, sequential reducer, move validation, GameData generation |
+| Extraction Diagnostics | `ExtractionDiagnostics.h/.cpp` | Structured observation/event records, detector assessments, and replay evidence |
 | Video Chunk Mapper | `VideoChunkMapper.h/.cpp` | Parallel chunk scanning and candidate coalescing |
-| Revert Management | `RevertManager.h/.cpp`, `RevertDetector.h/.cpp` | Indexed board-history lookup and full-image revert verification |
-| Move Helpers | `MoveScorer.h/.cpp`, `MoveVerifier.h/.cpp`, `MoveValidations.h/.cpp` | Legal move scoring and UI validation helpers |
+| Revert Management | `RevertManager.h/.cpp` | Indexed board-history lookup and full-image revert verification |
+| Move Helpers | `MoveScorer.h/.cpp`, `MoveValidations.h/.cpp` | Legal move scoring and UI validation helpers |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp`, `StockfishAnalysisHelper.h/.cpp` | UCI analysis, MultiPV, annotations, estimates |
 | Opening Metadata | `OpeningFetcher.h/.cpp`, `LichessSyncHelper.h/.cpp` | Cached Lichess Explorer lookups and synchronization |
 | GPU Pipeline | `GPUAccelerator.h/.cpp` | Optional CUDA/NPP wrappers and CPU fallbacks |
@@ -153,6 +155,10 @@ Important environment toggles:
 | `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, `CTA_TRACE_SETTLE` | Add targeted reducer trace details |
 | `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR` | Inspect clock candidates or save a selected clock ROI |
 | `CTA_REVERT_EXHAUSTIVE_FALLBACK` | Enable the slower reference revert lookup |
+| `CTA_DIAGNOSTIC_FILE` | Write structured reducer observations as JSONL |
+| `CTA_DIAGNOSTIC_FRAME_DIR`, `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS` | Save sampled diagnostic frame, board, and clock-ROI artifacts |
+| `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set diagnostic geometry recheck cadence, clamped to 1-30 seconds |
+| `CTA_REPLAY_OBSERVATIONS` | Use a saved compact observation trace and artifacts instead of decoding source video |
 | `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
 | `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
 

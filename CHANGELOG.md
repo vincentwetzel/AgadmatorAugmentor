@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clock-Time Integration Test:** Added a full video integration test that compares extracted move clocks against `[%clk ...]` PGN tags.
 - **Full-Game PGN Baseline Test:** Added an optional integration path that derives expected UCI moves directly from a sample full-game PGN.
 - **Diagnostic Reducer Replay:** Added generic timestamp cutoffs and bounded TSV traces for candidate, settle, revert, historical-state, and variation events.
+- **Observation Replay Bundles:** Added structured JSONL diagnostics, compact observation traces, sampled frame/board/clock artifacts, automatic first-divergence bundles, bundle reanalysis, and source/replay trace comparison.
 - **Fixture-Independence Guard:** The test runner now scans production sources for fixture-specific detector overrides before building or running tests.
 - **Clock Provenance:** Added explicit observed/missing clock state so replayed analysis branches can retain continuity without fabricating OCR readings.
 - **State-Based Variation Reconciliation:** Variations are validated from root FEN transitions, preserve visual confidence, and prune only proven replays or superseded tails.

@@ -389,6 +389,7 @@ add_library(chess_extraction_core
     src/ChessVideoExtractor.cpp
     src/ChessVideoExtractor_Extraction.cpp
     src/ChessVideoExtractor_Internal.cpp
+    src/ExtractionDiagnostics.cpp
     src/ExtractorUtils.cpp
     src/MoveValidations.cpp
     src/GPUAccelerator.cpp

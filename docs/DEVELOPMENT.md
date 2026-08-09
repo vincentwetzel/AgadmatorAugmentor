@@ -79,6 +79,7 @@ python tests\run_tests.py --build-dir build_diag --no-build ^
   --gtest-filter DetectorsTest.FullGame1Extraction ^
   --stop-after 520 ^
   --trace-file build_diag\transition.tsv ^
+  --diagnostic-file build_diag\diagnostics.jsonl ^
   --trace-start 498 --trace-end 520
 ```
 
@@ -90,6 +91,37 @@ The diagnostic environment controls are generic and do not alter ordinary full-v
 - `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, and `CTA_DEBUG_CLOCK_ROI_DIR` inspect clock recognition.
 - `CTA_REVERT_EXHAUSTIVE_FALLBACK` enables a slower reference revert lookup.
 - `CTA_MAX_WORKERS` raises mapper concurrency for controlled performance experiments; the default is one for deterministic decoder boundaries.
+- `CTA_DIAGNOSTIC_FILE` writes structured reducer observations as JSONL.
+- `CTA_DIAGNOSTIC_FRAME_DIR` and `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS` retain sampled full-frame, board, and clock-ROI artifacts.
+- `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` controls diagnostic geometry rechecks and is clamped to 1-30 seconds.
+- `CTA_REPLAY_OBSERVATIONS` replaces source-video decoding and board/template initialization with a compact `observations.jsonl` input and its board/clock artifacts. The first observation seeds the bounded replay position and geometry; the normal chronological reducer then processes the reconstructed observations.
+
+When an integration test fails, `tests\run_tests.py` automatically reruns the
+first-divergence window and creates a sibling failure bundle containing the
+failure report, verbose JSONL diagnostics, compact `observations.jsonl`, and
+retained full-frame, board-crop, and clock-ROI images. Reanalyze an existing
+bundle without decoding the video again:
+
+```cmd
+python tests\run_tests.py --replay-bundle build_diag\diagnostics\first_divergence_bundle
+```
+
+The compact observation file is the input for direct reducer replay; its records
+retain timestamps, mapper provenance, board features, detector assessments,
+clock metadata, and relative artifact paths. Bundle replay first checks
+observation/event ordering and verifies referenced artifacts before reanalyzing
+the saved JSONL. To compare a source diagnostic trace with a replay diagnostic
+trace, run:
+
+```cmd
+python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
+```
+
+The comparison aligns observations by ID, checks mapper provenance and board
+hash fidelity first, then reports the first event divergence at the mapper,
+detector/validation, scoring, or reducer layer. Replay equivalence on traces
+containing accepted moves, clocks, reverts, and variations remains an active
+roadmap item.
 
 Keep traces in an ignored build or temporary directory. Do not add fixture names, expected moves, expected clocks, or asset-specific branches to production extraction code.
 

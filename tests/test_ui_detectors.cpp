@@ -13,6 +13,7 @@
 #include <sstream>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <libchess/position.hpp>
@@ -20,6 +21,8 @@
 #include "BoardLocalizer.h"
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
+#include "ExtractionDiagnostics.h"
+#include "VideoChunkMapper.h"
 #include "../src/ChessVideoExtractor_Internal.h"
 
 // ─── Test result tracking ────────────────────────────────────────────────────
@@ -35,6 +38,388 @@ struct IntegrationTestResult {
 };
 
 static std::vector<IntegrationTestResult> g_test_results;
+static size_t g_invariant_failure_count = 0;
+
+static void expect_game_data_equal(const cta::GameData& expected,
+                                   const cta::GameData& actual) {
+    EXPECT_EQ(expected.moves, actual.moves);
+    EXPECT_EQ(expected.timestamps, actual.timestamps);
+    EXPECT_EQ(expected.fens, actual.fens);
+    EXPECT_EQ(expected.video_fens, actual.video_fens);
+    EXPECT_EQ(expected.video_timestamps, actual.video_timestamps);
+    EXPECT_EQ(expected.video_moves, actual.video_moves);
+    ASSERT_EQ(expected.clocks.size(), actual.clocks.size());
+    for (size_t index = 0; index < expected.clocks.size(); ++index) {
+        EXPECT_EQ(expected.clocks[index].active, actual.clocks[index].active);
+        EXPECT_EQ(expected.clocks[index].white_time, actual.clocks[index].white_time);
+        EXPECT_EQ(expected.clocks[index].black_time, actual.clocks[index].black_time);
+        EXPECT_EQ(expected.clocks[index].moved_time_observed,
+                  actual.clocks[index].moved_time_observed);
+        EXPECT_EQ(expected.clocks[index].moved_time_missing,
+                  actual.clocks[index].moved_time_missing);
+    }
+
+    ASSERT_EQ(expected.variations.size(), actual.variations.size());
+    auto expected_variation = expected.variations.begin();
+    auto actual_variation = actual.variations.begin();
+    for (; expected_variation != expected.variations.end();
+         ++expected_variation, ++actual_variation) {
+        EXPECT_EQ(expected_variation->first, actual_variation->first);
+        ASSERT_EQ(expected_variation->second.size(), actual_variation->second.size());
+        for (size_t index = 0; index < expected_variation->second.size(); ++index) {
+            const auto& expected_line = expected_variation->second[index];
+            const auto& actual_line = actual_variation->second[index];
+            EXPECT_EQ(expected_line.moves, actual_line.moves);
+            EXPECT_EQ(expected_line.timestamps, actual_line.timestamps);
+            EXPECT_EQ(expected_line.fens, actual_line.fens);
+            EXPECT_EQ(expected_line.replay_observation, actual_line.replay_observation);
+            EXPECT_EQ(expected_line.scores, actual_line.scores);
+            ASSERT_EQ(expected_line.clocks.size(), actual_line.clocks.size());
+            for (size_t clock_index = 0; clock_index < expected_line.clocks.size(); ++clock_index) {
+                EXPECT_EQ(expected_line.clocks[clock_index].active,
+                          actual_line.clocks[clock_index].active);
+                EXPECT_EQ(expected_line.clocks[clock_index].white_time,
+                          actual_line.clocks[clock_index].white_time);
+                EXPECT_EQ(expected_line.clocks[clock_index].black_time,
+                          actual_line.clocks[clock_index].black_time);
+            }
+        }
+    }
+}
+
+static void write_invariant_diagnostic(const std::string& message) {
+    const char* path = std::getenv("CTA_INVARIANT_REPORT_FILE");
+    if (path == nullptr || *path == '\0') return;
+
+    nlohmann::json record = {
+        {"schema_version", 1},
+        {"event", "INVARIANT_FAILED"},
+        {"invariant", message},
+    };
+    std::ofstream output(path, std::ios::out | std::ios::app);
+    if (output.is_open()) {
+        output << record.dump() << '\n';
+    }
+}
+
+TEST(ExtractionDiagnosticsTest, ClassifiesLegacyEvents) {
+    const auto accepted = cta::diagnostics::from_legacy_trace(
+        7, "ACCEPT", 12.5, 9, "fen", "e2e4", 91.0, 42.0, 35.0, 39.0, "source=settled");
+
+    EXPECT_EQ(accepted.sequence, 7u);
+    EXPECT_EQ(accepted.observation_id, 0u);
+    EXPECT_EQ(accepted.transition_id, 0u);
+    EXPECT_EQ(accepted.event, "ACCEPT");
+    EXPECT_STREQ(cta::diagnostics::to_string(accepted.phase), "reducer");
+    EXPECT_STREQ(cta::diagnostics::to_string(accepted.outcome), "accepted");
+    EXPECT_STREQ(cta::diagnostics::to_string(accepted.reason), "move_accepted");
+
+    const auto restored = cta::diagnostics::from_legacy_trace(
+        8, "REVERT_APPLIED", 14.0, 5, "parent_fen", "", 0.0, 0.0,
+        0.0, 0.0, "restored_ply=5;reason=analysis_revert");
+    EXPECT_STREQ(cta::diagnostics::to_string(restored.phase), "revert");
+    EXPECT_STREQ(cta::diagnostics::to_string(restored.outcome), "recovered");
+    EXPECT_STREQ(cta::diagnostics::to_string(restored.reason), "revert_applied");
+}
+
+TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
+    cta::diagnostics::Evidence evidence;
+    evidence.mapper_chunk = 3;
+    evidence.source_frame_index = 127;
+    evidence.mapper_emission_reason = "motion_leading_edge";
+    evidence.diagnostic_frame_path = "frames/observation_42_frame.png";
+    evidence.diagnostic_board_path = "frames/observation_42_board.png";
+    evidence.diagnostic_clock_top_path = "frames/observation_42_clock_top.png";
+    evidence.diagnostic_clock_bottom_path = "frames/observation_42_clock_bottom.png";
+    evidence.observation_tags = {"motion", "highlight_activity", "hover", "animation"};
+    evidence.yellow_arrows_checked = true;
+    evidence.yellow_arrows = {"e2e4", "f1b5"};
+    evidence.red_squares_checked = true;
+    evidence.red_squares = {"e4"};
+    evidence.template_identity = 0x123456789abcdef0ull;
+    evidence.board_x = 100;
+    evidence.board_y = 50;
+    evidence.board_width = 800;
+    evidence.board_height = 800;
+    evidence.square_width = 100.0;
+    evidence.square_height = 100.0;
+    evidence.localization_score = 0.97;
+    evidence.localization_scale = 1.25;
+    evidence.board_hash = {1.0, 2.0, 3.0, 4.0};
+    evidence.geometry_checked = true;
+    evidence.geometry_anomaly = true;
+    evidence.geometry_drift_x = 12.0;
+    evidence.geometry_drift_y = -3.0;
+    evidence.geometry_size_drift = 4.0;
+    evidence.geometry_step_drift_x = 13.0;
+    evidence.geometry_step_drift_y = -2.0;
+    evidence.geometry_step_size_drift = 5.0;
+    evidence.geometry_relocalization_score = 0.91;
+    evidence.geometry_decision = "jump_detected";
+    evidence.changed_squares.push_back({"e4", 54.0, 1});
+    evidence.yellow_candidates.push_back({"d4", 78.0, 1});
+    evidence.yellow_endpoint_threshold = 25.0;
+    evidence.yellow_pair_threshold = 70.0;
+    evidence.yellow_measurements.push_back({
+        "d4",
+        {32.0, 35.0, 30.0, 37.0},
+        {{{80.0, 150.0, 180.0}, {82.0, 151.0, 181.0},
+          {79.0, 149.0, 179.0}, {81.0, 152.0, 182.0}}},
+        {0.10, 0.12, 0.08, 0.11},
+        33.5});
+    evidence.yellow_temporal_checked = true;
+    evidence.yellow_temporal_window_seconds = 0.75;
+    evidence.yellow_temporal_sample_count = 3;
+    evidence.yellow_temporal_pair_pass_count = 2;
+    evidence.yellow_temporal_max_from = 42.0;
+    evidence.yellow_temporal_max_to = 48.0;
+    evidence.yellow_temporal_max_pair = 90.0;
+    evidence.yellow_assessment.state = "passed";
+    evidence.yellow_assessment.thresholds = {25.0, 70.0};
+    evidence.yellow_assessment.measurements = {
+        {"from_score", 42.0}, {"to_score", 48.0}, {"pair_score", 90.0}};
+    evidence.yellow_assessment.uncertainty_reason = "uncalibrated_detector_confidence";
+    evidence.score_margin = 12.5;
+    evidence.rejection_reason = "hover_box";
+    evidence.hover_measurements.push_back({"e2", 0.7, 0.2, 0.8, 0.1, 0.8, 3, true});
+    evidence.clock_top_width = 120;
+    evidence.clock_top_height = 24;
+    evidence.clock_bottom_width = 120;
+    evidence.clock_bottom_height = 24;
+    evidence.clock_top_bright_ratio = 0.15;
+    evidence.clock_bottom_bright_ratio = 0.42;
+    evidence.clock_bright_ratio_delta = 0.27;
+    evidence.score_from_square_diff = 42.0;
+    evidence.score_to_square_diff = 51.0;
+    evidence.score_adjustment = -10.0;
+    evidence.minimum_score_threshold = 35.0;
+    evidence.score_threshold_checked = true;
+    evidence.score_threshold_passed = true;
+    evidence.score_threshold_decision = "passed";
+    evidence.yellow_decision = "passed";
+    evidence.hover_decision = "clear";
+    evidence.clock_decision = "ocr_plausible";
+    evidence.settle_decision = "accepted_same_move";
+    evidence.legal_candidates.push_back({"e2e4", 91.5, 1});
+    evidence.legal_candidates.push_back({"e2e3", 47.2, 2});
+    const auto rejected = cta::diagnostics::from_legacy_trace(
+        3, "VALIDATION_REJECTED", 4.25, 2, "fen", "", 0.0, 18.0, 0.0, 0.0,
+        "reason=hover", 0, 0, evidence, 11, 5, 2, 1, "recovering");
+    std::ostringstream output;
+    cta::diagnostics::write_json_line(output, rejected);
+
+    const auto json = nlohmann::json::parse(output.str());
+    EXPECT_EQ(json.at("schema_version"), 1);
+    EXPECT_EQ(json.at("sequence"), 3);
+    EXPECT_EQ(json.at("observation_id"), 0);
+    EXPECT_EQ(json.at("candidate_id"), 11);
+    EXPECT_EQ(json.at("transition_id"), 0);
+    EXPECT_EQ(json.at("state_generation"), 5);
+    EXPECT_EQ(json.at("revert_generation"), 2);
+    EXPECT_EQ(json.at("branch_id"), 1);
+    EXPECT_EQ(json.at("event"), "VALIDATION_REJECTED");
+    EXPECT_EQ(json.at("phase"), "validation");
+    EXPECT_EQ(json.at("outcome"), "rejected");
+    EXPECT_EQ(json.at("reason"), "validation_rejected");
+    EXPECT_EQ(json.at("reducer_state"), "recovering");
+    EXPECT_EQ(json.at("evidence").at("board_x"), 100);
+    EXPECT_EQ(json.at("evidence").at("mapper_chunk"), 3);
+    EXPECT_EQ(json.at("evidence").at("source_frame_index"), 127);
+    EXPECT_EQ(json.at("evidence").at("mapper_emission_reason"), "motion_leading_edge");
+    EXPECT_EQ(json.at("evidence").at("diagnostic_frame_path"), "frames/observation_42_frame.png");
+    EXPECT_EQ(json.at("evidence").at("diagnostic_board_path"), "frames/observation_42_board.png");
+    EXPECT_EQ(json.at("evidence").at("diagnostic_clock_top_path"), "frames/observation_42_clock_top.png");
+    EXPECT_EQ(json.at("evidence").at("diagnostic_clock_bottom_path"), "frames/observation_42_clock_bottom.png");
+    ASSERT_EQ(json.at("evidence").at("observation_tags").size(), 4u);
+    EXPECT_EQ(json.at("evidence").at("observation_tags").at(0), "motion");
+    EXPECT_TRUE(json.at("evidence").at("yellow_arrows_checked"));
+    ASSERT_EQ(json.at("evidence").at("yellow_arrows").size(), 2u);
+    EXPECT_EQ(json.at("evidence").at("yellow_arrows").at(1), "f1b5");
+    EXPECT_TRUE(json.at("evidence").at("red_squares_checked"));
+    EXPECT_EQ(json.at("evidence").at("red_squares").at(0), "e4");
+    EXPECT_EQ(json.at("evidence").at("template_identity"), 1311768467463790320ull);
+    EXPECT_EQ(json.at("evidence").at("board_width"), 800);
+    EXPECT_EQ(json.at("evidence").at("localization_score"), 0.97);
+    EXPECT_EQ(json.at("evidence").at("board_hash").size(), 4u);
+    EXPECT_TRUE(json.at("evidence").at("geometry_checked"));
+    EXPECT_TRUE(json.at("evidence").at("geometry_anomaly"));
+    EXPECT_EQ(json.at("evidence").at("geometry_drift_x"), 12.0);
+    EXPECT_EQ(json.at("evidence").at("geometry_step_drift_x"), 13.0);
+    EXPECT_EQ(json.at("evidence").at("geometry_decision"), "jump_detected");
+    EXPECT_EQ(json.at("evidence").at("score_margin"), 12.5);
+    EXPECT_EQ(json.at("evidence").at("yellow_endpoint_threshold"), 25.0);
+    EXPECT_EQ(json.at("evidence").at("yellow_pair_threshold"), 70.0);
+    ASSERT_EQ(json.at("evidence").at("yellow_measurements").size(), 1u);
+    EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("square"), "d4");
+    EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("corner_scores").at(2), 30.0);
+    EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("corner_bgr").at(0).at(1), 150.0);
+    EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("corner_edge_density").at(3), 0.11);
+    EXPECT_TRUE(json.at("evidence").at("yellow_temporal_checked"));
+    EXPECT_EQ(json.at("evidence").at("yellow_temporal_sample_count"), 3);
+    EXPECT_EQ(json.at("evidence").at("yellow_temporal_pair_pass_count"), 2);
+    EXPECT_EQ(json.at("evidence").at("yellow_temporal_max_pair"), 90.0);
+    EXPECT_EQ(json.at("evidence").at("yellow_assessment").at("state"), "passed");
+    EXPECT_EQ(json.at("evidence").at("yellow_assessment").at("confidence"), -1.0);
+    EXPECT_EQ(json.at("evidence").at("yellow_assessment").at("measurements").at("pair_score"), 90.0);
+    EXPECT_EQ(json.at("evidence").at("yellow_assessment").at("uncertainty_reason"), "uncalibrated_detector_confidence");
+    ASSERT_EQ(json.at("evidence").at("changed_squares").size(), 1u);
+    EXPECT_EQ(json.at("evidence").at("changed_squares").at(0).at("square"), "e4");
+    ASSERT_EQ(json.at("evidence").at("yellow_candidates").size(), 1u);
+    EXPECT_EQ(json.at("evidence").at("yellow_candidates").at(0).at("square"), "d4");
+    EXPECT_EQ(json.at("metadata"), "reason=hover");
+    EXPECT_EQ(json.at("evidence").at("changed_square_count"), 0);
+    EXPECT_EQ(json.at("evidence").at("score_from_square_diff"), 42.0);
+    EXPECT_EQ(json.at("evidence").at("score_adjustment"), -10.0);
+    EXPECT_EQ(json.at("evidence").at("score_threshold_decision"), "passed");
+    EXPECT_EQ(json.at("evidence").at("yellow_from"), 0.0);
+    EXPECT_FALSE(json.at("evidence").at("hover_detected"));
+    ASSERT_EQ(json.at("evidence").at("hover_measurements").size(), 1u);
+    EXPECT_EQ(json.at("evidence").at("hover_measurements").at(0).at("square"), "e2");
+    EXPECT_EQ(json.at("evidence").at("hover_measurements").at(0).at("visible_edges"), 3);
+    EXPECT_TRUE(json.at("evidence").at("hover_measurements").at(0).at("detected"));
+    EXPECT_EQ(json.at("evidence").at("clock_top_width"), 120);
+    EXPECT_EQ(json.at("evidence").at("clock_bottom_height"), 24);
+    EXPECT_EQ(json.at("evidence").at("clock_bright_ratio_delta"), 0.27);
+    EXPECT_EQ(json.at("evidence").at("yellow_decision"), "passed");
+    EXPECT_EQ(json.at("evidence").at("clock_decision"), "ocr_plausible");
+    EXPECT_EQ(json.at("evidence").at("settle_decision"), "accepted_same_move");
+    EXPECT_EQ(json.at("evidence").at("rejection_reason"), "hover_box");
+    ASSERT_EQ(json.at("evidence").at("legal_candidates").size(), 2u);
+    EXPECT_EQ(json.at("evidence").at("legal_candidates").at(0).at("move"), "e2e4");
+    EXPECT_EQ(json.at("evidence").at("legal_candidates").at(0).at("rank"), 1);
+}
+
+TEST(VideoChunkMapperTest, ReplaysObservationArtifactsWithoutOpeningVideo) {
+    const auto root = std::filesystem::current_path() / "build_tests" / "tmp" /
+                      "cta_mapper_replay_test";
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(root, cleanup_error);
+    std::filesystem::create_directories(root);
+
+    const auto board_path = root / "board.png";
+    const auto trace_path = root / "observations.jsonl";
+    cv::Mat board(80, 80, CV_8UC3, cv::Scalar(40, 80, 120));
+    ASSERT_TRUE(cv::imwrite(board_path.string(), board));
+
+    nlohmann::json observation = {
+        {"schema_version", 1},
+        {"observation_id", 42},
+        {"timestamp", 1.25},
+        {"mapper", {
+            {"chunk", 0},
+            {"source_frame_index", 77},
+            {"emission_reason", "settled_tail"},
+        }},
+        {"images", {{"board", board_path.filename().string()}}},
+        {"board", {{"hash", std::vector<double>(64, 12.0)}}},
+    };
+    {
+        std::ofstream output(trace_path);
+        ASSERT_TRUE(output.is_open());
+        output << observation.dump() << '\n';
+    }
+
+    cta::BoardGeometry geometry;
+    geometry.bx = 0;
+    geometry.by = 0;
+    geometry.bw = 80;
+    geometry.bh = 80;
+    geometry.sq_w = 10.0;
+    geometry.sq_h = 10.0;
+    std::atomic<bool> cancel{false};
+    cta::VideoChunkMapper mapper(
+        (root / "source-video-does-not-exist.mp4").string(), 5.0, 30.0, 1,
+        geometry, 1, 1, 0, false, 1, 1, 80, 80,
+        false, 5.0, std::string(), -1.0, -1.0, trace_path.string());
+    mapper.start(&cancel);
+
+    std::vector<cta::CandidateFrame> candidates;
+    ASSERT_TRUE(mapper.get_chunk_results(0, candidates, &cancel));
+    ASSERT_EQ(candidates.size(), 1u);
+    EXPECT_EQ(candidates[0].observation_id, 42u);
+    EXPECT_DOUBLE_EQ(candidates[0].t, 1.25);
+    EXPECT_EQ(candidates[0].source_frame_index, 77u);
+    EXPECT_EQ(candidates[0].emission_reason, "settled_tail");
+    EXPECT_EQ(candidates[0].board_bgr.size(), cv::Size(80, 80));
+    ASSERT_EQ(candidates[0].board_hash.size(), 64u);
+    EXPECT_DOUBLE_EQ(candidates[0].board_hash.front(), 12.0);
+
+    std::filesystem::remove_all(root, cleanup_error);
+}
+
+TEST(ChessVideoExtractorTest, ReplaysReducerFromObservationsWithoutOpeningVideo) {
+    const auto root = std::filesystem::current_path() / "build_tests" / "tmp" /
+                      "cta_extractor_replay_test";
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(root, cleanup_error);
+    std::filesystem::create_directories(root);
+
+    const auto board_path = root / "board.png";
+    const auto trace_path = root / "observations.jsonl";
+    cv::Mat board(80, 80, CV_8UC3, cv::Scalar(40, 80, 120));
+    ASSERT_TRUE(cv::imwrite(board_path.string(), board));
+
+    const std::string initial_fen =
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    nlohmann::json observation = {
+        {"schema_version", 1},
+        {"observation_id", 1},
+        {"timestamp", 0.0},
+        {"mapper", {{"chunk", 0}, {"source_frame_index", 1},
+                     {"emission_reason", "initial_frame"}}},
+        {"images", {{"board", board_path.filename().string()}}},
+        {"board", {{"x", 0}, {"y", 0}, {"width", 80}, {"height", 80},
+                    {"square_width", 10.0}, {"square_height", 10.0},
+                    {"hash", std::vector<double>(64, 80.0)}}},
+        {"events", {{{"sequence", 1}, {"event", "QUIET"},
+                      {"active_ply", 0}, {"fen", initial_fen}}}},
+    };
+    {
+        std::ofstream output(trace_path);
+        ASSERT_TRUE(output.is_open());
+        output << observation.dump() << '\n';
+    }
+
+    const char* previous_replay_path = std::getenv("CTA_REPLAY_OBSERVATIONS");
+    const std::string previous_value = previous_replay_path ? previous_replay_path : "";
+#ifdef _WIN32
+    _putenv_s("CTA_REPLAY_OBSERVATIONS", trace_path.string().c_str());
+#else
+    setenv("CTA_REPLAY_OBSERVATIONS", trace_path.string().c_str(), 1);
+#endif
+
+    cta::GameData first_data;
+    cta::GameData second_data;
+    try {
+        cta::ChessVideoExtractor first_extractor(board_path.string());
+        first_data = first_extractor.extract_moves_from_video(
+            (root / "source-video-does-not-exist.mp4").string(), "replay-test-first");
+        cta::ChessVideoExtractor second_extractor(board_path.string());
+        second_data = second_extractor.extract_moves_from_video(
+            (root / "source-video-does-not-exist.mp4").string(), "replay-test");
+    } catch (...) {
+#ifdef _WIN32
+        _putenv_s("CTA_REPLAY_OBSERVATIONS", previous_replay_path ? previous_value.c_str() : "");
+#else
+        if (previous_replay_path) setenv("CTA_REPLAY_OBSERVATIONS", previous_value.c_str(), 1);
+        else unsetenv("CTA_REPLAY_OBSERVATIONS");
+#endif
+        std::filesystem::remove_all(root, cleanup_error);
+        throw;
+    }
+#ifdef _WIN32
+    _putenv_s("CTA_REPLAY_OBSERVATIONS", previous_replay_path ? previous_value.c_str() : "");
+#else
+    if (previous_replay_path) setenv("CTA_REPLAY_OBSERVATIONS", previous_value.c_str(), 1);
+    else unsetenv("CTA_REPLAY_OBSERVATIONS");
+#endif
+
+    EXPECT_TRUE(first_data.moves.empty());
+    ASSERT_FALSE(first_data.fens.empty());
+    EXPECT_EQ(first_data.fens.front(), initial_fen);
+    expect_game_data_equal(first_data, second_data);
+    std::filesystem::remove_all(root, cleanup_error);
+}
 
 // ─── TEST CONTROL PANEL ─────────────────────────────────────────────────────
 // Set to 1 to enable, 0 to disable. Comment/uncomment to toggle.
@@ -239,6 +624,97 @@ struct ExpectedGameData {
     std::vector<std::string> all_moves;
     std::vector<std::pair<size_t, std::vector<std::string>>> variation_sequences;
 };
+
+static std::string expected_fen_after_ply(const std::vector<std::string>& moves,
+                                          size_t ply_count) {
+    libchess::Position position(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    const size_t count = std::min(ply_count, moves.size());
+    for (size_t ply = 0; ply < count; ++ply) {
+        try {
+            position.makemove(position.parse_move(moves[ply]));
+        } catch (...) {
+            return {};
+        }
+    }
+    return position.get_fen();
+}
+
+static size_t first_main_line_mismatch(const std::vector<std::string>& expected,
+                                       const std::vector<std::string>& extracted) {
+    size_t mismatch = 0;
+    while (mismatch < expected.size() && mismatch < extracted.size() &&
+           expected[mismatch] == extracted[mismatch]) {
+        ++mismatch;
+    }
+    return mismatch;
+}
+
+static void write_first_divergence_report(
+    const std::string& test_name,
+    const std::string& video_path,
+    const std::vector<std::string>& expected_moves,
+    const GameData& data,
+    size_t mismatch,
+    bool main_line_passed,
+    bool complete_output_passed,
+    const std::string& failure_scope) {
+    const char* report_path = std::getenv("CTA_FAILURE_REPORT_FILE");
+    if (report_path == nullptr || *report_path == '\0' ||
+        (main_line_passed && complete_output_passed)) {
+        return;
+    }
+
+    const bool expected_move_exists = mismatch < expected_moves.size();
+    const bool extracted_move_exists = mismatch < data.moves.size();
+    const double anchor_timestamp = extracted_move_exists && mismatch < data.timestamps.size()
+        ? data.timestamps[mismatch]
+        : (!data.timestamps.empty() ? data.timestamps.back() : 0.0);
+
+    std::string failure_kind = failure_scope;
+    if (failure_kind.empty()) {
+        if (!expected_move_exists) failure_kind = "unexpected_extra_move";
+        else if (!extracted_move_exists) failure_kind = "missing_expected_move";
+        else failure_kind = "move_mismatch";
+    }
+
+    const std::string expected_before_fen = expected_fen_after_ply(expected_moves, mismatch);
+    const std::string expected_after_fen = expected_move_exists
+        ? expected_fen_after_ply(expected_moves, mismatch + 1)
+        : expected_before_fen;
+    const std::string extracted_before_fen = mismatch < data.fens.size()
+        ? data.fens[mismatch] : std::string{};
+    const std::string extracted_after_fen = mismatch + 1 < data.fens.size()
+        ? data.fens[mismatch + 1] : std::string{};
+
+    nlohmann::json report = {
+        {"schema_version", 1},
+        {"test", test_name},
+        {"video", video_path},
+        {"failure_kind", failure_kind},
+        {"failure_scope", failure_scope},
+        {"first_mismatch_ply", mismatch + 1},
+        {"last_matching_ply", mismatch},
+        {"expected_move", expected_move_exists ? expected_moves[mismatch] : ""},
+        {"extracted_move", extracted_move_exists ? data.moves[mismatch] : ""},
+        {"expected_move_count", expected_moves.size()},
+        {"extracted_move_count", data.moves.size()},
+        {"anchor_timestamp", anchor_timestamp},
+        {"expected_before_fen", expected_before_fen},
+        {"expected_after_fen", expected_after_fen},
+        {"extracted_before_fen", extracted_before_fen},
+        {"extracted_after_fen", extracted_after_fen},
+        {"main_line_passed", main_line_passed},
+        {"complete_output_passed", complete_output_passed},
+    };
+
+    std::ofstream output(report_path, std::ios::out | std::ios::trunc);
+    if (!output.is_open()) {
+        std::cerr << "Could not write first-divergence report: " << report_path << "\n";
+        return;
+    }
+    output << report.dump(2) << '\n';
+}
 
 struct ExpectedClockData {
     std::vector<std::string> main_line;
@@ -547,6 +1023,140 @@ static std::multiset<std::string> extract_all_moves_multiset(const GameData& dat
     return all;
 }
 
+static bool verify_game_data_invariants(const GameData& data) {
+    bool valid = true;
+    const auto fail = [&](const std::string& message) {
+        valid = false;
+        ++g_invariant_failure_count;
+        write_invariant_diagnostic(message);
+        ADD_FAILURE() << "GameData invariant: " << message;
+    };
+
+    if (data.fens.size() != data.moves.size() + 1) {
+        fail("main-line FEN count " + std::to_string(data.fens.size()) +
+             " does not equal move count + 1 (" + std::to_string(data.moves.size() + 1) + ")");
+    }
+    if (data.timestamps.size() != data.moves.size()) {
+        fail("main-line timestamp count " + std::to_string(data.timestamps.size()) +
+             " does not equal move count " + std::to_string(data.moves.size()));
+    }
+    if (data.clocks.size() != data.fens.size()) {
+        fail("main-line clock count " + std::to_string(data.clocks.size()) +
+             " does not equal FEN count " + std::to_string(data.fens.size()));
+    }
+    const auto verify_clock_provenance = [&](const ClockInfo& clock, const std::string& location) {
+        if (clock.moved_time_observed && clock.moved_time_missing) {
+            fail("clock at " + location + " is both observed and missing");
+        }
+        if (clock.moved_time_observed && clock.white_time.empty() && clock.black_time.empty()) {
+            fail("clock at " + location + " is marked observed but contains no reading");
+        }
+    };
+    for (size_t i = 0; i < data.clocks.size(); ++i) {
+        verify_clock_provenance(data.clocks[i], "main ply " + std::to_string(i));
+    }
+    if (data.video_moves.size() != data.video_timestamps.size()) {
+        fail("video move and timestamp histories have different lengths");
+    }
+    if (data.video_fens.size() != data.video_moves.size() + 1) {
+        fail("video FEN history " + std::to_string(data.video_fens.size()) +
+             " does not equal video move count + 1 (" +
+             std::to_string(data.video_moves.size() + 1) + ")");
+    }
+
+    if (!data.fens.empty()) {
+        try {
+            libchess::Position position(data.fens.front());
+            for (size_t ply = 0; ply < data.moves.size(); ++ply) {
+                if (ply >= data.fens.size() - 1) break;
+                if (data.fens[ply] != position.get_fen()) {
+                    fail("FEN before ply " + std::to_string(ply + 1) + " differs from reducer position");
+                }
+                const libchess::Move move = position.parse_move(data.moves[ply]);
+                position.makemove(move);
+                if (data.fens[ply + 1] != position.get_fen()) {
+                    fail("FEN after ply " + std::to_string(ply + 1) +
+                         " does not match the accepted move " + data.moves[ply]);
+                }
+            }
+        } catch (const std::exception& error) {
+            fail(std::string("main-line move/FEN replay failed: ") + error.what());
+        }
+    }
+
+    for (size_t i = 1; i < data.timestamps.size(); ++i) {
+        if (data.timestamps[i] < data.timestamps[i - 1]) {
+            fail("main-line timestamps are not monotonic at ply " + std::to_string(i + 1));
+            break;
+        }
+    }
+    for (size_t i = 1; i < data.video_timestamps.size(); ++i) {
+        if (data.video_timestamps[i] < data.video_timestamps[i - 1]) {
+            fail("video timestamps are not monotonic at observation " + std::to_string(i));
+            break;
+        }
+    }
+
+    for (const auto& [parent_ply, variations] : data.variations) {
+        if (parent_ply >= data.fens.size()) {
+            fail("variation parent ply " + std::to_string(parent_ply) + " is outside the main line");
+            continue;
+        }
+        for (const auto& variation : variations) {
+            if (variation.moves.empty()) continue;
+            const bool has_terminal_fen = variation.fens.size() == variation.moves.size() + 1;
+            if (variation.fens.size() != variation.moves.size() && !has_terminal_fen) {
+                fail("variation at parent ply " + std::to_string(parent_ply) +
+                     " has " + std::to_string(variation.fens.size()) +
+                     " FENs for " + std::to_string(variation.moves.size()) +
+                     " moves; expected before-state FENs or before/after FENs");
+            }
+            if (!variation.fens.empty() && variation.fens.front() != data.fens[parent_ply]) {
+                fail("variation at parent ply " + std::to_string(parent_ply) +
+                     " does not start from its parent FEN");
+            }
+            if (variation.timestamps.size() != variation.moves.size()) {
+                fail("variation at parent ply " + std::to_string(parent_ply) +
+                     " has misaligned move and timestamp histories");
+            }
+            for (size_t i = 0; i < variation.clocks.size(); ++i) {
+                verify_clock_provenance(
+                    variation.clocks[i],
+                    "variation parent ply " + std::to_string(parent_ply) +
+                    ", index " + std::to_string(i));
+            }
+            for (size_t i = 1; i < variation.timestamps.size(); ++i) {
+                if (variation.timestamps[i] < variation.timestamps[i - 1]) {
+                    fail("variation timestamps are not monotonic at parent ply " +
+                         std::to_string(parent_ply));
+                    break;
+                }
+            }
+            try {
+                libchess::Position position(data.fens[parent_ply]);
+                for (size_t i = 0; i < variation.moves.size(); ++i) {
+                    if (i < variation.fens.size() && variation.fens[i] != position.get_fen()) {
+                        fail("variation at parent ply " + std::to_string(parent_ply) +
+                             " has an invalid FEN before move " + std::to_string(i + 1));
+                    }
+                    const libchess::Move move = position.parse_move(variation.moves[i]);
+                    position.makemove(move);
+                    if (i + 1 < variation.fens.size() &&
+                        variation.fens[i + 1] != position.get_fen()) {
+                        fail("variation at parent ply " + std::to_string(parent_ply) +
+                             " has an invalid FEN after move " + std::to_string(i + 1));
+                    }
+                }
+            } catch (const std::exception& error) {
+                fail("variation at parent ply " + std::to_string(parent_ply) +
+                     " failed legal replay: " + error.what());
+            }
+        }
+    }
+
+    return valid;
+}
+
 static void print_multiset_delta(const std::multiset<std::string>& extracted,
                                  const std::multiset<std::string>& expected,
                                  const std::string& label) {
@@ -708,6 +1318,8 @@ TEST_F(DetectorsTest, LocateBoardOnItself) {
     EXPECT_GT(geo.bh, 0);
     EXPECT_NEAR(geo.sq_w, static_cast<double>(geo.bw) / 8.0, 1.0);
     EXPECT_NEAR(geo.sq_h, static_cast<double>(geo.bh) / 8.0, 1.0);
+    EXPECT_GT(geo.localization_score, -1.0);
+    EXPECT_GT(geo.localization_scale, 0.0);
 }
 
 #endif // TEST_LOCATE_BOARD
@@ -1053,12 +1665,7 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    size_t first_mismatch = 0;
-    while (first_mismatch < data.moves.size() &&
-           first_mismatch < expected_moves.size() &&
-           data.moves[first_mismatch] == expected_moves[first_mismatch]) {
-        ++first_mismatch;
-    }
+    const size_t first_mismatch = first_main_line_mismatch(expected_moves, data.moves);
     if (first_mismatch < data.moves.size() || first_mismatch < expected_moves.size()) {
         std::cout << "  First main-line mismatch at ply " << (first_mismatch + 1)
                   << ": expected "
@@ -1070,7 +1677,15 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 
     std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
 
-    result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
+    const bool main_line_passed = data.moves == expected_moves;
+    const bool complete_output_passed = extracted_all == expected_all;
+    const bool invariants_passed = verify_game_data_invariants(data);
+    write_first_divergence_report(
+        result.name, video_path, expected_moves, data, first_mismatch,
+        main_line_passed, complete_output_passed,
+        !main_line_passed ? "" :
+        (complete_output_passed ? "" : "variation_or_move_set_mismatch"));
+    result.passed = main_line_passed && complete_output_passed && invariants_passed;
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
     EXPECT_EQ(extracted_all, expected_all)
@@ -1131,7 +1746,16 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 
     std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
 
-    result.passed = (data.moves == expected_moves) && (extracted_all == expected_all);
+    const size_t first_mismatch = first_main_line_mismatch(expected_moves, data.moves);
+    const bool main_line_passed = data.moves == expected_moves;
+    const bool complete_output_passed = extracted_all == expected_all;
+    const bool invariants_passed = verify_game_data_invariants(data);
+    write_first_divergence_report(
+        result.name, video_path, expected_moves, data, first_mismatch,
+        main_line_passed, complete_output_passed,
+        !main_line_passed ? "" :
+        (complete_output_passed ? "" : "variation_or_move_set_mismatch"));
+    result.passed = main_line_passed && complete_output_passed && invariants_passed;
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
     EXPECT_EQ(extracted_all, expected_all)
@@ -1196,12 +1820,7 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     for (const auto& m : data.moves) std::cout << m << " ";
     std::cout << "\n";
 
-    size_t first_mismatch = 0;
-    while (first_mismatch < data.moves.size() &&
-           first_mismatch < expected_moves.size() &&
-           data.moves[first_mismatch] == expected_moves[first_mismatch]) {
-        ++first_mismatch;
-    }
+    const size_t first_mismatch = first_main_line_mismatch(expected_moves, data.moves);
     if (first_mismatch < data.moves.size() || first_mismatch < expected_moves.size()) {
         std::cout << "  First main-line mismatch at ply " << (first_mismatch + 1)
                   << ": expected "
@@ -1219,9 +1838,16 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
         }
     }
 
-    bool moves_passed = (data.moves == expected_moves) &&
-                        (extracted_all == expected_all) &&
-                        (detected_timeline == expected_all);
+    const bool main_line_passed = data.moves == expected_moves;
+    const bool move_set_passed = extracted_all == expected_all;
+    const bool timeline_passed = detected_timeline == expected_all;
+    const bool invariants_passed = verify_game_data_invariants(data);
+    bool moves_passed = main_line_passed && move_set_passed && timeline_passed && invariants_passed;
+    write_first_divergence_report(
+        result.name, video_path, expected_moves, data, first_mismatch,
+        main_line_passed, moves_passed,
+        !timeline_passed ? "accepted_timeline_mismatch" :
+        (!move_set_passed ? "variation_or_move_set_mismatch" : ""));
     if (!moves_passed) {
         std::ofstream variation_dump("full_game_variations_debug.txt", std::ios::trunc);
         if (variation_dump.is_open()) {
@@ -1326,6 +1952,8 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
     std::multiset<std::string> extracted_all = extract_all_moves_multiset(data);
 
     bool moves_passed = (data.moves == expected_moves) && (extracted_all == expected_all);
+    const bool invariants_passed = verify_game_data_invariants(data);
+    moves_passed = moves_passed && invariants_passed;
     EXPECT_EQ(data.moves, expected_moves)
         << "Extracted main line has " << data.moves.size() << " moves, expected " << expected_moves.size();
     EXPECT_EQ(extracted_all, expected_all)

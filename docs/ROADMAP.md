@@ -50,8 +50,9 @@ This roadmap reflects the current implementation. Completed work is summarized s
 ### Diagnostics and test health
 
 - `CTA_STOP_AFTER_SECONDS` and bounded `CTA_TRACE_*` controls support focused reducer replays without changing normal extraction.
-- Clock, settle, historical-state, nearest-state, and exhaustive-revert diagnostics are available through generic environment switches.
-- `tests/run_tests.py` supports filtered/no-build runs, selectable build directories, diagnostic replay arguments, cached Google Test sources, and a production fixture-override scan.
+- Clock, settle, historical-state, nearest-state, geometry, and exhaustive-revert diagnostics are available through generic environment switches.
+- Structured JSONL observations can retain mapper provenance, detector assessments, board features, and sampled image artifacts; `CTA_REPLAY_OBSERVATIONS` reuses that contract for reducer replay.
+- `tests/run_tests.py` supports filtered/no-build runs, selectable build directories, diagnostic JSONL/TSV output, automatic first-divergence bundles, bundle reanalysis, replay-trace comparison, cached Google Test sources, and a production fixture-override scan.
 - Integration expectations are read from sample PGN files rather than fixture-specific production code or golden JSON artifacts.
 
 ## Reference commands

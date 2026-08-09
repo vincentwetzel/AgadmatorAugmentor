@@ -80,6 +80,11 @@ std::unique_ptr<BoardGeometry> BoardCache::load_or_locate(
             auto geo = std::make_unique<BoardGeometry>();
             geo->bx = bx; geo->by = by; geo->bw = bw; geo->bh = bh;
             geo->sq_w = c["sq_w"]; geo->sq_h = c["sq_h"];
+            // Older cache entries do not contain localization metadata. Keep
+            // that absence explicit instead of presenting zero as a measured
+            // correlation score.
+            geo->localization_score = c.value("localization_score", -1.0);
+            geo->localization_scale = c.value("localization_scale", 0.0);
             log_info("Loaded exact board scale from cache (skipped multi-pass search).");
             return geo;
         } else {
@@ -92,7 +97,12 @@ std::unique_ptr<BoardGeometry> BoardCache::load_or_locate(
     
     try {
         std::filesystem::create_directories(g_appdata_dir);
-        g_board_cache[cache_key] = { {"bx", geo->bx}, {"by", geo->by}, {"bw", geo->bw}, {"bh", geo->bh}, {"sq_w", geo->sq_w}, {"sq_h", geo->sq_h} };
+        g_board_cache[cache_key] = {
+            {"bx", geo->bx}, {"by", geo->by}, {"bw", geo->bw}, {"bh", geo->bh},
+            {"sq_w", geo->sq_w}, {"sq_h", geo->sq_h},
+            {"localization_score", geo->localization_score},
+            {"localization_scale", geo->localization_scale}
+        };
         std::ofstream ofs(g_cache_file); 
         ofs << g_board_cache.dump(4);
     } catch (...) {}

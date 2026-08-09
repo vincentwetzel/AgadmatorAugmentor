@@ -6,7 +6,7 @@ A C++20 application that analyzes chess videos, reconstructs legal games from th
 
 ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data, optional opening tags, and optional move-quality labels.
 
-The extraction path uses a map-reduce scan: chunk workers emit visual candidates, while one chronological reducer maintains the strict chess state, validates moves, and detects analysis reverts. The correctness-first default uses one mapper worker; bounded concurrency can be enabled for controlled experiments with `CTA_MAX_WORKERS`. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches.
+The extraction path uses a map-reduce scan: chunk workers emit visual candidates, while one chronological reducer maintains the strict chess state, validates moves, and detects analysis reverts. The correctness-first default uses one mapper worker; bounded concurrency can be enabled for controlled experiments with `CTA_MAX_WORKERS`. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches. Diagnostic runs can also retain structured JSONL observations, images, reducer events, and invariant reports for replay.
 
 Advanced extraction tuning is available through environment variables for benchmarking difficult storage paths: `CTA_CHUNK_SECONDS` controls map chunk duration (30-300 seconds), `CTA_MAX_CHUNK_LOOKAHEAD` controls reducer lookahead, and `CTA_MAX_WORKERS` caps mapper concurrency. The worker default is one for deterministic correctness.
 
@@ -25,13 +25,13 @@ Advanced extraction tuning is available through environment variables for benchm
 - **Operational Logging:** GUI and headless logs include elapsed-time prefixes so long extraction and FFmpeg phases are easier to diagnose.
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
 - **Analysis Variations:** Preserve stable, legal analysis branches with their originating FEN, timestamps, confidence scores, and inherited branch clocks.
-- **Diagnostic Replay:** Bound a run to a timestamp and export reducer events to TSV without changing production detector rules.
+- **Diagnostic Replay:** Bound a run to a timestamp and export reducer events to TSV/JSONL without changing production detector rules; failed integration runs can be reanalyzed from a compact observation bundle.
 
 ## Quick Start
 
 ### Windows Installer
 
-Download and run the latest NSIS installer from the Releases page. The application stores configuration in `%APPDATA%\ChessTubeAnalyzer` and exports generated files to your Documents folder by default.
+Download and run the latest NSIS installer from the Releases page. The application stores configuration in `%APPDATA%\ChessTubeAnalyzer` and writes generated files beside the source video by default; a custom output directory can be selected in Settings.
 
 ### Developer Build
 
@@ -81,11 +81,7 @@ cd build\Release
 "ChessTube Analyzer.exe" "path\to\video.mp4" --multi-pv 3 --pgn
 ```
 
-Multiple videos can be passed as a semicolon-separated list:
-
-```cmd
-"ChessTube Analyzer.exe" "path\to\video1.mp4;path\to\video2.mp4"
-```
+The GUI supports multiple videos in one queue. Headless mode accepts one positional video path per invocation; run the executable once per video when scripting batch processing.
 
 ## Queue And Templates
 
@@ -125,6 +121,7 @@ ChessTubeAnalyzer/
 |   |-- ArrowDetector.h
 |   |-- ClockRecognizer.h
 |   |-- ChessVideoExtractor.h
+|   |-- ExtractionDiagnostics.h
 |   |-- OpeningFetcher.h
 |   |-- StockfishAnalyzer.h
 |   |-- GPUAccelerator.h
@@ -139,6 +136,7 @@ ChessTubeAnalyzer/
 |   |-- ChessVideoExtractor.cpp
 |   |-- ChessVideoExtractor_Extraction.cpp
 |   |-- ChessVideoExtractor_Internal.cpp
+|   |-- ExtractionDiagnostics.cpp
 |   |-- OpeningFetcher.cpp
 |   |-- StockfishAnalyzer.cpp
 |   |-- StockfishAnalysisHelper.cpp
@@ -209,7 +207,7 @@ python tests\run_tests.py
 
 The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
 
-For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--trace-start`, and `--trace-end`. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`.
+For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle` or `--compare-replay-traces source.jsonl replay.jsonl` to inspect it without decoding the source video.
 
 ## Performance Snapshot
 

@@ -282,6 +282,8 @@ BoardGeometry locate_board(const cv::Mat& img_bgr, const cv::Mat& board_template
     geo.bh = r3.best_h;
     geo.sq_w = static_cast<double>(geo.bw) / 8.0;
     geo.sq_h = static_cast<double>(geo.bh) / 8.0;
+    geo.localization_score = r3.best_corr;
+    geo.localization_scale = r3.best_scale;
 
     return geo;
 }

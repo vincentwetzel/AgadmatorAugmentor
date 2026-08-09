@@ -49,7 +49,7 @@ Acts as the game logic authority and state machine filter.
 - Retains stable reverted move sequences as PGN variations while pruning superseded nested branches and ignoring short-lived one-ply flashes that do not survive long enough to be meaningful analysis lines.
 - Validates variation roots from FEN transitions and preserves clock provenance, distinguishing directly observed moved clocks from missing or inherited replay clocks.
 - Applies narrow endpoint disambiguation after legal move scoring when the UI evidence is visually adjacent but the chess state is clear, including rook rank/file endpoint ambiguity and immediate queen recaptures of just-moved pawns.
-- Exposes generic timestamp-bounded reducer traces and clock/revert diagnostics for test investigation; these controls never select moves from fixture names or expected outputs.
+- Exposes generic timestamp-bounded reducer traces, structured observation diagnostics, clock/revert diagnostics, and replay comparison inputs for test investigation; these controls never select moves from fixture names or expected outputs.
 - Filters out sensory hallucinations and false positives, ensuring the output is 100% legal and accurate.
 
 ### Universal detector constraint
@@ -122,7 +122,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
   - ✅ **Principal Variation:** Text overlay showing the top engine line.
   - ✅ **Opening Name:** Optional text overlay showing the detected ECO/opening name.
 - Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the final MP4.
-- Produces `output/output_with_analysis.mp4`.
+- Produces an annotated MP4 at the configured output path, preserving source audio when available; the GUI selects the path and the CLI defaults PGN output under `output/`.
 
 ## Data Flow
 
@@ -159,10 +159,11 @@ Raw Video
 | Arrow Detection | `ArrowDetector.h/.cpp` |
 | Clock OCR | `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` |
 | Verification + Orchestrator | `ChessVideoExtractor.h/.cpp`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*` |
+| Extraction Diagnostics | `ExtractionDiagnostics.h/.cpp` |
 | Move Validation Logic | `MoveValidations.h/.cpp` |
 | Video Chunk Mapping | `VideoChunkMapper.h/.cpp` |
-| Revert Management | `RevertManager.h/.cpp`, `RevertDetector.h/.cpp` |
-| Move Scoring Helpers | `MoveScorer.h/.cpp`, `MoveVerifier.h/.cpp` |
+| Revert Management | `RevertManager.h/.cpp` |
+| Move Scoring Helpers | `MoveScorer.h/.cpp` |
 | Core Utilities | `ExtractorUtils.h/.cpp`, `ChessFenUtils.h/.cpp`, `SysUtils.h/.cpp` |
 | Stockfish Analysis | `StockfishAnalyzer.h/.cpp`, `StockfishAnalysisHelper.h/.cpp` |
 | Opening Metadata | `OpeningFetcher.h/.cpp`, `LichessSyncHelper.h/.cpp` |
@@ -190,7 +191,19 @@ This topology allows rendering and engine analysis to begin immediately after th
 
 ## AI Rules & Requirements
 
-### Git — HARD REQUIREMENTS
+### Coding Standards - REQUIRED
+
+- Before modifying repository files, agents MUST read and follow
+  [`CODING_STANDARDS.md`](CODING_STANDARDS.md).
+- `CODING_STANDARDS.md` is the repository-wide baseline for implementation,
+  testing, UI, architecture, error handling, and generated-file practices.
+  The more specific module rules in this file also apply.
+- Every code change must be reviewed against the coding-standards checklist
+  before handoff. If an existing implementation prevents full compliance,
+  preserve behavior, document the limitation, and avoid expanding the
+  inconsistency in new code.
+
+### Git - HARD REQUIREMENTS
 
 - **NEVER** run `git push` unless the user explicitly instructs you to do so.
 - **NEVER** assume "yes, push" or auto-push after a commit.

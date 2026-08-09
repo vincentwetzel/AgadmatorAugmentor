@@ -9,6 +9,8 @@ struct BoardGeometry {
     int bx = 0, by = 0;        // Top-left corner (x, y)
     int bw = 0, bh = 0;        // Board width, height in pixels
     double sq_w = 0.0, sq_h = 0.0; // Square width, height in pixels
+    double localization_score = 0.0; // Final template correlation, [-1, 1]
+    double localization_scale = 0.0; // Template scale selected by the final pass
 };
 
 /// Performs multi-pass template matching to find the exact board coordinates and scale.

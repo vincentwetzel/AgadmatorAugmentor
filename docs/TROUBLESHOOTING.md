@@ -68,6 +68,14 @@ Variations are retained only after legal root-FEN validation, visual confidence 
 
 Use `CTA_TRACE_HISTORICAL=1`, `CTA_TRACE_NEAREST=1`, and `CTA_TRACE_SETTLE=1` with `CTA_TRACE_FILE` to inspect state handoffs. `CTA_REVERT_EXHAUSTIVE_FALLBACK=1` provides a slower reference lookup for comparison.
 
+If an integration test fails, the test runner automatically creates a sibling `*_bundle` under the selected build directory's `diagnostics` folder. It contains the first-divergence report, verbose JSONL diagnostics, compact observations, and any retained image artifacts. Reanalyze the saved bundle without decoding the source video:
+
+```cmd
+python tests\run_tests.py --replay-bundle build_tests\diagnostics\first_divergence_bundle
+```
+
+Use `--compare-replay-traces source.jsonl replay.jsonl` to compare observation IDs, mapper provenance, board hashes, and reducer events between a source run and an observation replay.
+
 ## GPU acceleration is unavailable
 
 CUDA/NPP is optional. The project compiles and runs through CPU fallbacks when `ENABLE_SYSTEM_CUDA=OFF`, the CUDA Toolkit is absent, or a compatible GPU is not found. CPU move scoring remains the correctness reference, so GPU availability should not change the legal move result.

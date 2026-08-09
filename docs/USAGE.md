@@ -104,6 +104,10 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 - `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`: add historical-state, nearest-state, or settle diagnostics to a trace.
 - `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, and `CTA_DEBUG_CLOCK_ROI_DIR`: emit clock candidate diagnostics or save a selected clock ROI.
 - `CTA_REVERT_EXHAUSTIVE_FALLBACK`: enable the slower exhaustive revert lookup for comparison/debugging.
+- `CTA_DIAGNOSTIC_FILE`: write structured reducer observations as JSONL.
+- `CTA_DIAGNOSTIC_FRAME_DIR` and `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS`: retain sampled full-frame, board, and clock-ROI artifacts for a diagnostic JSONL run.
+- `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS`: control periodic geometry rechecks during diagnostics (clamped to 1-30 seconds).
+- `CTA_REPLAY_OBSERVATIONS`: replace source-video decoding and board initialization with a saved compact `observations.jsonl` trace and its artifacts.
 
 The reducer also applies a bounded settle window, recent-square conflict checks, indexed revert lookup, hover-box rejection, and clock-turn validation before accepting a move. These checks are intentionally conservative so PGN output remains legal even when the video contains analysis reverts or dragging artifacts.
 
@@ -132,3 +136,17 @@ python tests\run_tests.py --build-dir build_diag --no-build --gtest-filter Detec
 ```
 
 `--build-dir` selects an existing CMake tree; it defaults to `build_tests` or `CTA_TEST_BUILD_DIR`.
+
+When a test run finds a first divergence, the runner creates a sibling `*_bundle` containing the failure report, verbose JSONL diagnostics, compact observations, optional TSV/invariant files, and retained image artifacts. Reanalyze it without decoding the video again:
+
+```cmd
+python tests\run_tests.py --replay-bundle build_diag\diagnostics\first_divergence_bundle
+```
+
+Compare a source diagnostic trace with an observation-replay trace:
+
+```cmd
+python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
+```
+
+The comparison checks observation IDs, mapper provenance, board hashes, and then event/FEN/move agreement. It is a diagnostic comparison tool; replay equivalence across every accepted move, clock, revert, and variation case remains tracked in the roadmap.

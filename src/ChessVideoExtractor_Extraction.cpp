@@ -1,6 +1,7 @@
 // Extracted from cpp directory
 #include "ChessVideoExtractor.h"
 #include "ChessVideoExtractor_Internal.h"
+#include "ExtractionDiagnostics.h"
 #include "BoardAnalysis.h"
 #include "GPUAccelerator.h"
 #include "BoardLocalizer.h"
@@ -14,6 +15,7 @@
 #include "libchess/move.hpp"
 
 #include <opencv2/opencv.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -23,6 +25,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -193,6 +196,122 @@ static std::optional<int> clock_drop_seconds(const std::string& candidate, const
     return *prev_seconds - *cand_seconds;
 }
 
+struct ObservationReplayBootstrap {
+    BoardGeometry geometry;
+    cv::Mat first_frame;
+    double duration = 0.1;
+    std::string initial_fen;
+};
+
+static ObservationReplayBootstrap load_observation_replay_bootstrap(
+    const std::string& observation_path) {
+    std::ifstream input(observation_path);
+    if (!input.is_open()) {
+        throw std::runtime_error("Could not open observation replay trace: " + observation_path);
+    }
+
+    const std::filesystem::path trace_path(observation_path);
+    auto resolve_asset = [&](const nlohmann::json& images, const char* name) {
+        if (!images.contains(name) || !images.at(name).is_string()) {
+            return std::filesystem::path();
+        }
+        std::filesystem::path asset(images.at(name).get<std::string>());
+        if (asset.is_relative()) asset = trace_path.parent_path() / asset;
+        return asset;
+    };
+
+    ObservationReplayBootstrap bootstrap;
+    std::string line;
+    bool loaded_first_observation = false;
+    try {
+        while (std::getline(input, line)) {
+            if (line.empty()) continue;
+            const auto observation = nlohmann::json::parse(line);
+            if (!observation.is_object()) {
+                throw std::runtime_error("observation record is not an object");
+            }
+            bootstrap.duration = std::max(
+                bootstrap.duration, observation.value("timestamp", 0.0) + 0.1);
+            if (loaded_first_observation) continue;
+            loaded_first_observation = true;
+
+            const auto board = observation.value("board", nlohmann::json::object());
+            bootstrap.geometry.bx = board.value("x", 0);
+            bootstrap.geometry.by = board.value("y", 0);
+            bootstrap.geometry.bw = board.value("width", 0);
+            bootstrap.geometry.bh = board.value("height", 0);
+            bootstrap.geometry.sq_w = board.value("square_width", 0.0);
+            bootstrap.geometry.sq_h = board.value("square_height", 0.0);
+            bootstrap.geometry.localization_score = -1.0;
+            if (bootstrap.geometry.bw <= 0 || bootstrap.geometry.bh <= 0) {
+                throw std::runtime_error("first observation has invalid board geometry");
+            }
+            if (bootstrap.geometry.sq_w <= 0.0) {
+                bootstrap.geometry.sq_w = static_cast<double>(bootstrap.geometry.bw) / 8.0;
+            }
+            if (bootstrap.geometry.sq_h <= 0.0) {
+                bootstrap.geometry.sq_h = static_cast<double>(bootstrap.geometry.bh) / 8.0;
+            }
+
+            const auto images = observation.value("images", nlohmann::json::object());
+            const auto board_path = resolve_asset(images, "board");
+            if (board_path.empty()) {
+                throw std::runtime_error("first observation has no board artifact");
+            }
+            const cv::Mat board_image = cv::imread(board_path.string(), cv::IMREAD_COLOR);
+            if (board_image.empty()) {
+                throw std::runtime_error("could not read first observation board artifact: " +
+                                         board_path.string());
+            }
+
+            const auto frame_path = resolve_asset(images, "frame");
+            if (!frame_path.empty()) {
+                bootstrap.first_frame = cv::imread(frame_path.string(), cv::IMREAD_COLOR);
+            }
+            if (bootstrap.first_frame.empty()) {
+                const int frame_width = std::max(
+                    bootstrap.geometry.bx + bootstrap.geometry.bw, board_image.cols);
+                const int frame_height = std::max(
+                    bootstrap.geometry.by + bootstrap.geometry.bh, board_image.rows);
+                bootstrap.first_frame = cv::Mat(
+                    std::max(1, frame_height), std::max(1, frame_width), CV_8UC3,
+                    cv::Scalar(0, 0, 0));
+                const cv::Rect destination(
+                    bootstrap.geometry.bx, bootstrap.geometry.by,
+                    std::min(bootstrap.geometry.bw, board_image.cols),
+                    std::min(bootstrap.geometry.bh, board_image.rows));
+                board_image(cv::Rect(0, 0, destination.width, destination.height))
+                    .copyTo(bootstrap.first_frame(destination));
+            }
+
+            const auto events = observation.value("events", nlohmann::json::array());
+            if (events.is_array()) {
+                for (const auto& event : events) {
+                    if (event.contains("fen") && event.at("fen").is_string() &&
+                        !event.at("fen").get<std::string>().empty()) {
+                        bootstrap.initial_fen = event.at("fen").get<std::string>();
+                        break;
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& error) {
+        throw std::runtime_error(
+            "Could not load observation replay bootstrap '" + observation_path + "': " +
+            error.what());
+    }
+
+    if (!loaded_first_observation || bootstrap.first_frame.empty()) {
+        throw std::runtime_error("Observation replay trace contains no usable observations: " +
+                                 observation_path);
+    }
+    if (bootstrap.initial_fen.empty()) {
+        bootstrap.initial_fen =
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    }
+    return bootstrap;
+}
+
 // ── Main extraction loop ────────────────────────────────────────────────────
 
 GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_path,
@@ -211,35 +330,59 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         }
     };
 
-    // Initialize libchess position
-    pos_ptr_ = std::make_unique<libchess::Position>("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    const char* replay_path_env = std::getenv("CTA_REPLAY_OBSERVATIONS");
+    const std::string observation_replay_path =
+        replay_path_env != nullptr ? replay_path_env : std::string();
+    const bool observation_replay_requested = !observation_replay_path.empty();
+    std::optional<ObservationReplayBootstrap> replay_bootstrap;
+    if (observation_replay_requested) {
+        replay_bootstrap = load_observation_replay_bootstrap(observation_replay_path);
+    }
+
+    // A bounded trace starts from the state recorded in its first event. This
+    // keeps replay local to the diagnostic window while retaining the same
+    // legal-move reducer used by ordinary video extraction.
+    const std::string initial_fen = replay_bootstrap && !replay_bootstrap->initial_fen.empty()
+        ? replay_bootstrap->initial_fen
+        : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    pos_ptr_ = std::make_unique<libchess::Position>(initial_fen);
 
     std::string safe_video_path = utils::get_safe_path(video_path);
-
-    cv::VideoCapture cap = extractor_detail::open_video_capture(safe_video_path);
-
-    if (!cap.isOpened()) {
-        throw std::runtime_error("Cannot open video: " + video_path);
-    }
-
-    double fps = cap.get(cv::CAP_PROP_FPS);
-    double total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
-    double duration = total_frames / fps;
-
-    log_info(utils::ts(elapsed()) + " Locating board coordinates using template matching...");
+    cv::VideoCapture cap;
+    double fps = 30.0;
+    double duration = 0.0;
     cv::Mat first_frame;
-    cap >> first_frame;
-    if (first_frame.empty()) {
-        throw std::runtime_error("Cannot read first frame of video.");
-    }
-    
-    // Free the hardware video decoder instance to save VRAM and avoid contention
-    // (the map-reduce workers use their own dedicated VideoCapture instances)
-    cap.release();
+    if (observation_replay_requested) {
+        first_frame = replay_bootstrap->first_frame;
+        duration = replay_bootstrap->duration;
+        log_info(utils::ts(elapsed()) + " Loading board geometry from observation replay trace...");
+    } else {
+        cap = extractor_detail::open_video_capture(safe_video_path);
+        if (!cap.isOpened()) {
+            throw std::runtime_error("Cannot open video: " + video_path);
+        }
 
-    geo_ = BoardCache::load_or_locate(safe_video_path, first_frame, board_template_, [&](const std::string& msg) {
-        log_info(utils::ts(elapsed()) + " " + msg);
-    });
+        fps = cap.get(cv::CAP_PROP_FPS);
+        double total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
+        duration = total_frames / fps;
+        log_info(utils::ts(elapsed()) + " Locating board coordinates using template matching...");
+        cap >> first_frame;
+        if (first_frame.empty()) {
+            throw std::runtime_error("Cannot read first frame of video.");
+        }
+
+        // Free the hardware video decoder instance to save VRAM and avoid
+        // contention; map-reduce workers use their own VideoCapture instances.
+        cap.release();
+    }
+
+    if (observation_replay_requested) {
+        geo_ = std::make_unique<BoardGeometry>(replay_bootstrap->geometry);
+    } else {
+        geo_ = BoardCache::load_or_locate(safe_video_path, first_frame, board_template_, [&](const std::string& msg) {
+            log_info(utils::ts(elapsed()) + " " + msg);
+        });
+    }
 
     gpu_pipeline_ = std::make_unique<GPUPipeline>();
 
@@ -491,7 +634,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
     // Extract initial clocks
     clock_cache_ = std::make_unique<ClockCache>();
-    ClockState init_clocks = extract_clocks(first_frame, board_template_, *geo_, clock_cache_.get());
+    ClockState init_clocks;
+    if (!observation_replay_requested) {
+        init_clocks = extract_clocks(first_frame, board_template_, *geo_, clock_cache_.get());
+    }
     data.clocks.push_back({init_clocks.active_player, init_clocks.white_time, init_clocks.black_time});
 
     // Board image history for revert detection
@@ -573,21 +719,51 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     };
 
     std::ofstream trace_stream;
+    std::ofstream diagnostic_stream;
+    std::uint64_t diagnostic_sequence = 0;
+    std::uint64_t current_observation_id = 0;
+    std::uint64_t diagnostic_candidate_sequence = 0;
+    std::uint64_t current_candidate_id = 0;
+    std::uint64_t current_transition_id = 0;
+    diagnostics::Evidence diagnostic_evidence_context;
     double trace_start = read_env_double("CTA_TRACE_START", -1.0);
     double trace_end = read_env_double("CTA_TRACE_END", -1.0);
     const bool trace_historical = read_env_int("CTA_TRACE_HISTORICAL", 0) > 0;
     const bool trace_nearest = read_env_int("CTA_TRACE_NEAREST", 0) > 0;
-    if (const char* trace_path = std::getenv("CTA_TRACE_FILE");
-        trace_path != nullptr && *trace_path != '\0') {
+    const char* trace_path = std::getenv("CTA_TRACE_FILE");
+    const char* diagnostic_path = std::getenv("CTA_DIAGNOSTIC_FILE");
+    const char* diagnostic_frame_dir_env = std::getenv("CTA_DIAGNOSTIC_FRAME_DIR");
+    const std::string diagnostic_frame_dir =
+        diagnostic_frame_dir_env != nullptr ? diagnostic_frame_dir_env : std::string();
+    const bool trace_requested = trace_path != nullptr && *trace_path != '\0';
+    const bool diagnostic_requested = diagnostic_path != nullptr && *diagnostic_path != '\0';
+    const double geometry_check_interval_seconds = std::clamp(
+        read_env_double("CTA_GEOMETRY_CHECK_INTERVAL_SECONDS", 5.0), 1.0, 30.0);
+    const double diagnostic_frame_interval_seconds = std::clamp(
+        read_env_double("CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS",
+                       geometry_check_interval_seconds), 1.0, 30.0);
+    std::uint64_t diagnostic_template_identity = 0;
+    if (diagnostic_requested && !board_template_.empty()) {
+        const auto* bytes = board_template_.ptr<unsigned char>(0);
+        const std::size_t byte_count = board_template_.total() * board_template_.elemSize();
+        diagnostic_template_identity = 14695981039346656037ull;
+        for (std::size_t index = 0; index < byte_count; ++index) {
+            diagnostic_template_identity ^= bytes[index];
+            diagnostic_template_identity *= 1099511628211ull;
+        }
+    }
+    if (trace_requested || diagnostic_requested) {
         if (trace_start < 0.0) trace_start = 0.0;
         if (trace_end < 0.0) trace_end = duration;
     }
-    if (const char* trace_path = std::getenv("CTA_TRACE_FILE");
-        trace_path != nullptr && *trace_path != '\0' && trace_end >= trace_start && trace_start >= 0.0) {
+    if (trace_requested && trace_end >= trace_start && trace_start >= 0.0) {
         trace_stream.open(trace_path, std::ios::out | std::ios::trunc);
         if (trace_stream.is_open()) {
             trace_stream << "event\tt\tactive_ply\tfen\tbest_move\tbest_score\tmax_sd\ty_from\ty_to\tmeta\n";
         }
+    }
+    if (diagnostic_requested && trace_end >= trace_start && trace_start >= 0.0) {
+        diagnostic_stream.open(diagnostic_path, std::ios::out | std::ios::trunc);
     }
     auto trace_candidate = [&](const char* event,
                                double event_t,
@@ -599,17 +775,76 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                double y_from,
                                double y_to,
                                const std::string& meta = std::string()) {
-        if (!trace_stream.is_open() || event_t < trace_start || event_t > trace_end) return;
-        trace_stream << event << '\t'
-                     << std::fixed << std::setprecision(3) << event_t << '\t'
-                     << active_ply << '\t'
-                     << fen << '\t'
-                     << best_move << '\t'
-                     << std::setprecision(3) << best_score << '\t'
-                     << max_sd << '\t'
-                     << y_from << '\t'
-                     << y_to << '\t'
-                     << meta << '\n';
+        if (event != nullptr && std::strcmp(event, "CANDIDATE") == 0) {
+            // Candidate IDs represent reducer proposals, while observation IDs
+            // identify the mapped frame that supplied each proposal.  Keeping
+            // them separate lets a later accepted/rejected event be correlated
+            // across settle frames without losing frame provenance.
+            current_candidate_id = ++diagnostic_candidate_sequence;
+        }
+        if ((!trace_stream.is_open() && !diagnostic_stream.is_open()) ||
+            event_t < trace_start || event_t > trace_end) return;
+        if (trace_stream.is_open()) {
+            trace_stream << event << '\t'
+                         << std::fixed << std::setprecision(3) << event_t << '\t'
+                         << active_ply << '\t'
+                         << fen << '\t'
+                         << best_move << '\t'
+                         << std::setprecision(3) << best_score << '\t'
+                         << max_sd << '\t'
+                         << y_from << '\t'
+                         << y_to << '\t'
+                         << meta << '\n';
+        }
+
+        if (diagnostic_stream.is_open()) {
+            if (event != nullptr && std::strcmp(event, "ACCEPT") == 0) {
+                ++current_transition_id;
+            }
+            const bool is_revert_event =
+                event != nullptr && (std::strncmp(event, "REVERT", 6) == 0 ||
+                                     std::strncmp(event, "REBASE", 6) == 0 ||
+                                     std::strncmp(event, "HANDOFF", 7) == 0 ||
+                                     std::strncmp(event, "HISTORICAL", 10) == 0);
+            const std::string reducer_state =
+                event != nullptr && std::strcmp(event, "ACCEPT") == 0 ? "accepted" :
+                event != nullptr && std::strcmp(event, "CANDIDATE") == 0 ? "candidate" :
+                event != nullptr && std::strcmp(event, "QUIET") == 0 ? "quiet" :
+                event != nullptr && std::strcmp(event, "VALIDATION_REJECTED") == 0 ? "validation_rejected" :
+                event != nullptr && std::strcmp(event, "REJECTED_FRAME") == 0 ? "frame_rejected" :
+                is_revert_event ? "recovering" : "observed";
+            const auto record = diagnostics::from_legacy_trace(
+                ++diagnostic_sequence, event, event_t, active_ply, fen, best_move,
+                best_score, max_sd, y_from, y_to, meta,
+                current_observation_id, current_transition_id,
+                diagnostic_evidence_context,
+                current_candidate_id != 0 ? current_candidate_id : current_observation_id,
+                current_transition_id,
+                static_cast<std::uint64_t>(branch_counter),
+                static_cast<std::uint64_t>(branch_counter),
+                reducer_state);
+            diagnostics::write_json_line(diagnostic_stream, record);
+            diagnostic_stream.flush();
+        }
+    };
+
+    auto trace_revert_applied = [&](double event_t, size_t restored_ply,
+                                    double max_square_diff,
+                                    const char* restore_reason) {
+        trace_candidate(
+            "REVERT_APPLIED", event_t, restored_ply, data.fens.back(), "", 0.0,
+            max_square_diff, 0.0, 0.0,
+            "restored_ply=" + std::to_string(restored_ply) +
+            ";reason=" + (restore_reason != nullptr ? restore_reason : "unknown"));
+    };
+
+    auto add_diagnostic_tag = [&](const char* tag) {
+        if (!diagnostic_stream.is_open() || tag == nullptr || *tag == '\0') return;
+        if (std::find(diagnostic_evidence_context.observation_tags.begin(),
+                      diagnostic_evidence_context.observation_tags.end(), tag) ==
+            diagnostic_evidence_context.observation_tags.end()) {
+            diagnostic_evidence_context.observation_tags.emplace_back(tag);
+        }
     };
 
     double chunk_duration = std::clamp(read_env_double("CTA_CHUNK_SECONDS", 300.0), 30.0, 300.0);
@@ -950,10 +1185,16 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     log_info(schedule_ss.str());
 
     std::vector<bool> unresolved_consumed_squares(64, false);
+    double next_geometry_check_t = 0.0;
+    BoardGeometry previous_diagnostic_geometry;
+    bool have_previous_diagnostic_geometry = false;
 
     VideoChunkMapper mapper(safe_video_path, extraction_duration, chunk_duration, total_chunks,
                             *geo_, margin_h_, margin_w_, static_cast<int>(debug_level_),
-                            has_clocks, max_lookahead, num_threads, frame_width, frame_height);
+                            has_clocks, max_lookahead, num_threads, frame_width, frame_height,
+                            diagnostic_stream.is_open(), diagnostic_frame_interval_seconds,
+                            diagnostic_frame_dir, trace_start, trace_end,
+                            observation_replay_path);
     mapper.start(cancel_flag);
 
     double last_progress_t = -1.0;
@@ -968,7 +1209,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 break;
             }
             if (mapper.has_failed()) {
-                throw std::runtime_error("Worker thread failed to open VideoCapture for a chunk.");
+                const std::string reason = mapper.failure_reason();
+                throw std::runtime_error(
+                    reason.empty() ? "Mapper worker failed without a diagnostic reason." : reason);
             }
             break;
         }
@@ -994,6 +1237,48 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             if (cancel_flag && *cancel_flag) break;
             
             auto& cf = candidates[i];
+            current_observation_id = cf.observation_id;
+            diagnostic_evidence_context = {};
+            diagnostic_evidence_context.mapper_chunk = cf.mapper_chunk;
+            diagnostic_evidence_context.source_frame_index = cf.source_frame_index;
+            diagnostic_evidence_context.mapper_emission_reason = cf.emission_reason;
+            diagnostic_evidence_context.diagnostic_frame_path = cf.diagnostic_frame_path;
+            diagnostic_evidence_context.diagnostic_board_path = cf.diagnostic_board_path;
+            diagnostic_evidence_context.diagnostic_clock_top_path = cf.diagnostic_clock_top_path;
+            diagnostic_evidence_context.diagnostic_clock_bottom_path = cf.diagnostic_clock_bottom_path;
+            diagnostic_evidence_context.board_hash = cf.board_hash;
+            diagnostic_evidence_context.yellow_arrows_checked = diagnostic_stream.is_open();
+            diagnostic_evidence_context.yellow_arrows = cf.yellow_arrows;
+            diagnostic_evidence_context.template_identity = diagnostic_template_identity;
+            diagnostic_evidence_context.board_x = geo_->bx;
+            diagnostic_evidence_context.board_y = geo_->by;
+            diagnostic_evidence_context.board_width = geo_->bw;
+            diagnostic_evidence_context.board_height = geo_->bh;
+            diagnostic_evidence_context.square_width = geo_->sq_w;
+            diagnostic_evidence_context.square_height = geo_->sq_h;
+            diagnostic_evidence_context.localization_score = geo_->localization_score;
+            diagnostic_evidence_context.localization_scale = geo_->localization_scale;
+            diagnostic_evidence_context.yellow_endpoint_threshold =
+                validation::kYellowEndpointThreshold;
+            diagnostic_evidence_context.yellow_pair_threshold =
+                validation::kYellowPairThreshold;
+            diagnostic_evidence_context.yellow_assessment.thresholds = {
+                validation::kYellowEndpointThreshold,
+                validation::kYellowPairThreshold};
+            if (cf.emission_reason == "initial_frame") {
+                add_diagnostic_tag("initial");
+            } else if (cf.emission_reason == "settled_tail") {
+                add_diagnostic_tag("settled");
+            } else if (cf.emission_reason == "motion_burst_cap") {
+                add_diagnostic_tag("motion");
+                add_diagnostic_tag("animation");
+            } else if (cf.emission_reason == "motion_leading_edge" ||
+                       cf.emission_reason == "motion_spike_prev_frame") {
+                add_diagnostic_tag("motion");
+            }
+            if (!cf.yellow_arrows.empty()) {
+                add_diagnostic_tag("arrow_activity");
+            }
             ++reducer_candidates_seen;
             t = cf.t;
             double next_t = round_t(t + fine_step);
@@ -1002,6 +1287,115 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         cv::Mat& full_bgr = cf.full_bgr;
         cv::Mat& board_bgr = cf.board_bgr;
         cv::Mat& board_gray = cf.board_gray;
+        auto record_diagnostic_yellow_measurement = [&](const char* square) {
+            if (!diagnostic_stream.is_open() || square == nullptr || *square == '\0') return;
+            const auto measured = validation::measure_yellowness(
+                board_bgr, *geo_, square, true);
+            const auto existing = std::find_if(
+                diagnostic_evidence_context.yellow_measurements.begin(),
+                diagnostic_evidence_context.yellow_measurements.end(),
+                [square](const diagnostics::YellowMeasurement& item) {
+                    return item.square == square;
+                });
+            diagnostics::YellowMeasurement item;
+            item.square = square;
+            item.corner_scores = measured.corner_scores;
+            item.corner_bgr = measured.corner_bgr;
+            item.corner_edge_density = measured.corner_edge_density;
+            item.score = measured.score;
+            if (existing == diagnostic_evidence_context.yellow_measurements.end()) {
+                diagnostic_evidence_context.yellow_measurements.push_back(std::move(item));
+            } else {
+                *existing = std::move(item);
+            }
+        };
+
+        // Re-localization is intentionally diagnostic-only. The reducer keeps
+        // its anchored geometry for a run, while this periodic probe exposes
+        // camera/UI movement before it can be mistaken for square evidence.
+        if (diagnostic_stream.is_open() && t >= next_geometry_check_t) {
+            diagnostic_evidence_context.geometry_checked = true;
+            next_geometry_check_t = t + geometry_check_interval_seconds;
+            if (!full_bgr.empty() && !board_template_.empty()) {
+                const BoardGeometry observed_geometry = locate_board(full_bgr, board_template_);
+                diagnostic_evidence_context.geometry_relocalization_score =
+                    observed_geometry.localization_score;
+                diagnostic_evidence_context.geometry_drift_x =
+                    static_cast<double>(observed_geometry.bx - geo_->bx);
+                diagnostic_evidence_context.geometry_drift_y =
+                    static_cast<double>(observed_geometry.by - geo_->by);
+                diagnostic_evidence_context.geometry_size_drift = std::max(
+                    std::abs(static_cast<double>(observed_geometry.bw - geo_->bw)),
+                    std::abs(static_cast<double>(observed_geometry.bh - geo_->bh)));
+                if (have_previous_diagnostic_geometry) {
+                    diagnostic_evidence_context.geometry_step_drift_x =
+                        static_cast<double>(observed_geometry.bx - previous_diagnostic_geometry.bx);
+                    diagnostic_evidence_context.geometry_step_drift_y =
+                        static_cast<double>(observed_geometry.by - previous_diagnostic_geometry.by);
+                    diagnostic_evidence_context.geometry_step_size_drift = std::max(
+                        std::abs(static_cast<double>(observed_geometry.bw - previous_diagnostic_geometry.bw)),
+                        std::abs(static_cast<double>(observed_geometry.bh - previous_diagnostic_geometry.bh)));
+                }
+
+                // A cached/template match can move several pixels between
+                // otherwise identical frames. Treat that as calibration
+                // jitter; only a temporal step or a large persistent offset
+                // is an unexpected geometry jump.
+                constexpr double kGeometryPositionJumpPixels = 16.0;
+                constexpr double kGeometrySizeJumpPixels = 16.0;
+                constexpr double kGeometryPersistentOffsetPixels = 24.0;
+                diagnostic_evidence_context.geometry_anomaly =
+                    (have_previous_diagnostic_geometry &&
+                     (std::abs(diagnostic_evidence_context.geometry_step_drift_x) >
+                          kGeometryPositionJumpPixels ||
+                      std::abs(diagnostic_evidence_context.geometry_step_drift_y) >
+                          kGeometryPositionJumpPixels ||
+                      diagnostic_evidence_context.geometry_step_size_drift >
+                          kGeometrySizeJumpPixels)) ||
+                    (have_previous_diagnostic_geometry &&
+                     (std::abs(diagnostic_evidence_context.geometry_drift_x) >
+                          kGeometryPersistentOffsetPixels ||
+                      std::abs(diagnostic_evidence_context.geometry_drift_y) >
+                          kGeometryPersistentOffsetPixels ||
+                      diagnostic_evidence_context.geometry_size_drift >
+                          kGeometryPersistentOffsetPixels));
+                diagnostic_evidence_context.geometry_decision =
+                    diagnostic_evidence_context.geometry_anomaly ? "jump_detected" : "stable";
+                diagnostic_evidence_context.geometry_assessment.state =
+                    diagnostic_evidence_context.geometry_decision;
+                diagnostic_evidence_context.geometry_assessment.thresholds = {
+                    16.0, 16.0, 24.0};
+                diagnostic_evidence_context.geometry_assessment.measurements = {
+                    {"anchor_drift_x", diagnostic_evidence_context.geometry_drift_x},
+                    {"anchor_drift_y", diagnostic_evidence_context.geometry_drift_y},
+                    {"size_drift", diagnostic_evidence_context.geometry_size_drift},
+                    {"step_drift_x", diagnostic_evidence_context.geometry_step_drift_x},
+                    {"step_drift_y", diagnostic_evidence_context.geometry_step_drift_y},
+                    {"step_size_drift", diagnostic_evidence_context.geometry_step_size_drift},
+                    {"match_score", diagnostic_evidence_context.geometry_relocalization_score},
+                };
+                diagnostic_evidence_context.geometry_assessment.uncertainty_reason =
+                    diagnostic_evidence_context.geometry_anomaly
+                        ? "geometry_jump"
+                        : "uncalibrated_localization_confidence";
+                previous_diagnostic_geometry = observed_geometry;
+                have_previous_diagnostic_geometry = true;
+
+                if (!red_board_template_.empty()) {
+                    diagnostic_evidence_context.red_squares_checked = true;
+                    diagnostic_evidence_context.red_squares = find_red_squares(
+                        full_bgr, board_template_, red_board_template_, *geo_);
+                    if (!diagnostic_evidence_context.red_squares.empty()) {
+                        add_diagnostic_tag("red_square_activity");
+                    }
+                }
+            } else {
+                diagnostic_evidence_context.geometry_decision = "unavailable";
+                diagnostic_evidence_context.geometry_assessment.state = "unavailable";
+                diagnostic_evidence_context.geometry_assessment.uncertainty_reason =
+                    "full_frame_not_retained";
+            }
+        }
         const cv::Mat& prev_gray = revert_mgr.get_latest_gray();
 
         std::vector<double> sq_means;
@@ -1019,16 +1413,44 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         for (double sd : sq_means) {
             if (sd > max_sd) max_sd = sd;
         }
+        diagnostic_evidence_context.changed_square_count = static_cast<std::size_t>(std::count_if(
+            sq_means.begin(), sq_means.end(), [](double value) { return value >= 15.0; }));
+        if (diagnostic_stream.is_open()) {
+            std::vector<std::pair<double, int>> changed_squares;
+            for (int square = 0; square < static_cast<int>(sq_means.size()); ++square) {
+                if (sq_means[square] >= 15.0) {
+                    changed_squares.emplace_back(sq_means[square], square);
+                }
+            }
+            std::sort(changed_squares.begin(), changed_squares.end(), std::greater<>());
+            for (size_t rank = 0; rank < changed_squares.size(); ++rank) {
+                diagnostic_evidence_context.changed_squares.push_back({
+                    utils::sq_name(changed_squares[rank].second),
+                    changed_squares[rank].first,
+                    rank + 1,
+                });
+            }
+        }
 
         if (max_sd < 15.0) {
+            add_diagnostic_tag("quiet");
             trace_candidate("QUIET", t, data.moves.size(), pos_ptr_->get_fen(), "", 0.0, max_sd, 0.0, 0.0,
                             "candidate_index=" + std::to_string(i));
             continue;
         }
 
+        add_diagnostic_tag("motion");
+
         {
             const auto diagnostic_best = this->score_moves_for_board(sq_means);
             diagnostic_score = diagnostic_best.score;
+            if (diagnostic_best.from_sq >= 0 && diagnostic_best.to_sq >= 0) {
+                diagnostic_evidence_context.score_from_square_diff = sq_means[diagnostic_best.from_sq];
+                diagnostic_evidence_context.score_to_square_diff = sq_means[diagnostic_best.to_sq];
+                diagnostic_evidence_context.score_adjustment = diagnostic_best.score -
+                    diagnostic_evidence_context.score_from_square_diff -
+                    diagnostic_evidence_context.score_to_square_diff;
+            }
             std::string diagnostic_top_legal;
             if (diagnostic_best.from_sq >= 0 && diagnostic_best.to_sq >= 0) {
                 const char* diagnostic_from = utils::sq_name(diagnostic_best.from_sq);
@@ -1036,8 +1458,36 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 diagnostic_move = std::string(diagnostic_from) + diagnostic_to;
                 diagnostic_y_from = validation::check_yellowness(board_bgr, *geo_, diagnostic_from);
                 diagnostic_y_to = validation::check_yellowness(board_bgr, *geo_, diagnostic_to);
+                record_diagnostic_yellow_measurement(diagnostic_from);
+                record_diagnostic_yellow_measurement(diagnostic_to);
+                diagnostic_evidence_context.yellow_checked = true;
+                diagnostic_evidence_context.yellow_from = diagnostic_y_from;
+                diagnostic_evidence_context.yellow_to = diagnostic_y_to;
+                if (std::max(diagnostic_y_from, diagnostic_y_to) >= 25.0) {
+                    add_diagnostic_tag("highlight_activity");
+                }
             }
-            if (trace_stream.is_open()) {
+            if (diagnostic_stream.is_open()) {
+                std::vector<std::pair<double, int>> yellow_scores;
+                yellow_scores.reserve(64);
+                for (int square = 0; square < 64; ++square) {
+                    yellow_scores.emplace_back(
+                        validation::check_yellowness(board_bgr, *geo_, utils::sq_name(square)),
+                        square);
+                }
+                std::sort(yellow_scores.begin(), yellow_scores.end(), std::greater<>());
+                const size_t yellow_count = std::min<size_t>(8, yellow_scores.size());
+                for (size_t rank = 0; rank < yellow_count; ++rank) {
+                    diagnostic_evidence_context.yellow_candidates.push_back({
+                        utils::sq_name(yellow_scores[rank].second),
+                        yellow_scores[rank].first,
+                        rank + 1,
+                    });
+                    record_diagnostic_yellow_measurement(
+                        utils::sq_name(yellow_scores[rank].second));
+                }
+            }
+            if (trace_stream.is_open() || diagnostic_stream.is_open()) {
                 struct RankedLegalMove {
                     std::string uci;
                     double score = 0.0;
@@ -1062,12 +1512,21 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                           [](const RankedLegalMove& lhs, const RankedLegalMove& rhs) {
                               return lhs.score > rhs.score;
                           });
+                if (ranked_legal_moves.size() >= 2) {
+                    diagnostic_evidence_context.score_margin =
+                        ranked_legal_moves[0].score - ranked_legal_moves[1].score;
+                }
                 const size_t top_count = std::min<size_t>(8, ranked_legal_moves.size());
                 std::ostringstream top_moves;
                 for (size_t rank = 0; rank < top_count; ++rank) {
                     if (rank != 0) top_moves << ',';
                     top_moves << ranked_legal_moves[rank].uci << ':'
                               << std::fixed << std::setprecision(1) << ranked_legal_moves[rank].score;
+                    diagnostic_evidence_context.legal_candidates.push_back({
+                        ranked_legal_moves[rank].uci,
+                        ranked_legal_moves[rank].score,
+                        rank + 1,
+                    });
                 }
                 diagnostic_top_legal = top_moves.str();
             }
@@ -1459,6 +1918,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         data.video_timestamps.push_back(t);
                         data.video_fens.push_back(data.fens.back());
                         data.video_moves.push_back("REVERT");
+                        trace_revert_applied(t, data.moves.size(), max_sd, "exact_revert");
                         first_move_after_revert = true;
                         last_moved_clock = {data.clocks.back().white_time, data.clocks.back().black_time};
                         reset_stale_branch_state();
@@ -1625,6 +2085,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         data.video_timestamps.push_back(t);
                         data.video_fens.push_back(data.fens.back());
                         data.video_moves.push_back("REVERT");
+                        trace_revert_applied(t, data.moves.size(), max_sd, "analysis_revert");
                         first_move_after_revert = true;
                         last_moved_clock = {data.clocks.back().white_time, data.clocks.back().black_time};
                         reset_stale_branch_state();
@@ -1923,6 +2384,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         data.video_timestamps.push_back(t);
                         data.video_fens.push_back(data.fens.back());
                         data.video_moves.push_back("REVERT");
+                        trace_revert_applied(t, data.moves.size(), max_sd, "repeated_branch");
                         reset_stale_branch_state();
                         std::fill(unresolved_consumed_squares.begin(), unresolved_consumed_squares.end(), false);
                         historical_handoff_result = "repeated_branch_suppressed";
@@ -1973,6 +2435,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     data.video_timestamps.push_back(t);
                     data.video_fens.push_back(data.fens.back());
                     data.video_moves.push_back("REVERT");
+                    trace_revert_applied(t, data.moves.size(), max_sd, "historical_handoff");
                     reset_stale_branch_state();
                     std::fill(unresolved_consumed_squares.begin(), unresolved_consumed_squares.end(), false);
 
@@ -2139,6 +2602,13 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             ++score_calls;
             score_us += std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - score_start).count();
+            if (best.from_sq >= 0 && best.to_sq >= 0) {
+                diagnostic_evidence_context.score_from_square_diff = sq_means[best.from_sq];
+                diagnostic_evidence_context.score_to_square_diff = sq_means[best.to_sq];
+                diagnostic_evidence_context.score_adjustment = best.score -
+                    diagnostic_evidence_context.score_from_square_diff -
+                    diagnostic_evidence_context.score_to_square_diff;
+            }
 
             if (postgame_replay_branch && !postgame_boundary_from_clock_gap &&
                 !historical_handoff_applied &&
@@ -2154,6 +2624,17 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
                 
             double min_move_score = extracted_in_frame ? 15.0 : kMinMoveScore;
+            diagnostic_evidence_context.score_threshold_checked = true;
+            diagnostic_evidence_context.minimum_score_threshold = min_move_score;
+            diagnostic_evidence_context.score_threshold_passed =
+                best.from_sq >= 0 && best.score > min_move_score;
+            if (best.from_sq < 0) {
+                diagnostic_evidence_context.score_threshold_decision = "no_legal_candidate";
+            } else if (best.score <= min_move_score) {
+                diagnostic_evidence_context.score_threshold_decision = "below_minimum";
+            } else {
+                diagnostic_evidence_context.score_threshold_decision = "passed";
+            }
             if (best.score <= min_move_score || best.from_sq < 0) {
                 bool found_check_response = false;
                 if (postgame_replay_branch && pos_ptr_->in_check()) {
@@ -2193,6 +2674,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     }
                 }
                 if (!found_check_response) {
+                    trace_candidate(
+                        "SCORE_THRESHOLD_REJECTED", t, data.moves.size(), pos_ptr_->get_fen(),
+                        "", best.score, max_sd, diagnostic_y_from, diagnostic_y_to,
+                        "candidate_index=" + std::to_string(i) +
+                        ";threshold=" + std::to_string(min_move_score) +
+                        ";decision=" + diagnostic_evidence_context.score_threshold_decision);
                     break; // No more moves in this frame
                 }
             }
@@ -2212,6 +2699,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             const double settle_start_t = t;
             const double initial_best_score = best.score;
             double visual_move_t = t;
+            const auto settle_already_accepted = [&]() {
+                return diagnostic_evidence_context.settle_decision.rfind("accepted_", 0) == 0;
+            };
             while (true) {
                 bool found_settle = false;
                 CandidateFrame settle_cf;
@@ -2227,6 +2717,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
                 if (found_settle) {
                     if (settle_cf.t - settle_start_t > kMaxSettleWindowSeconds) {
+                        if (!settle_already_accepted()) {
+                            diagnostic_evidence_context.settle_decision = "window_expired";
+                        }
                         break;
                     }
 
@@ -2243,6 +2736,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         std::chrono::steady_clock::now() - settle_score_start).count();
 
                     if (settle_best_tmp.score > min_move_score && settle_best_tmp.from_sq >= 0) {
+                        if (!settle_already_accepted()) {
+                            diagnostic_evidence_context.settle_decision = "candidate_found";
+                        }
                         
                         // Check for unrelated motion relative to BOTH the current best and new candidate.
                         // This prevents fading trails of the current move from triggering unrelated motion,
@@ -2289,6 +2785,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         }
                         
                         if (unrelated_motion) {
+                            if (!settle_already_accepted()) {
+                                diagnostic_evidence_context.settle_decision = "rejected_unrelated_motion";
+                            }
                             break; // Stop settling, next move is overlapping
                         }
 
@@ -2375,6 +2874,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         // move for the current player. This allows transient mid-air hallucinations to evolve into
                         // the true landing square, while safely rejecting overlapping opponent premoves.
                         if (is_same_move || can_evolve) {
+                            diagnostic_evidence_context.settle_decision = is_same_move
+                                ? "accepted_same_move"
+                                : "accepted_retarget";
+                            add_diagnostic_tag("settled");
                             if (can_evolve && !is_same_move) {
                                 visual_move_t = settle_cf.t;
                             }
@@ -2385,6 +2888,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             cf.clock_top_bgr = settle_cf.clock_top_bgr;
                             cf.clock_bot_bgr = settle_cf.clock_bot_bgr;
                             cf.board_hash = settle_cf.board_hash;
+                            cf.observation_id = settle_cf.observation_id;
+                            current_observation_id = cf.observation_id;
                             current_hash = settle_cf.board_hash;
                             hash_computed = !current_hash.empty();
                             diff = settle_diff;
@@ -2986,6 +3491,14 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             all_validations_passed = false;
                             break;
                         }
+                    } else {
+                        if (!settle_already_accepted()) {
+                            diagnostic_evidence_context.settle_decision = "below_threshold";
+                        }
+                    }
+                } else {
+                    if (!settle_already_accepted()) {
+                        diagnostic_evidence_context.settle_decision = "no_future_candidate";
                     }
                 }
             }
@@ -3029,6 +3542,75 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             // ── Validation 1: Yellow square check ────────────────────────────
+            const double validation_y_from =
+                validation::check_yellowness(board_bgr, *geo_, from_name);
+            const double validation_y_to =
+                validation::check_yellowness(board_bgr, *geo_, to_name);
+            record_diagnostic_yellow_measurement(from_name);
+            record_diagnostic_yellow_measurement(to_name);
+            diagnostic_evidence_context.yellow_checked = true;
+            diagnostic_evidence_context.yellow_from = validation_y_from;
+            diagnostic_evidence_context.yellow_to = validation_y_to;
+            const bool yellow_passed = validation_y_from >= validation::kYellowEndpointThreshold &&
+                validation_y_to >= validation::kYellowEndpointThreshold &&
+                validation_y_from + validation_y_to >= validation::kYellowPairThreshold;
+            const bool yellow_absent =
+                validation_y_from < validation::kYellowEndpointThreshold &&
+                validation_y_to < validation::kYellowEndpointThreshold;
+            if (diagnostic_stream.is_open()) {
+                constexpr double kYellowTemporalWindowSeconds = 0.75;
+                diagnostic_evidence_context.yellow_temporal_checked = true;
+                diagnostic_evidence_context.yellow_temporal_window_seconds =
+                    kYellowTemporalWindowSeconds;
+                for (size_t temporal_index = i;
+                     temporal_index < candidates.size(); ++temporal_index) {
+                    const auto& temporal_candidate = candidates[temporal_index];
+                    const double temporal_delta = temporal_candidate.t - t;
+                    if (temporal_delta < 0.0) continue;
+                    if (temporal_delta > kYellowTemporalWindowSeconds) break;
+                    const double temporal_from = validation::check_yellowness(
+                        temporal_candidate.board_bgr, *geo_, from_name);
+                    const double temporal_to = validation::check_yellowness(
+                        temporal_candidate.board_bgr, *geo_, to_name);
+                    const double temporal_pair = temporal_from + temporal_to;
+                    ++diagnostic_evidence_context.yellow_temporal_sample_count;
+                    diagnostic_evidence_context.yellow_temporal_max_from = std::max(
+                        diagnostic_evidence_context.yellow_temporal_max_from, temporal_from);
+                    diagnostic_evidence_context.yellow_temporal_max_to = std::max(
+                        diagnostic_evidence_context.yellow_temporal_max_to, temporal_to);
+                    diagnostic_evidence_context.yellow_temporal_max_pair = std::max(
+                        diagnostic_evidence_context.yellow_temporal_max_pair, temporal_pair);
+                    if (temporal_from >= validation::kYellowEndpointThreshold &&
+                        temporal_to >= validation::kYellowEndpointThreshold &&
+                        temporal_pair >= validation::kYellowPairThreshold) {
+                        ++diagnostic_evidence_context.yellow_temporal_pair_pass_count;
+                    }
+                }
+            }
+            diagnostic_evidence_context.yellow_decision = accepted_strong_inverse
+                ? "bypassed_inverse"
+                : (yellow_passed ? "passed" : (yellow_absent ? "no_highlight" : "ambiguous"));
+            diagnostic_evidence_context.yellow_assessment.state =
+                diagnostic_evidence_context.yellow_decision;
+            diagnostic_evidence_context.yellow_assessment.measurements = {
+                {"from_score", validation_y_from},
+                {"to_score", validation_y_to},
+                {"pair_score", validation_y_from + validation_y_to},
+                {"temporal_max_from", diagnostic_evidence_context.yellow_temporal_max_from},
+                {"temporal_max_to", diagnostic_evidence_context.yellow_temporal_max_to},
+                {"temporal_max_pair", diagnostic_evidence_context.yellow_temporal_max_pair},
+            };
+            diagnostic_evidence_context.yellow_assessment.uncertainty_reason =
+                yellow_passed || accepted_strong_inverse
+                    ? "uncalibrated_detector_confidence"
+                    : (yellow_absent ? "highlight_absent" : "highlight_ambiguous");
+            if (yellow_passed || accepted_strong_inverse) {
+                add_diagnostic_tag("highlight_pair");
+            } else if (yellow_absent) {
+                add_diagnostic_tag("highlight_absent");
+            } else {
+                add_diagnostic_tag("highlight_ambiguous");
+            }
             if (!accepted_strong_inverse &&
                 !extractor_detail::passes_yellowness_check(board_bgr, *geo_, from_name, to_name)) {
                 if (debug_level_ != DebugLevel::None) {
@@ -3043,13 +3625,50 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
 
             // ── Validation 2: Hover box rejection ────────────────────────────
             if (!scratch_) scratch_ = std::make_unique<ScratchBuffers>();
-            bool hover_detected = validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, from_name) ||
-                                  validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name);
+            const auto from_hover = validation::measure_hover_box(
+                board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, from_name);
+            const auto to_hover = validation::measure_hover_box(
+                board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, to_name);
+            bool hover_detected = from_hover.detected || to_hover.detected;
+            diagnostic_evidence_context.hover_checked = true;
+            diagnostic_evidence_context.hover_detected = hover_detected;
+            diagnostic_evidence_context.hover_decision = hover_detected ? "detected" : "clear";
+            if (hover_detected) {
+                add_diagnostic_tag("hover");
+                add_diagnostic_tag("animation");
+            }
+            diagnostic_evidence_context.hover_measurements = {
+                {from_name, from_hover.top_edge, from_hover.bottom_edge,
+                 from_hover.left_edge, from_hover.right_edge,
+                 from_hover.strongest_edge, from_hover.visible_edges,
+                 from_hover.detected},
+                {to_name, to_hover.top_edge, to_hover.bottom_edge,
+                 to_hover.left_edge, to_hover.right_edge,
+                 to_hover.strongest_edge, to_hover.visible_edges,
+                 to_hover.detected},
+            };
+            diagnostic_evidence_context.hover_assessment.state =
+                diagnostic_evidence_context.hover_decision;
+            diagnostic_evidence_context.hover_assessment.thresholds = {
+                0.10, 0.65, 2.0};
+            diagnostic_evidence_context.hover_assessment.measurements = {
+                {"from_strongest_edge", from_hover.strongest_edge},
+                {"to_strongest_edge", to_hover.strongest_edge},
+                {"from_visible_edges", static_cast<double>(from_hover.visible_edges)},
+                {"to_visible_edges", static_cast<double>(to_hover.visible_edges)},
+            };
+            diagnostic_evidence_context.hover_assessment.uncertainty_reason =
+                "uncalibrated_hover_confidence";
             if (hover_detected) {
                 double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
                 double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
                 bool strong_registered_move = accepted_strong_inverse ||
                                               (best.score >= 60.0 && y_from >= 40.0 && y_to >= 40.0 && (y_from + y_to) >= 90.0);
+                if (strong_registered_move) {
+                    diagnostic_evidence_context.hover_decision = "detected_but_overridden";
+                    diagnostic_evidence_context.hover_assessment.state =
+                        diagnostic_evidence_context.hover_decision;
+                }
                 if (!strong_registered_move) {
                     if (debug_level_ != DebugLevel::None) {
                         log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (Piece is still mid-drag)");
@@ -3085,6 +3704,52 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             } else if (debug_level_ != DebugLevel::None && !full_bgr.empty()) {
                 active_clock_player = extract_clocks(full_bgr, board_template_, *geo_, nullptr).active_player;
             }
+            diagnostic_evidence_context.clock_checked =
+                !active_clock_player.empty() ||
+                (has_clocks && !cf.clock_top_bgr.empty() && !cf.clock_bot_bgr.empty());
+            if (has_clocks && !cf.clock_top_bgr.empty() && !cf.clock_bot_bgr.empty()) {
+                auto bright_ratio = [](const cv::Mat& roi) {
+                    std::size_t bright_pixels = 0;
+                    for (int row = 0; row < roi.rows; ++row) {
+                        const auto* pixels = roi.ptr<cv::Vec3b>(row);
+                        for (int column = 0; column < roi.cols; ++column) {
+                            const auto& pixel = pixels[column];
+                            const int luminance =
+                                (static_cast<int>(pixel[0]) + static_cast<int>(pixel[1]) +
+                                 static_cast<int>(pixel[2])) / 3;
+                            bright_pixels += luminance > 200 ? 1u : 0u;
+                        }
+                    }
+                    const auto pixel_count = static_cast<std::size_t>(roi.total());
+                    return pixel_count == 0
+                        ? 0.0
+                        : static_cast<double>(bright_pixels) / static_cast<double>(pixel_count);
+                };
+                diagnostic_evidence_context.clock_top_width = cf.clock_top_bgr.cols;
+                diagnostic_evidence_context.clock_top_height = cf.clock_top_bgr.rows;
+                diagnostic_evidence_context.clock_bottom_width = cf.clock_bot_bgr.cols;
+                diagnostic_evidence_context.clock_bottom_height = cf.clock_bot_bgr.rows;
+                diagnostic_evidence_context.clock_top_bright_ratio = bright_ratio(cf.clock_top_bgr);
+                diagnostic_evidence_context.clock_bottom_bright_ratio = bright_ratio(cf.clock_bot_bgr);
+                diagnostic_evidence_context.clock_bright_ratio_delta =
+                    diagnostic_evidence_context.clock_bottom_bright_ratio -
+                    diagnostic_evidence_context.clock_top_bright_ratio;
+            }
+            diagnostic_evidence_context.active_clock_player = active_clock_player;
+            diagnostic_evidence_context.clock_decision = active_clock_player.empty()
+                ? "unavailable"
+                : "active_side_detected";
+            diagnostic_evidence_context.clock_assessment.state =
+                diagnostic_evidence_context.clock_decision;
+            diagnostic_evidence_context.clock_assessment.measurements = {
+                {"top_bright_ratio", diagnostic_evidence_context.clock_top_bright_ratio},
+                {"bottom_bright_ratio", diagnostic_evidence_context.clock_bottom_bright_ratio},
+                {"bright_ratio_delta", diagnostic_evidence_context.clock_bright_ratio_delta},
+            };
+            diagnostic_evidence_context.clock_assessment.uncertainty_reason =
+                active_clock_player.empty()
+                    ? "active_side_unavailable"
+                    : "uncalibrated_clock_activity_confidence";
             ++clock_activity_calls;
             clock_activity_us += std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - clock_activity_start).count();
@@ -3132,6 +3797,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     plausible_clock_after_move(direct_moved_clock, previous_moved_clock);
                 const cv::Mat& moved_roi = (moved_player == "white") ? cf.clock_bot_bgr : cf.clock_top_bgr;
                 auto candidates_for_moved_clock = recognize_clock_time_candidates_from_roi(moved_roi, false);
+                diagnostic_evidence_context.clock_candidates = candidates_for_moved_clock;
+                diagnostic_evidence_context.previous_moved_clock = previous_moved_clock;
                 const std::string adjusted_clock = choose_contextual_clock_candidate(
                     candidates_for_moved_clock,
                     (moved_player == "white") ? clocks.white_time : clocks.black_time,
@@ -3145,6 +3812,25 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         if (clock_cache_) clock_cache_->black_time = adjusted_clock;
                     }
                 }
+                diagnostic_evidence_context.moved_clock =
+                    (moved_player == "white") ? clocks.white_time : clocks.black_time;
+                diagnostic_evidence_context.clock_ocr_skipped = clocks.ocr_skipped;
+                diagnostic_evidence_context.clock_decision =
+                    diagnostic_evidence_context.moved_clock.empty()
+                        ? "ocr_missing"
+                        : (moved_time_observed ? "ocr_plausible" : "ocr_implausible");
+                diagnostic_evidence_context.clock_assessment.state =
+                    diagnostic_evidence_context.clock_decision;
+                diagnostic_evidence_context.clock_assessment.measurements = {
+                    {"candidate_count", static_cast<double>(candidates_for_moved_clock.size())},
+                    {"bright_ratio_delta", diagnostic_evidence_context.clock_bright_ratio_delta},
+                };
+                diagnostic_evidence_context.clock_assessment.uncertainty_reason =
+                    diagnostic_evidence_context.moved_clock.empty()
+                        ? "ocr_missing"
+                        : (moved_time_observed
+                            ? "uncalibrated_ocr_confidence"
+                            : "ocr_implausible");
                 if (debug_clock_candidates) {
                     std::ostringstream clock_ss;
                     clock_ss << "    " << utils::ts(elapsed()) << " [ClockDebug] ply " << (data.moves.size() + 1)
@@ -4021,7 +4707,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 ";to_empty=" + (last_validation_to.empty() ? "1" : "0"));
         }
         if (!all_validations_passed) {
-            if (trace_stream.is_open()) {
+            diagnostic_evidence_context.rejection_reason = validation_rejection_reason.empty()
+                ? "unknown"
+                : validation_rejection_reason;
+            if (trace_stream.is_open() || diagnostic_stream.is_open()) {
                 trace_candidate(
                     "VALIDATION_REJECTED", t, data.moves.size(), pos_ptr_->get_fen(),
                     last_validation_move, last_validation_score, max_sd,

@@ -88,14 +88,14 @@ FFmpeg composes the static overlays with the source video and preserves source a
 | Area | Implementation |
 |---|---|
 | Board and UI detection | `BoardLocalizer.*`, `BoardAnalysis.*`, `BoardHoverDetection.cpp`, `ArrowDetector.*`, `ClockRecognizer.*`, `DigitRecognizer.*` |
-| Extraction and verification | `ChessVideoExtractor.*`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*`, `MoveScorer.*`, `MoveVerifier.*`, `MoveValidations.*` |
-| Mapping and reverts | `VideoChunkMapper.*`, `RevertManager.*`, `RevertDetector.*` |
+| Extraction and verification | `ChessVideoExtractor.*`, `ChessVideoExtractor_Extraction.cpp`, `ChessVideoExtractor_Internal.*`, `MoveScorer.*`, `MoveValidations.*`, `ExtractionDiagnostics.*` |
+| Mapping and reverts | `VideoChunkMapper.*`, `RevertManager.*` |
 | Engine and openings | `StockfishAnalyzer.*`, `StockfishAnalysisHelper.*`, `OpeningFetcher.*`, `LichessSyncHelper.*` |
 | Video output | `AnalysisVideoGenerator*`, `AnalysisVideoRenderUtils.*`, `FFmpegFilterGraph.*`, `FfmpegProcessRunner.*`, `VideoExportHelper.*` |
 | GUI and configuration | `MainWindow*.cpp`, `SettingsDialog*.cpp`, `TemplateManager.*`, `OverlayEditorDialog*.cpp`, `ThemeManager.*` |
 | Utilities | `ExtractorUtils.*`, `ChessFenUtils.*`, `HeadlessCliParser.*`, `Logger.*`, `SysUtils.*`, `ImageWriteUtils.*` |
 
-The `src/` directory is the only production source tree compiled by CMake. `UIDetectors.h` remains an umbrella compatibility header. The former `FramePrefetcher` design is removed in favor of chunk mapping.
+The `src/` directory is the only production source tree compiled by CMake. `UIDetectors.h` remains an umbrella compatibility header. The former `FramePrefetcher` design is removed in favor of chunk mapping. Standalone `MoveVerifier.*` and `RevertDetector.*` files remain in the repository but are not part of the active CMake targets; the extractor uses the focused scorer, validation, and revert-manager paths documented above.
 
 ## 9. Diagnostics and test boundaries
 
@@ -108,8 +108,12 @@ Diagnostic controls are generic and timestamp-bounded; they do not select a move
 | `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, `CTA_TRACE_SETTLE` | Add targeted reducer trace details |
 | `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR` | Inspect clock candidates or save a selected ROI |
 | `CTA_REVERT_EXHAUSTIVE_FALLBACK` | Enable the slower reference revert lookup |
+| `CTA_DIAGNOSTIC_FILE` | Write structured reducer observations as JSONL |
+| `CTA_DIAGNOSTIC_FRAME_DIR`, `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS` | Retain sampled full-frame, board, and clock-ROI artifacts |
+| `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set the interval for diagnostic geometry rechecks, clamped to 1-30 seconds |
+| `CTA_REPLAY_OBSERVATIONS` | Replay a compact `observations.jsonl` trace using saved board/clock artifacts instead of source-video decoding |
 
-`tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, and pass-through cutoff/trace options. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
+`tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, diagnostic JSONL/TSV paths, automatic first-divergence bundles, `--replay-bundle`, and `--compare-replay-traces`. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
 
 ## 10. Trade-offs and future scope
 

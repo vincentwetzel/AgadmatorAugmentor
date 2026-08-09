@@ -5,7 +5,10 @@
 namespace cta {
 namespace validation {
 
-double check_yellowness(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* sq_name) {
+YellowSquareMeasurement measure_yellowness(const cv::Mat& board_bgr,
+                                           const BoardGeometry& geo,
+                                           const char* sq_name,
+                                           bool include_edge_metrics) {
     int col = sq_name[0] - 'a';
     int rank = sq_name[1] - '1';
     int row = 7 - rank;
@@ -30,11 +33,15 @@ double check_yellowness(const cv::Mat& board_bgr, const BoardGeometry& geo, cons
         {std::max(x1, x2 - cw), std::max(y1, y2 - ch), std::min(cw, x2 - std::max(x1, x2 - cw)), std::min(ch, y2 - std::max(y1, y2 - ch))}
     };
 
-    double y_score = 0;
-    for (const auto& c : corners) {
+    YellowSquareMeasurement measurement;
+    for (size_t corner_index = 0; corner_index < 4; ++corner_index) {
+        const auto& c = corners[corner_index];
         if (c.width <= 0 || c.height <= 0) continue;
         cv::Mat patch = board_bgr(c);
         double sum_y = 0.0;
+        double sum_b = 0.0;
+        double sum_g = 0.0;
+        double sum_r = 0.0;
         for (int r = 0; r < patch.rows; ++r) {
             const auto* ptr = patch.ptr<cv::Vec3b>(r);
             for (int pc = 0; pc < patch.cols; ++pc) {
@@ -42,14 +49,38 @@ double check_yellowness(const cv::Mat& board_bgr, const BoardGeometry& geo, cons
                 double g = ptr[pc][1];
                 double red = ptr[pc][2];
                 sum_y += std::min(red, g) - b;
+                sum_b += b;
+                sum_g += g;
+                sum_r += red;
             }
         }
-        y_score += sum_y / (patch.rows * patch.cols);
+        const double pixel_count = static_cast<double>(patch.rows * patch.cols);
+        measurement.corner_scores[corner_index] = sum_y / pixel_count;
+        measurement.corner_bgr[corner_index] = {
+            sum_b / pixel_count, sum_g / pixel_count, sum_r / pixel_count};
+        if (include_edge_metrics) {
+            cv::Mat gray;
+            cv::Mat edges;
+            cv::cvtColor(patch, gray, cv::COLOR_BGR2GRAY);
+            cv::Canny(gray, edges, 50.0, 150.0);
+            measurement.corner_edge_density[corner_index] =
+                static_cast<double>(cv::countNonZero(edges)) / pixel_count;
+        }
     }
-    return y_score / 4.0;
+    measurement.score = (measurement.corner_scores[0] + measurement.corner_scores[1] +
+                         measurement.corner_scores[2] + measurement.corner_scores[3]) / 4.0;
+    return measurement;
 }
 
-bool check_hover_box(const cv::Mat& board_bgr, const BoardGeometry& geo, cv::Mat& white_mask, cv::Mat& reduced, const char* sq_name) {
+double check_yellowness(const cv::Mat& board_bgr, const BoardGeometry& geo, const char* sq_name) {
+    return measure_yellowness(board_bgr, geo, sq_name).score;
+}
+
+HoverBoxMeasurement measure_hover_box(const cv::Mat& board_bgr,
+                                      const BoardGeometry& geo,
+                                      cv::Mat& white_mask,
+                                      cv::Mat& reduced,
+                                      const char* sq_name) {
     int col = sq_name[0] - 'a';
     int rank = sq_name[1] - '1';
     int row = 7 - rank;
@@ -87,9 +118,20 @@ bool check_hover_box(const cv::Mat& board_bgr, const BoardGeometry& geo, cv::Mat
     cv::reduce(right, reduced, 1, cv::REDUCE_MAX);
     double r3 = static_cast<double>(cv::countNonZero(reduced)) / std::max(1, sh);
 
-    int visible = (r0 > 0.10) + (r1 > 0.10) + (r2 > 0.10) + (r3 > 0.10);
-    double strongest_edge = std::max({r0, r1, r2, r3});
-    return visible >= 2 || strongest_edge > 0.65;
+    HoverBoxMeasurement measurement;
+    measurement.top_edge = r0;
+    measurement.bottom_edge = r1;
+    measurement.left_edge = r2;
+    measurement.right_edge = r3;
+    measurement.visible_edges = static_cast<std::size_t>(
+        (r0 > 0.10) + (r1 > 0.10) + (r2 > 0.10) + (r3 > 0.10));
+    measurement.strongest_edge = std::max({r0, r1, r2, r3});
+    measurement.detected = measurement.visible_edges >= 2 || measurement.strongest_edge > 0.65;
+    return measurement;
+}
+
+bool check_hover_box(const cv::Mat& board_bgr, const BoardGeometry& geo, cv::Mat& white_mask, cv::Mat& reduced, const char* sq_name) {
+    return measure_hover_box(board_bgr, geo, white_mask, reduced, sq_name).detected;
 }
 
 } // namespace validation

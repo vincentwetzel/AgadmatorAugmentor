@@ -5,43 +5,13 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
-#include <cstdint>
 #include <string>
 
 namespace cta {
 
-static std::uint64_t image_fingerprint(const cv::Mat& bgr) {
-    if (bgr.empty()) {
-        return 0;
-    }
-
-    cv::Mat gray;
-    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
-    cv::Mat small;
-    cv::resize(gray, small, cv::Size(32, 18), 0, 0, cv::INTER_AREA);
-
-    std::uint64_t h = 1469598103934665603ull;
-    for (int y = 0; y < small.rows; ++y) {
-        const uchar* row = small.ptr<uchar>(y);
-        for (int x = 0; x < small.cols; ++x) {
-            h ^= static_cast<std::uint64_t>(row[x] >> 3);
-            h *= 1099511628211ull;
-        }
-    }
-    return h;
-}
-
 std::string find_misaligned_piece(const cv::Mat& img_bgr,
                                   const cv::Mat& board_template,
                                   const BoardGeometry& geo) {
-    const std::uint64_t frame_key = image_fingerprint(img_bgr);
-    if (frame_key == 13254646248846371519ull) {
-        return "e7";
-    }
-    if (frame_key == 1110266100840153886ull) {
-        return "f8";
-    }
-
     cv::Mat board_img = img_bgr(cv::Rect(geo.bx, geo.by, geo.bw, geo.bh));
 
     cv::Mat white_mask;
@@ -108,6 +78,56 @@ std::string find_misaligned_piece(const cv::Mat& img_bgr,
                 sq[2] = '\0';
                 best_square = sq;
             }
+        }
+    }
+    if (best_square.empty()) {
+        // Some board themes render the hover outline as a clipped white
+        // cursor/handle instead of four complete edges.  In that case use
+        // isolated connected components as a generic secondary signal. The
+        // size and shape limits exclude most piece silhouettes and board
+        // coordinate labels without depending on a particular frame.
+        cv::Mat component_labels, component_stats, component_centroids;
+        const int component_count = cv::connectedComponentsWithStats(
+            white_mask, component_labels, component_stats, component_centroids, 8, CV_32S);
+        double best_component_score = 0.0;
+        for (int component = 1; component < component_count; ++component) {
+            const int x = component_stats.at<int>(component, cv::CC_STAT_LEFT);
+            const int y = component_stats.at<int>(component, cv::CC_STAT_TOP);
+            const int width = component_stats.at<int>(component, cv::CC_STAT_WIDTH);
+            const int height = component_stats.at<int>(component, cv::CC_STAT_HEIGHT);
+            const int area = component_stats.at<int>(component, cv::CC_STAT_AREA);
+            if (area < 50 || area > 180 || width < 6 || height < 6 || width > 22 || height > 22) {
+                continue;
+            }
+            if (x <= 1 || y <= 1 || x + width >= white_mask.cols - 1 ||
+                y + height >= white_mask.rows - 1) {
+                continue;
+            }
+
+            const double aspect = static_cast<double>(std::min(width, height)) /
+                static_cast<double>(std::max(width, height));
+            const double fill = static_cast<double>(area) /
+                static_cast<double>(width * height);
+            if (aspect < 0.55 || fill < 0.35) {
+                continue;
+            }
+
+            const double center_x = component_centroids.at<double>(component, 0);
+            const double center_y = component_centroids.at<double>(component, 1);
+            const int col = std::clamp(static_cast<int>(center_x / geo.sq_w), 0, 7);
+            const int row = std::clamp(static_cast<int>(center_y / geo.sq_h), 0, 7);
+            const double component_score = static_cast<double>(area) * aspect *
+                (0.5 + 0.5 * fill);
+            if (component_score <= best_component_score) {
+                continue;
+            }
+
+            best_component_score = component_score;
+            char sq[3];
+            sq[0] = 'a' + col;
+            sq[1] = '0' + (8 - row);
+            sq[2] = '\0';
+            best_square = sq;
         }
     }
     if (best_square.empty() && !board_template.empty()) {
