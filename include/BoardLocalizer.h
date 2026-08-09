@@ -11,6 +11,9 @@ struct BoardGeometry {
     double sq_w = 0.0, sq_h = 0.0; // Square width, height in pixels
     double localization_score = 0.0; // Final template correlation, [-1, 1]
     double localization_scale = 0.0; // Template scale selected by the final pass
+    // Normalized confidence derived only from the final template correlation.
+    // It is evidence for downstream diagnostics, not a move-selection veto.
+    double geometry_confidence = 0.0;
 };
 
 /// Performs multi-pass template matching to find the exact board coordinates and scale.

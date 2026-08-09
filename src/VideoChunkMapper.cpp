@@ -233,7 +233,11 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
         double v_fps = cap.get(cv::CAP_PROP_FPS);
         if (v_fps <= 0) v_fps = 30.0;
 
-        if (std::abs(current_msec - start_t * 1000.0) > 100.0) {
+        // A sequential worker may still be near the previous chunk boundary,
+        // while a parallel worker opens a fresh decoder and seeks here.  Use
+        // the same explicit boundary seek for every non-initial chunk so
+        // mapper output does not depend on worker count.
+        if (chunk_idx > 0 || std::abs(current_msec - start_t * 1000.0) > 100.0) {
             cap.set(cv::CAP_PROP_POS_MSEC, start_t * 1000.0);
             int max_grabs = static_cast<int>(v_fps * std::max(600.0, start_t + 60.0)), grabs = 0;
             cap.grab();

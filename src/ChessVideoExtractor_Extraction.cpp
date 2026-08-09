@@ -243,6 +243,7 @@ static ObservationReplayBootstrap load_observation_replay_bootstrap(
             bootstrap.geometry.sq_w = board.value("square_width", 0.0);
             bootstrap.geometry.sq_h = board.value("square_height", 0.0);
             bootstrap.geometry.localization_score = -1.0;
+            bootstrap.geometry.geometry_confidence = 0.0;
             if (bootstrap.geometry.bw <= 0 || bootstrap.geometry.bh <= 0) {
                 throw std::runtime_error("first observation has invalid board geometry");
             }
@@ -919,6 +920,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     std::string pending_stale_first_move;
     std::string pending_stale_prev_move;
     double pending_stale_timestamp = 0.0;
+    std::optional<size_t> stale_clock_tail_start_ply;
     bool suppressed_stale_branch = false;
     size_t suppressed_stale_ply = 0;
     std::string suppressed_stale_first_move;
@@ -970,6 +972,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         pending_stale_branch = false;
         pending_stale_first_move.clear();
         pending_stale_prev_move.clear();
+        stale_clock_tail_start_ply.reset();
         suppressed_stale_branch = false;
         suppressed_stale_first_move.clear();
     };
@@ -996,6 +999,111 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         }
         return false;
     };
+    auto has_repeated_low_clock_tail = [&](size_t start_ply) {
+        if (start_ply == 0 || start_ply + 1 >= data.moves.size() ||
+            data.timestamps.size() != data.moves.size() ||
+            data.timestamps.back() - data.timestamps[start_ply] < 1.0) {
+            return false;
+        }
+        std::array<std::string, 2> baselines;
+        std::array<bool, 2> sides_seen = {false, false};
+        for (size_t ply = start_ply; ply < data.moves.size(); ++ply) {
+            if (ply >= data.fens.size() || ply + 1 >= data.clocks.size()) return false;
+            const size_t active_field = data.fens[ply].find(' ');
+            if (active_field == std::string::npos || active_field + 1 >= data.fens[ply].size()) {
+                return false;
+            }
+            const bool white_moved = data.fens[ply][active_field + 1] == 'w';
+            const size_t clock_index = white_moved ? 0 : 1;
+            const std::string& moved_clock = white_moved
+                ? data.clocks[ply + 1].white_time : data.clocks[ply + 1].black_time;
+            const auto moved_seconds = parse_clock_seconds(moved_clock);
+            if (!moved_seconds || *moved_seconds >= 10 * 60 || moved_clock.empty()) return false;
+            if (baselines[clock_index].empty()) {
+                baselines[clock_index] = moved_clock;
+            } else if (baselines[clock_index] != moved_clock) {
+                return false;
+            }
+            sides_seen[clock_index] = true;
+        }
+        return sides_seen[0] && sides_seen[1];
+    };
+    auto infer_repeated_low_clock_tail_start = [&]() -> std::optional<size_t> {
+        if (data.moves.size() < 3 || data.timestamps.size() != data.moves.size()) {
+            return std::nullopt;
+        }
+        std::optional<size_t> suffix_start;
+        std::array<std::string, 2> baselines;
+        std::array<bool, 2> sides_seen = {false, false};
+        for (size_t reverse_index = data.moves.size(); reverse_index-- > 0;) {
+            const size_t ply = reverse_index;
+            if (ply >= data.fens.size() || ply + 1 >= data.clocks.size()) break;
+            const size_t active_field = data.fens[ply].find(' ');
+            if (active_field == std::string::npos || active_field + 1 >= data.fens[ply].size()) break;
+            const bool white_moved = data.fens[ply][active_field + 1] == 'w';
+            const size_t clock_index = white_moved ? 0 : 1;
+            const std::string& moved_clock = white_moved
+                ? data.clocks[ply + 1].white_time : data.clocks[ply + 1].black_time;
+            const auto moved_seconds = parse_clock_seconds(moved_clock);
+            if (!moved_seconds || *moved_seconds >= 10 * 60 || moved_clock.empty()) break;
+            if (baselines[clock_index].empty()) {
+                baselines[clock_index] = moved_clock;
+            } else if (baselines[clock_index] != moved_clock) {
+                break;
+            }
+            sides_seen[clock_index] = true;
+            if (sides_seen[0] && sides_seen[1] &&
+                data.timestamps.back() - data.timestamps[ply] >= 1.0) {
+                suffix_start = ply;
+            }
+        }
+        if (!suffix_start) return std::nullopt;
+
+        // Some OCR paths preserve the malformed reading as a plausible
+        // normalized string.  In that case the tail begins immediately after
+        // the last low-time transition that cannot be a real countdown.  Use
+        // the last such transition so an earlier verified move with the same
+        // displayed clock is not pulled into the variation.
+        std::optional<size_t> transition_boundary;
+        for (size_t ply = *suffix_start; ply < data.moves.size(); ++ply) {
+            if (ply >= data.fens.size() || ply + 1 >= data.clocks.size()) break;
+            const size_t active_field = data.fens[ply].find(' ');
+            if (active_field == std::string::npos || active_field + 1 >= data.fens[ply].size()) break;
+            const bool white_moved = data.fens[ply][active_field + 1] == 'w';
+            const std::string& parent_clock = white_moved
+                ? data.clocks[ply].white_time : data.clocks[ply].black_time;
+            const std::string& moved_clock = white_moved
+                ? data.clocks[ply + 1].white_time : data.clocks[ply + 1].black_time;
+            const auto parent_seconds = parse_clock_seconds(parent_clock);
+            const auto moved_seconds = parse_clock_seconds(moved_clock);
+            if (parent_seconds && moved_seconds && *parent_seconds < 10 * 60 &&
+                *moved_seconds < 10 * 60 && parent_clock != moved_clock &&
+                !plausible_clock_after_move(moved_clock, parent_clock)) {
+                transition_boundary = ply + 1;
+            }
+        }
+        if (transition_boundary && has_repeated_low_clock_tail(*transition_boundary)) {
+            return transition_boundary;
+        }
+
+        // Prefer the first parent snapshot whose OCR contains the malformed
+        // low-time reading.  This excludes a preceding legitimate move that
+        // happens to have the same displayed clocks as the replay tail.
+        for (size_t ply = *suffix_start; ply < data.moves.size(); ++ply) {
+            if (ply >= data.clocks.size()) break;
+            const auto white_seconds = parse_clock_seconds(data.clocks[ply].white_time);
+            const auto black_seconds = parse_clock_seconds(data.clocks[ply].black_time);
+            const bool malformed_parent_clock =
+                (!data.clocks[ply].white_time.empty() &&
+                 (!white_seconds || *white_seconds >= 10 * 60)) ||
+                (!data.clocks[ply].black_time.empty() &&
+                 (!black_seconds || *black_seconds >= 10 * 60));
+            if (malformed_parent_clock && has_repeated_low_clock_tail(ply)) {
+                return ply;
+            }
+        }
+        return std::nullopt;
+    };
     auto demote_tail_to_variation = [&](size_t start_ply,
                                         bool replay_observation = false) {
         if (start_ply >= data.moves.size()) return false;
@@ -1007,11 +1115,34 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         var_data.scores.assign(move_scores.begin() + start_ply, move_scores.end());
         var_data.clocks.assign(data.clocks.begin() + start_ply + 1, data.clocks.end());
         // Analysis variations do not represent independently timed game
-        // play.  Their clock annotation is the settled clock at the branch
-        // point, regardless of how long the replay remained visible.  Keep
-        // this invariant in the shared demotion path so exact reverts and
-        // historical/post-game handoffs produce the same output.
-        if (start_ply < data.clocks.size()) {
+        // play.  Their clock annotation is normally the settled clock at
+        // the branch point.  A terminal stale-clock tail is different: its
+        // repeated moved-side readings are the evidence that identifies the
+        // branch, so preserve those observed values while repairing only an
+        // unreadable value from the first later reading for that side.
+        const bool preserve_terminal_tail_clocks = replay_observation &&
+            stale_clock_tail_start_ply && *stale_clock_tail_start_ply == start_ply;
+        if (preserve_terminal_tail_clocks) {
+            std::array<std::string, 2> tail_clock_fallbacks;
+            for (size_t i = 0; i < var_data.clocks.size(); ++i) {
+                size_t active_field = i < var_data.fens.size()
+                    ? var_data.fens[i].find(' ') : std::string::npos;
+                const bool white_moved = active_field != std::string::npos &&
+                    active_field + 1 < var_data.fens[i].size() &&
+                    var_data.fens[i][active_field + 1] == 'w';
+                const size_t clock_index = white_moved ? 0 : 1;
+                std::string& moved_time = white_moved
+                    ? var_data.clocks[i].white_time : var_data.clocks[i].black_time;
+                const auto moved_seconds = parse_clock_seconds(moved_time);
+                if (moved_seconds && *moved_seconds < 10 * 60 && !moved_time.empty()) {
+                    tail_clock_fallbacks[clock_index] = moved_time;
+                } else if (!tail_clock_fallbacks[clock_index].empty()) {
+                    moved_time = tail_clock_fallbacks[clock_index];
+                    var_data.clocks[i].moved_time_observed = false;
+                    var_data.clocks[i].moved_time_missing = true;
+                }
+            }
+        } else if (start_ply < data.clocks.size()) {
             const ClockInfo branch_clock = data.clocks[start_ply];
             for (ClockInfo& variation_clock : var_data.clocks) {
                 variation_clock.white_time = branch_clock.white_time;
@@ -1258,6 +1389,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             diagnostic_evidence_context.square_height = geo_->sq_h;
             diagnostic_evidence_context.localization_score = geo_->localization_score;
             diagnostic_evidence_context.localization_scale = geo_->localization_scale;
+            diagnostic_evidence_context.localization_confidence = geo_->geometry_confidence;
             diagnostic_evidence_context.yellow_endpoint_threshold =
                 validation::kYellowEndpointThreshold;
             diagnostic_evidence_context.yellow_pair_threshold =
@@ -1363,6 +1495,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     diagnostic_evidence_context.geometry_anomaly ? "jump_detected" : "stable";
                 diagnostic_evidence_context.geometry_assessment.state =
                     diagnostic_evidence_context.geometry_decision;
+                diagnostic_evidence_context.geometry_assessment.confidence =
+                    observed_geometry.geometry_confidence;
                 diagnostic_evidence_context.geometry_assessment.thresholds = {
                     16.0, 16.0, 24.0};
                 diagnostic_evidence_context.geometry_assessment.measurements = {
@@ -2910,14 +3044,22 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             if (extracted_in_frame && best.score < kMinCoalescedFollowupScore) {
-                std::array<char, 64> board_map = utils::expand_fen(pos_ptr_->get_fen());
-                char moving_piece = board_map[best.from_sq];
-                if (std::tolower(static_cast<unsigned char>(moving_piece)) == 'p') {
-                    if (debug_level_ != DebugLevel::None) {
-                        log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: stopping coalesced extraction before weak pawn follow-up move");
-                    }
-                    break;
+                // Square differences are computed once for the source frame.
+                // After the first move is applied, a weak residual can be
+                // reinterpreted as a legal move for the new side to move even
+                // though the UI has not displayed a second move.  Require the
+                // same confidence floor for every coalesced follow-up; this
+                // keeps the chronological reducer from accepting stale
+                // animation/highlight pixels as a second ply.
+                if (debug_level_ != DebugLevel::None) {
+                    log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: stopping coalesced extraction before weak follow-up move");
                 }
+                trace_candidate(
+                    "COALESCED_STOP", t, data.moves.size(), pos_ptr_->get_fen(), "",
+                    best.score, max_sd, diagnostic_y_from, diagnostic_y_to,
+                    "reason=weak_followup_score;threshold=" +
+                    std::to_string(kMinCoalescedFollowupScore));
+                break;
             }
             if (extracted_in_frame && (consumed_squares[best.from_sq] || consumed_squares[best.to_sq])) {
                 break;
@@ -4202,9 +4344,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             const bool low_time_stale_or_bad_clock =
                 !previous_moved_clock.empty() && !final_moved_clock.empty() &&
                 previous_moved_seconds && *previous_moved_seconds < 10 * 60 &&
-                (final_moved_clock == previous_moved_clock ||
-                 !plausible_clock_after_move(final_moved_clock, previous_moved_clock)) &&
-                !historical_handoff_clock_override;
+                 (final_moved_clock == previous_moved_clock ||
+                  !plausible_clock_after_move(final_moved_clock, previous_moved_clock)) &&
+                 !historical_handoff_clock_override;
             if (pending_stale_branch &&
                 data.moves.size() == pending_stale_ply + 1 &&
                 std::abs(t - pending_stale_timestamp) <= 0.35 &&
@@ -4548,6 +4690,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 last_moved_clock[moved_clock_idx] = final_moved_clock;
             }
             if (low_time_stale_or_bad_clock && !strong_visual_clock_veto_override) {
+                if (!stale_clock_tail_start_ply) {
+                    stale_clock_tail_start_ply = data.moves.size() - 1;
+                }
                 pending_stale_branch = true;
                 pending_stale_ply = data.moves.size() - 1;
                 pending_stale_first_move = move_uci;
@@ -4558,11 +4703,18 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     postgame_boundary_from_clock_gap = false;
                 }
             } else {
+                // Keep the first stale low-time boundary until finalization.
+                // A later analysis move may have a missing or otherwise
+                // unclassifiable OCR reading; clearing the marker here would
+                // let an otherwise contiguous terminal replay leak back into
+                // the main line.  The final boundary check still requires
+                // every moved-side clock in the retained tail to repeat, so
+                // a genuine clock transition cannot be demoted by this
+                // marker alone.
                 pending_stale_branch = false;
                 pending_stale_first_move.clear();
                 pending_stale_prev_move.clear();
             }
-
             if (strong_visual_clock_veto_override && strong_immediate_recapture) {
                 trace_candidate("COALESCED_STOP", t, data.moves.size(), pos_ptr_->get_fen(), "", 0.0, max_sd,
                                 0.0, 0.0, "reason=strong_recapture_clock_registration");
@@ -4734,6 +4886,24 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         if (!progress_callback_) std::cout << std::endl;
     }
 
+    // A durable replay may contain a terminal analysis suffix after the
+    // preserved main line.  Split that suffix before replay LCS deduplication
+    // so restoring the durable line does not silently discard the variation.
+    if (preserved_replay_mainline &&
+        data.moves.size() > preserved_replay_mainline->moves.size()) {
+        const size_t replay_tail_start = preserved_replay_mainline->moves.size();
+        if (has_repeated_low_clock_tail(replay_tail_start)) {
+            stale_clock_tail_start_ply = replay_tail_start;
+            trace_candidate(
+                "POSTGAME_STALE_CLOCK_REPLAY_SUFFIX",
+                data.timestamps.back(), data.moves.size(), data.fens.back(), "", 0.0, 0.0,
+                0.0, 0.0,
+                "parent=" + std::to_string(replay_tail_start) +
+                ";tail_plies=" + std::to_string(data.moves.size() - replay_tail_start));
+            demote_tail_to_variation(replay_tail_start, true);
+        }
+    }
+
     if (preserved_replay_mainline) {
         const size_t parent = preserved_replay_mainline->replay_parent;
         if (data.moves.size() > parent) {
@@ -4788,6 +4958,32 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         data.video_moves = std::move(preserved_replay_mainline->video_moves);
         move_scores = std::move(preserved_replay_mainline->move_scores);
         move_video_indices = std::move(preserved_replay_mainline->move_video_indices);
+    }
+
+    // Some analysis boards keep alternating legal moves after the game ends
+    // without ever returning to a previously recorded position.  In that
+    // case revert-based branch detection has no state transition to anchor
+    // on.  A tail of two or more low-time moves whose moved-side clocks never
+    // change is stronger replay evidence than a single stale OCR reading, so
+    // demote that complete tail at the final reducer boundary.
+    {
+        const bool marked_tail_is_repeated = stale_clock_tail_start_ply &&
+            has_repeated_low_clock_tail(*stale_clock_tail_start_ply);
+        const std::optional<size_t> inferred_tail_start = marked_tail_is_repeated
+            ? stale_clock_tail_start_ply : infer_repeated_low_clock_tail_start();
+        const bool terminal_boundary_is_owned_here = inferred_tail_start &&
+            (!postgame_branch_start_ply || *postgame_branch_start_ply >= *inferred_tail_start);
+        if (terminal_boundary_is_owned_here && has_repeated_low_clock_tail(*inferred_tail_start)) {
+            const size_t tail_start = *inferred_tail_start;
+            stale_clock_tail_start_ply = tail_start;
+            trace_candidate(
+                "POSTGAME_STALE_CLOCK_BOUNDARY",
+                data.timestamps.back(), data.moves.size(), data.fens.back(), "", 0.0, 0.0,
+                0.0, 0.0,
+                "parent=" + std::to_string(tail_start) +
+                ";tail_plies=" + std::to_string(data.moves.size() - tail_start));
+            demote_tail_to_variation(tail_start, true);
+        }
     }
 
     if (postgame_branch_start_ply && data.moves.size() > *postgame_branch_start_ply) {

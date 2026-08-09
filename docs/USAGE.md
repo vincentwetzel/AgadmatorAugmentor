@@ -10,6 +10,8 @@ This document explains how to build and run the ChessTube Analyzer C++ applicati
 - **FFmpeg:** Required for analysis video generation and must be available in `PATH`.
 - **Optional NVIDIA CUDA Toolkit:** Used for the optional CUDA/NPP acceleration path when present. The application keeps CPU fallbacks and does not require CUDA-enabled OpenCV.
 
+Input videos accepted by headless mode use the `.mp4`, `.mkv`, `.avi`, `.mov`, or `.webm` extensions. The application is currently supported on Windows x64; Linux and macOS remain roadmap work.
+
 ## Build
 
 From the project root:
@@ -80,6 +82,8 @@ Override saved settings with command-line flags:
 
 The GUI headless options include `--pgn`, `--analysis-video`, `--move-labels`, `--multi-pv`, `--depth`, `--analysis-depth`, `--time`, `--nodes`, `--threads`, `--memory-limit`, `--output`, `--board-asset`, and `--debug-level`. Options override saved settings for that run; they do not rewrite the settings file.
 
+Headless mode accepts one positional video per invocation. `--multi-pv` accepts 1-4 lines, `--depth` accepts 1-40, `--analysis-depth` accepts 1-20, `--time` accepts 0-600 seconds per move, `--nodes` accepts 0-1,000,000,000 nodes per move, and `--memory-limit` accepts 0-65,536 MB; zero means no limit. Run `"ChessTube Analyzer.exe" --help` for the generated option descriptions and detected thread maximum.
+
 ## Output Files
 
 The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves, clock times, and any ECO/opening metadata found through the cached Lichess Explorer lookup. PGN move-quality labels are controlled by their own output toggle and run Stockfish when enabled.
@@ -89,6 +93,8 @@ Stable analysis reverts are written as PGN variations. Main-line clock observati
 If move subtitles are enabled, the analyzer creates a temporary SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next later move or a short default duration. Non-finite timestamps and timestamps that would create a non-positive cue duration are skipped, which keeps replayed analysis branches from producing invalid subtitle packets. The temporary SRT file is removed after export completes.
 
 If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Engine-backed overlays such as eval bars, PV text, and engine arrows run Stockfish automatically. Opening-name overlays are optional and only display when opening metadata is available. If hardware-accelerated video composition fails, the worker retries with the CPU H.264 encoder before reporting failure.
+
+The GUI offers H.264, HEVC, and VP9 video encoders; CPU H.264 is the broadest compatibility choice. Output containers available in the GUI are `.mp4`, `.mkv`, `.avi`, and `.mov`. Source audio can be copied or converted to AAC when the selected container/codec requires it.
 
 Stockfish is required only when PGN labels or the requested analysis video overlays need engine data. In that mode the worker validates the configured executable path, nearby bundled `stockfish` folders, and `PATH` before extraction begins so missing engine installs fail early with a settings-focused error.
 
@@ -108,6 +114,8 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 - `CTA_DIAGNOSTIC_FRAME_DIR` and `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS`: retain sampled full-frame, board, and clock-ROI artifacts for a diagnostic JSONL run.
 - `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS`: control periodic geometry rechecks during diagnostics (clamped to 1-30 seconds).
 - `CTA_REPLAY_OBSERVATIONS`: replace source-video decoding and board initialization with a saved compact `observations.jsonl` trace and its artifacts.
+
+Diagnostic output is not a normal export. A failure bundle may contain `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, sampled images, SVG overlays, and an HTML contact sheet. Keep these files in a build or temporary directory.
 
 The reducer also applies a bounded settle window, recent-square conflict checks, indexed revert lookup, hover-box rejection, and clock-turn validation before accepting a move. These checks are intentionally conservative so PGN output remains legal even when the video contains analysis reverts or dragging artifacts.
 
@@ -149,4 +157,4 @@ Compare a source diagnostic trace with an observation-replay trace:
 python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
 ```
 
-The comparison checks observation IDs, mapper provenance, board hashes, and then event/FEN/move agreement. It is a diagnostic comparison tool; replay equivalence across every accepted move, clock, revert, and variation case remains tracked in the roadmap.
+The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output and `--detector-calibration` for labeled detector quality reports. The seed manifests are `assets\sample_yellow_squares\labels.jsonl` and `assets\sample_clock_changes\labels.jsonl`; their results are advisory until the corpus is expanded.

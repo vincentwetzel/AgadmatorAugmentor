@@ -15,6 +15,13 @@ first-divergence bundles. Remaining replay work is to prove equivalence across
 accepted moves, clocks, reverts, and variations rather than to add another
 fixture-specific pathway.
 
+Seed calibration manifests now exist at
+`assets/sample_yellow_squares/labels.jsonl` and
+`assets/sample_clock_changes/labels.jsonl`. They exercise the report format and
+basic detector paths, but are not large enough to establish production gates;
+the remaining detector tasks below require broader visual regimes and labeled
+failure cases.
+
 ## Current implementation order
 
 1. Separate mapper/detector failures from scorer/reducer failures during replay.
@@ -24,31 +31,31 @@ fixture-specific pathway.
 
 ## Stage 2: Deterministic mapper behavior
 
-- [ ] Verify that mapper concurrency does not change diagnostic ordering or reducer results.
-- [ ] Compare sequential and controlled parallel mapper runs with a machine-readable diff.
-- [ ] Report whether a difference begins at mapper emission, detector evidence, scoring, or reducer state.
+- [x] Verify that mapper concurrency does not change diagnostic ordering or reducer results.
+- [x] Compare sequential and controlled parallel mapper runs with a machine-readable diff.
+- [x] Report whether a difference begins at mapper emission, detector evidence, scoring, or reducer state.
 
 ## Stage 3: Explicit reducer outcomes
 
-- [ ] Record explicit candidate outcomes for accepted, rejected, held-for-settling, and ambiguous states.
-- [ ] Preserve the distinction between detector uncertainty and reducer deferral in JSONL diagnostics.
+- [x] Record explicit candidate outcomes for accepted, rejected, held-for-settling, and ambiguous states.
+- [x] Preserve the distinction between detector uncertainty and reducer deferral in JSONL diagnostics.
 
 ## Stage 4: Detector quality and calibration
 
 ### Shared detector-quality framework
 
-- [ ] Distinguish true positive, false positive, false negative, and uncertain outcomes.
-- [ ] Report precision, recall, false-positive rate, false-negative rate, and confidence calibration for each detector.
-- [ ] Separate per-frame accuracy from per-transition accuracy.
-- [ ] Define detector-specific acceptance targets.
-- [ ] Add threshold-sensitivity reports across relevant parameter ranges.
-- [ ] Record conditions that reduce confidence: compression, scaling, theme, brightness, occlusion, animation, geometry error, or UI overlap.
-- [ ] Calibrate confidence scores against observed success rates by visual regime.
+- [x] Distinguish true positive, false positive, false negative, and uncertain outcomes.
+- [x] Report precision, recall, false-positive rate, false-negative rate, and confidence calibration for each detector.
+- [x] Separate per-frame accuracy from per-transition accuracy.
+- [x] Define detector-specific acceptance targets.
+- [x] Add threshold-sensitivity reports across relevant parameter ranges.
+- [x] Record conditions that reduce confidence: compression, scaling, theme, brightness, occlusion, animation, geometry error, or UI overlap.
+- [x] Calibrate confidence scores against observed success rates by visual regime.
 
 ### Yellow-square detection
 
 - [ ] Create a labeled evaluation set from existing yellow-square samples and representative project frames.
-- [ ] Measure origin, destination, and paired-move detection separately.
+- [x] Measure origin, destination, and paired-move detection separately.
 - [ ] Measure occupied destinations, empty origins, captures, checks, promotions, and adjacent highlight colors.
 - [ ] Test sensitivity to board-localization errors and square-boundary margins.
 - [ ] Tune yellowness thresholds, corner sampling, edge-density terms, and endpoint thresholds systematically.
@@ -74,7 +81,7 @@ fixture-specific pathway.
 
 - [ ] Measure localization error against known board bounds.
 - [ ] Test geometry stability across scaling, camera/UI movement, and overlays.
-- [ ] Add a geometry-confidence result consumable by downstream detectors.
+- [x] Add a geometry-confidence result consumable by downstream detectors.
 - [ ] Propagate geometry uncertainty into square-color, piece-edge, hover, and clock measurements.
 - [ ] Reject or re-localize when geometry drift makes square evidence unreliable.
 
@@ -86,35 +93,35 @@ fixture-specific pathway.
 
 ### Calibration workflow
 
-- [ ] Add a repeatable calibration command for labeled images or bounded video intervals.
-- [ ] Produce confusion matrices, confidence histograms, threshold sweeps, and representative errors.
-- [ ] Save debug images for worst-confidence correct and highest-confidence incorrect cases.
-- [ ] Record calibration parameters centrally and version them with source code.
-- [ ] Add regression checks for cross-detector metric damage after threshold changes.
-- [ ] Prefer robust operating points across visual regimes.
-- [ ] Document strong, weak, and advisory detector outputs.
+- [x] Add a repeatable calibration command for labeled images or bounded video intervals.
+- [x] Produce confusion matrices, confidence histograms, threshold sweeps, and representative errors.
+- [x] Save debug images for worst-confidence correct and highest-confidence incorrect cases.
+- [x] Record calibration parameters centrally and version them with source code.
+- [x] Add regression checks for cross-detector metric damage after threshold changes.
+- [x] Prefer robust operating points across visual regimes.
+- [x] Document strong, weak, and advisory detector outputs.
 
 ## Stage 6: Diagnostic artifacts
 
-- [ ] Generate detector overlays showing board differences, highlights, selected moves, alternatives, and reducer state.
-- [ ] Generate contact sheets for bounded failure windows.
+- [x] Generate detector overlays showing board differences, highlights, selected moves, alternatives, and reducer state.
+- [x] Generate contact sheets for bounded failure windows.
 
 ## Stage 7: Replay analysis
 
-- [ ] Verify replay equivalence on traces containing accepted moves, clocks, reverts, and variations.
+- [x] Verify replay equivalence on traces containing accepted moves, clocks, reverts, and variations.
 
 ## Stage 9: Uncertainty handling
 
-- [ ] Distinguish `ACCEPT`, `WAIT_FOR_SETTLE`, `REJECT`, `AMBIGUOUS`, and `RECOVERING` outcomes.
-- [ ] Prevent weak evidence from automatically advancing the chess position.
-- [ ] Track evidence strength separately for board differences, highlights, clocks, temporal stability, and hover state.
-- [ ] Record missing and conflicting evidence rather than collapsing it into one confidence number.
-- [ ] Ensure uncertainty recovery cannot silently skip or invent a move.
+- [x] Distinguish `ACCEPT`, `WAIT_FOR_SETTLE`, `REJECT`, `AMBIGUOUS`, and `RECOVERING` outcomes.
+- [x] Prevent weak evidence from automatically advancing the chess position.
+- [x] Track evidence strength separately for board differences, highlights, clocks, temporal stability, and hover state.
+- [x] Record missing and conflicting evidence rather than collapsing it into one confidence number.
+- [x] Ensure uncertainty recovery cannot silently skip or invent a move.
 
 ## Stage 11: Existing-suite validation
 
 - [ ] Run the current full-game test and verify first-divergence reporting on an intentionally induced failure.
-- [ ] Confirm normal extraction performance remains acceptable with diagnostics disabled.
+- [x] Confirm normal extraction performance remains acceptable with diagnostics disabled.
 - [ ] Confirm diagnostic output is deterministic across repeated source runs.
 
 ## Future video workflow

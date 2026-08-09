@@ -194,6 +194,59 @@ void adjust_sliding_target(int& to_sq, const char*& to_name, int from_sq, const 
         return piece != ' ' && piece != '.';
     };
 
+    // During a slider animation the piece can be rendered on an empty
+    // intermediate square before the registered landing square is visible.
+    // A neighboring square may then have a larger yellow/color score purely
+    // because of animation spillover.  Do not resolve that weak neighbor and
+    // accept it as a move; leave the candidate untouched so the reducer's
+    // settling lookahead can score the next stable frame.
+    if (!is_occupied(board_map[to_sq])) {
+        int line_step = 0;
+        if (from_rank == to_rank && to_file != from_file) {
+            line_step = to_file > from_file ? 1 : -1;
+        } else if (from_file == to_file && to_rank != from_rank) {
+            line_step = to_rank > from_rank ? 8 : -8;
+        }
+        if (line_step != 0) {
+            bool has_farther_legal_landing = false;
+            for (int candidate_sq = to_sq + line_step;
+                 candidate_sq >= 0 && candidate_sq < 64;
+                 candidate_sq += line_step) {
+                if ((line_step == 1 || line_step == -1) &&
+                    (candidate_sq >> 3) != from_rank) {
+                    break;
+                }
+                const char* candidate_name = utils::sq_name(candidate_sq);
+                char candidate_uci[5] = {
+                    from_name[0], from_name[1], candidate_name[0], candidate_name[1], '\0'};
+                try {
+                    (void)pos_ptr->parse_move(candidate_uci);
+                    has_farther_legal_landing = true;
+                } catch (...) {
+                    break;
+                }
+                if (is_occupied(board_map[candidate_sq])) break;
+            }
+
+            const double intermediate_yellow =
+                validation::check_yellowness(board_bgr, geo, to_name);
+            const double intermediate_piece_edges =
+                square_piece_edge_score(board_bgr, geo, to_name);
+            constexpr double kIntermediatePieceEdgeThreshold = 18.0;
+            constexpr double kWeakIntermediateYellowThreshold = 25.0;
+            if (has_farther_legal_landing &&
+                sq_diffs[to_sq] >= 12.0 &&
+                intermediate_piece_edges >= kIntermediatePieceEdgeThreshold &&
+                intermediate_yellow < kWeakIntermediateYellowThreshold) {
+                trace_endpoint_decision(
+                    "MID_SLIDER_DEFER", to_sq, intermediate_yellow,
+                    intermediate_yellow + sq_diffs[to_sq], intermediate_yellow,
+                    intermediate_piece_edges, true);
+                return;
+            }
+        }
+    }
+
     if (alt_to < 0 && (from_rank == to_rank || from_file == to_file)) {
         int step = 0;
         if (from_rank == to_rank && std::abs(to_file - from_file) == 1) {

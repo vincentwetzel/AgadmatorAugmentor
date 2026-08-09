@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <set>
+#include <map>
 #include <algorithm>
 #include <iostream>
 #include <chrono>
@@ -120,6 +121,20 @@ TEST(ExtractionDiagnosticsTest, ClassifiesLegacyEvents) {
     EXPECT_STREQ(cta::diagnostics::to_string(restored.phase), "revert");
     EXPECT_STREQ(cta::diagnostics::to_string(restored.outcome), "recovered");
     EXPECT_STREQ(cta::diagnostics::to_string(restored.reason), "revert_applied");
+
+    const auto held = cta::diagnostics::from_legacy_trace(
+        9, "SETTLE_PROBE", 15.0, 2, "fen", "e2e4", 70.0, 0.0,
+        0.0, 0.0, "settle=probe");
+    EXPECT_STREQ(cta::diagnostics::to_string(held.phase), "reducer");
+    EXPECT_STREQ(cta::diagnostics::to_string(held.outcome), "deferred");
+    EXPECT_STREQ(cta::diagnostics::to_string(held.reason), "candidate_held_for_settling");
+
+    const auto ambiguous = cta::diagnostics::from_legacy_trace(
+        10, "ORIGIN_CANDIDATE", 15.1, 2, "fen", "c2e4", 68.0, 0.0,
+        20.0, 32.0, "alternative_origin");
+    EXPECT_STREQ(cta::diagnostics::to_string(ambiguous.phase), "scoring");
+    EXPECT_STREQ(cta::diagnostics::to_string(ambiguous.outcome), "ambiguous");
+    EXPECT_STREQ(cta::diagnostics::to_string(ambiguous.reason), "candidate_ambiguous");
 }
 
 TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
@@ -145,6 +160,7 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     evidence.square_height = 100.0;
     evidence.localization_score = 0.97;
     evidence.localization_scale = 1.25;
+    evidence.localization_confidence = 0.985;
     evidence.board_hash = {1.0, 2.0, 3.0, 4.0};
     evidence.geometry_checked = true;
     evidence.geometry_anomaly = true;
@@ -240,6 +256,7 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     EXPECT_EQ(json.at("evidence").at("template_identity"), 1311768467463790320ull);
     EXPECT_EQ(json.at("evidence").at("board_width"), 800);
     EXPECT_EQ(json.at("evidence").at("localization_score"), 0.97);
+    EXPECT_EQ(json.at("evidence").at("localization_confidence"), 0.985);
     EXPECT_EQ(json.at("evidence").at("board_hash").size(), 4u);
     EXPECT_TRUE(json.at("evidence").at("geometry_checked"));
     EXPECT_TRUE(json.at("evidence").at("geometry_anomaly"));
@@ -1320,6 +1337,8 @@ TEST_F(DetectorsTest, LocateBoardOnItself) {
     EXPECT_NEAR(geo.sq_h, static_cast<double>(geo.bh) / 8.0, 1.0);
     EXPECT_GT(geo.localization_score, -1.0);
     EXPECT_GT(geo.localization_scale, 0.0);
+    EXPECT_GE(geo.geometry_confidence, 0.0);
+    EXPECT_LE(geo.geometry_confidence, 1.0);
 }
 
 #endif // TEST_LOCATE_BOARD
@@ -1372,6 +1391,57 @@ TEST_F(DetectorsTest, YellowSquares) {
         EXPECT_EQ(extracted_dest, expected_dest) << "Failed on " << img_path;
     }
     std::cout << "PASS: Extracted valid moves from " << files.size() << " yellow square images.\n";
+}
+
+TEST_F(DetectorsTest, YellowSquareCalibrationLabels) {
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_yellow_squares";
+    const auto labels_path = dataset_dir / "labels.jsonl";
+    std::ifstream labels(labels_path);
+    if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
+
+    struct Counts { int true_positive = 0; int true_negative = 0;
+                    int false_positive = 0; int false_negative = 0; };
+    std::map<std::string, Counts> metrics;
+    std::string line;
+    while (std::getline(labels, line)) {
+        if (line.empty()) continue;
+        const auto label = nlohmann::json::parse(line);
+        const auto image_path = dataset_dir / label.at("image").get<std::string>();
+        const auto image = cv::imread(image_path.string());
+        ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_path.string();
+        const auto geometry = locate_board(image, board_);
+        const auto move = extract_move_from_yellow_squares(image, board_, geometry);
+        const auto component = label.at("component").get<std::string>();
+        const auto truth = label.at("truth").get<std::string>() == "positive";
+        const auto origin = label.value("origin", std::string());
+        const auto destination = label.value("destination", std::string());
+        const bool valid_move = move.size() >= 4;
+        const bool predicted = valid_move &&
+            (component == "origin" ? move.substr(0, 2) == origin :
+             component == "destination" ? move.substr(2, 2) == destination :
+             move.substr(0, 2) == origin && move.substr(2, 2) == destination);
+        auto& count = metrics[component];
+        if (truth && predicted) ++count.true_positive;
+        else if (!truth && !predicted) ++count.true_negative;
+        else if (!truth) ++count.false_positive;
+        else ++count.false_negative;
+    }
+
+    for (const auto& [component, count] : metrics) {
+        const int labeled = count.true_positive + count.true_negative +
+            count.false_positive + count.false_negative;
+        ASSERT_GT(labeled, 0);
+        const double precision = static_cast<double>(count.true_positive) /
+            std::max(1, count.true_positive + count.false_positive);
+        const double recall = static_cast<double>(count.true_positive) /
+            std::max(1, count.true_positive + count.false_negative);
+        std::cout << "  Yellow " << component << " calibration: TP=" << count.true_positive
+                  << " TN=" << count.true_negative << " FP=" << count.false_positive
+                  << " FN=" << count.false_negative << " precision=" << precision
+                  << " recall=" << recall << "\n";
+        EXPECT_EQ(labeled, 9) << component;
+    }
+    EXPECT_EQ(metrics.size(), 3u);
 }
 
 #endif // TEST_YELLOW_SQUARES
@@ -1609,6 +1679,57 @@ TEST_F(DetectorsTest, GameClocks) {
         EXPECT_TRUE(black_ok) << "Failed on " << img_path << ": black time '" << state.black_time << "' != '" << expected_black << "'";
     }
     std::cout << (failed == 0 ? "PASS" : "FAIL") << ": " << passed << "/" << (passed + failed) << " clock tests passed.\n";
+}
+
+TEST_F(DetectorsTest, GameClockCalibrationLabels) {
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_clock_changes";
+    const auto labels_path = dataset_dir / "labels.jsonl";
+    std::ifstream labels(labels_path);
+    if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
+
+    struct Counts { int true_positive = 0; int true_negative = 0;
+                    int false_positive = 0; int false_negative = 0; };
+    std::map<std::string, Counts> metrics;
+    std::map<std::string, ClockState> state_cache;
+    std::string line;
+    while (std::getline(labels, line)) {
+        if (line.empty()) continue;
+        const auto label = nlohmann::json::parse(line);
+        const auto image_path = dataset_dir / label.at("image").get<std::string>();
+        auto state_it = state_cache.find(image_path.string());
+        if (state_it == state_cache.end()) {
+            const auto image = cv::imread(image_path.string());
+            ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_path.string();
+            const auto geometry = locate_board(image, board_);
+            state_it = state_cache.emplace(
+                image_path.string(), extract_clocks(image, board_, geometry)).first;
+        }
+        const auto& state = state_it->second;
+        const auto component = label.at("component").get<std::string>();
+        const bool truth = label.value("truth", std::string("uncertain")) == "positive";
+        const bool predicted = component == "active_side"
+            ? state.active_player == label.at("expected_active").get<std::string>()
+            : component == "white_ocr"
+                ? state.white_time == label.at("expected_white").get<std::string>()
+                : state.black_time == label.at("expected_black").get<std::string>();
+        auto& count = metrics[component];
+        if (truth && predicted) ++count.true_positive;
+        else if (!truth && !predicted) ++count.true_negative;
+        else if (!truth) ++count.false_positive;
+        else ++count.false_negative;
+    }
+
+    for (const auto& [component, count] : metrics) {
+        const int labeled = count.true_positive + count.true_negative +
+            count.false_positive + count.false_negative;
+        ASSERT_EQ(labeled, 3) << component;
+        const double accuracy = static_cast<double>(count.true_positive + count.true_negative) /
+            labeled;
+        std::cout << "  Clock " << component << " calibration: TP=" << count.true_positive
+                  << " TN=" << count.true_negative << " FP=" << count.false_positive
+                  << " FN=" << count.false_negative << " accuracy=" << accuracy << "\n";
+    }
+    EXPECT_EQ(metrics.size(), 3u);
 }
 
 #endif // TEST_GAME_CLOCKS

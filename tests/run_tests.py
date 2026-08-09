@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import argparse
+import html
 import json
 from collections import Counter
 from pathlib import Path
@@ -49,6 +50,21 @@ def parse_args():
         nargs=2,
         metavar=("SOURCE_JSONL", "REPLAY_JSONL"),
         help="Compare source-run and observation-replay diagnostic JSONL files.",
+    )
+    parser.add_argument(
+        "--compare-mapper-runs",
+        nargs=2,
+        metavar=("SEQUENTIAL_JSONL", "PARALLEL_JSONL"),
+        help="Compare mapper emissions from sequential and controlled-parallel runs.",
+    )
+    parser.add_argument(
+        "--detector-calibration",
+        metavar="LABELS_JSONL",
+        help="Evaluate labeled detector observations and print calibration JSON.",
+    )
+    parser.add_argument(
+        "--calibration-debug-dir",
+        help="Copy representative labeled-error images into this directory.",
     )
     parser.add_argument("--trace-start", type=float, help="First timestamp to trace.")
     parser.add_argument("--trace-end", type=float, help="Last timestamp to trace.")
@@ -133,6 +149,7 @@ def compact_observations(records):
                 "height": evidence.get("board_height", 0),
                 "square_width": evidence.get("square_width", 0.0),
                 "square_height": evidence.get("square_height", 0.0),
+                "localization_confidence": evidence.get("localization_confidence", 0.0),
                 "hash": evidence.get("board_hash", []),
                 "changed_squares": evidence.get("changed_squares", []),
             },
@@ -154,6 +171,7 @@ def compact_observations(records):
         observation["events"].append({
             "sequence": record.get("sequence", 0),
             "event": record.get("event", ""),
+            "outcome": _diagnostic_outcome(record),
             "active_ply": record.get("active_ply", 0),
             "candidate_id": record.get("candidate_id", 0),
             "transition_id": record.get("transition_id", 0),
@@ -267,6 +285,462 @@ def read_diagnostic_records(path):
     return records, malformed_lines
 
 
+def _calibration_label(value):
+    """Normalize the small, explicit label vocabulary used by calibration files."""
+    if isinstance(value, bool):
+        return "positive" if value else "negative"
+    normalized = str(value or "").strip().lower()
+    if normalized in {"positive", "pos", "true", "1", "yes", "detected", "passed"}:
+        return "positive"
+    if normalized in {"negative", "neg", "false", "0", "no", "clear", "missing"}:
+        return "negative"
+    return "uncertain"
+
+
+def _calibration_metrics(labels):
+    counts = {name: 0 for name in (
+        "true_positive", "true_negative", "false_positive", "false_negative",
+        "uncertain", "labeled",
+    )}
+    correct_labels = []
+    for label in labels:
+        truth = _calibration_label(label.get("truth"))
+        prediction = _calibration_label(label.get("prediction"))
+        if truth == "uncertain" or prediction == "uncertain":
+            counts["uncertain"] += 1
+            continue
+        counts["labeled"] += 1
+        if truth == "positive" and prediction == "positive":
+            counts["true_positive"] += 1
+        elif truth == "negative" and prediction == "negative":
+            counts["true_negative"] += 1
+        elif truth == "negative":
+            counts["false_positive"] += 1
+        else:
+            counts["false_negative"] += 1
+        try:
+            confidence = float(label.get("confidence"))
+        except (TypeError, ValueError):
+            confidence = None
+        if confidence is not None and 0.0 <= confidence <= 1.0:
+            correct_labels.append((confidence, truth == prediction))
+
+    def rate(numerator, denominator):
+        return numerator / denominator if denominator else None
+
+    counts.update({
+        "precision": rate(counts["true_positive"], counts["true_positive"] + counts["false_positive"]),
+        "recall": rate(counts["true_positive"], counts["true_positive"] + counts["false_negative"]),
+        "false_positive_rate": rate(counts["false_positive"], counts["false_positive"] + counts["true_negative"]),
+        "false_negative_rate": rate(counts["false_negative"], counts["false_negative"] + counts["true_positive"]),
+        "accuracy": rate(counts["true_positive"] + counts["true_negative"], counts["labeled"]),
+    })
+    bins = []
+    for bin_index in range(10):
+        lower = bin_index / 10.0
+        upper = (bin_index + 1) / 10.0
+        values = [item for item in correct_labels
+                  if lower <= item[0] < upper or (bin_index == 9 and item[0] == 1.0)]
+        bins.append({
+            "lower": lower,
+            "upper": upper,
+            "count": len(values),
+            "mean_confidence": (sum(item[0] for item in values) / len(values)
+                                 if values else None),
+            "observed_accuracy": (sum(1 for _, correct in values if correct) / len(values)
+                                   if values else None),
+        })
+    counts["confidence_bins"] = bins
+    return counts
+
+
+def _transition_labels(labels):
+    """Collapse frame labels into transition labels without hiding conflicts."""
+    grouped = {}
+    for label in labels:
+        transition_id = label.get("transition_id")
+        if transition_id in (None, ""):
+            continue
+        grouped.setdefault(str(transition_id), []).append(label)
+    collapsed = []
+    for transition_id, group in grouped.items():
+        truth_values = {_calibration_label(item.get("truth")) for item in group}
+        prediction_values = {_calibration_label(item.get("prediction")) for item in group}
+        confidence_values = [float(item["confidence"]) for item in group
+                             if isinstance(item.get("confidence"), (int, float)) and
+                             0.0 <= float(item["confidence"]) <= 1.0]
+        collapsed.append({
+            "transition_id": transition_id,
+            "truth": next(iter(truth_values)) if len(truth_values) == 1 else "uncertain",
+            "prediction": next(iter(prediction_values)) if len(prediction_values) == 1 else "uncertain",
+            "confidence": (sum(confidence_values) / len(confidence_values)
+                           if confidence_values else None),
+        })
+    return collapsed
+
+
+CALIBRATION_PARAMETERS = {
+    "version": 2,
+    "confidence_bins": 10,
+    "representative_error_limit": 10,
+    # A regime with only one or two labels can make a threshold look robust
+    # by accident.  Keep the operating-point report advisory until each
+    # visual regime has enough independent examples.
+    "minimum_regime_labeled": 5,
+    "regression_tolerances": {
+        "precision_drop_max": 0.02,
+        "recall_drop_max": 0.02,
+        "false_positive_rate_increase_max": 0.02,
+    },
+}
+
+DETECTOR_ACCEPTANCE_TARGETS = {
+    # These are review gates for calibration reports, not production
+    # thresholds. They remain provisional until a representative labeled set
+    # establishes detector-specific operating points.
+    "yellow": {"minimum_labeled": 30, "precision_min": 0.95,
+                "recall_min": 0.95, "false_positive_rate_max": 0.02},
+    "clock": {"minimum_labeled": 30, "precision_min": 0.98,
+              "recall_min": 0.95, "false_positive_rate_max": 0.02},
+    "hover": {"minimum_labeled": 30, "precision_min": 0.95,
+              "recall_min": 0.95, "false_positive_rate_max": 0.03},
+    "geometry": {"minimum_labeled": 30, "precision_min": 0.98,
+                 "recall_min": 0.98, "false_positive_rate_max": 0.01},
+}
+
+
+def _target_evaluation(metrics, target):
+    if metrics["labeled"] < target["minimum_labeled"]:
+        return {"status": "insufficient_data", "target": target}
+    checks = {
+        "precision_min": metrics["precision"] is not None and
+        metrics["precision"] >= target["precision_min"],
+        "recall_min": metrics["recall"] is not None and
+        metrics["recall"] >= target["recall_min"],
+        "false_positive_rate_max": metrics["false_positive_rate"] is not None and
+        metrics["false_positive_rate"] <= target["false_positive_rate_max"],
+    }
+    return {"status": "pass" if all(checks.values()) else "fail",
+            "target": target, "checks": checks}
+
+
+def _threshold_sweep(labels):
+    scored = []
+    for label in labels:
+        try:
+            score = float(label.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if _calibration_label(label.get("truth")) != "uncertain":
+            scored.append((score, label))
+    thresholds = sorted({score for score, _ in scored})
+    report = []
+    for threshold in thresholds:
+        threshold_labels = [
+            {**label, "prediction": "positive" if score >= threshold else "negative"}
+            for score, label in scored
+        ]
+        metrics = _calibration_metrics(threshold_labels)
+        report.append({
+            "threshold": threshold,
+            "labeled": metrics["labeled"],
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "false_positive_rate": metrics["false_positive_rate"],
+            "false_negative_rate": metrics["false_negative_rate"],
+            "accuracy": metrics["accuracy"],
+        })
+    return report
+
+
+def _robust_operating_point(labels, target):
+    """Select a threshold using worst-regime metrics, not aggregate accuracy."""
+    scored = []
+    regimes = {}
+    for label in labels:
+        if _calibration_label(label.get("truth")) == "uncertain":
+            continue
+        try:
+            score = float(label.get("score"))
+        except (TypeError, ValueError):
+            continue
+        scored.append((score, label))
+        regimes.setdefault(str(label.get("regime", "unspecified")), []).append(label)
+
+    if not scored:
+        return {
+            "status": "insufficient_data",
+            "reason": "no_scored_labeled_observations",
+            "candidate_count": 0,
+            "selected": None,
+        }
+
+    candidates = []
+    minimum_regime_labeled = CALIBRATION_PARAMETERS["minimum_regime_labeled"]
+    for threshold in sorted({score for score, _ in scored}):
+        threshold_labels = [
+            {**label, "prediction": "positive" if score >= threshold else "negative"}
+            for score, label in scored
+        ]
+        overall = _calibration_metrics(threshold_labels)
+        regime_metrics = {}
+        for regime, regime_labels in sorted(regimes.items()):
+            regime_threshold_labels = [
+                {**label, "prediction": "positive" if float(label.get("score")) >= threshold else "negative"}
+                for label in regime_labels
+            ]
+            regime_metrics[regime] = _calibration_metrics(regime_threshold_labels)
+        supported = {
+            regime: metrics for regime, metrics in regime_metrics.items()
+            if metrics["labeled"] >= minimum_regime_labeled
+        }
+        if supported:
+            def metric_or_zero(metrics, name):
+                value = metrics[name]
+                return 0.0 if value is None else value
+
+            worst_case = {
+                # An undefined precision/recall means the threshold provided
+                # no positive evidence for that regime; it cannot qualify as
+                # a robust operating point.
+                "precision": min(metric_or_zero(metrics, "precision")
+                                  for metrics in supported.values()),
+                "recall": min(metric_or_zero(metrics, "recall")
+                               for metrics in supported.values()),
+                "false_positive_rate": max(
+                    metric_or_zero(metrics, "false_positive_rate")
+                    for metrics in supported.values()),
+                "regime_count": len(supported),
+            }
+        else:
+            worst_case = {
+                "precision": None,
+                "recall": None,
+                "false_positive_rate": None,
+                "regime_count": 0,
+            }
+        meets_target = (
+            overall["labeled"] >= target["minimum_labeled"] and
+            bool(supported) and
+            worst_case["precision"] >= target["precision_min"] and
+            worst_case["recall"] >= target["recall_min"] and
+            worst_case["false_positive_rate"] <= target["false_positive_rate_max"]
+        )
+        candidates.append({
+            "threshold": threshold,
+            "overall": overall,
+            "regimes": regime_metrics,
+            "supported_regimes": sorted(supported),
+            "worst_case": worst_case,
+            "meets_target": meets_target,
+        })
+
+    def rank(candidate):
+        worst_case = candidate["worst_case"]
+        return (
+            1 if candidate["meets_target"] else 0,
+            worst_case["recall"] if worst_case["recall"] is not None else -1.0,
+            worst_case["precision"] if worst_case["precision"] is not None else -1.0,
+            -(worst_case["false_positive_rate"]
+              if worst_case["false_positive_rate"] is not None else 1.0),
+            candidate["overall"]["recall"] or -1.0,
+            -candidate["threshold"],
+        )
+
+    selected = max(candidates, key=rank)
+    status = "pass" if selected["meets_target"] else (
+        "insufficient_data"
+        if selected["worst_case"]["regime_count"] == 0 or
+        selected["overall"]["labeled"] < target["minimum_labeled"]
+        else "advisory"
+    )
+    return {
+        "status": status,
+        "candidate_count": len(candidates),
+        "minimum_regime_labeled": minimum_regime_labeled,
+        "selected": selected,
+    }
+
+
+def _representative_errors(labels, source_dir=None, debug_dir=None):
+    candidates = []
+    for label in labels:
+        truth = _calibration_label(label.get("truth"))
+        prediction = _calibration_label(label.get("prediction"))
+        if truth == "uncertain" or prediction == "uncertain":
+            continue
+        try:
+            confidence = float(label.get("confidence"))
+        except (TypeError, ValueError):
+            continue
+        if not 0.0 <= confidence <= 1.0:
+            continue
+        candidates.append((confidence, truth == prediction, label))
+
+    def describe(confidence, correct, label, kind, index):
+        image_value = label.get("image", "")
+        image_path = Path(image_value)
+        if source_dir and not image_path.is_absolute():
+            image_path = Path(source_dir) / image_path
+        copied_path = ""
+        if debug_dir and image_value and image_path.is_file():
+            debug_path = Path(debug_dir)
+            debug_path.mkdir(parents=True, exist_ok=True)
+            copied = debug_path / f"{kind}_{index}_{image_path.name}"
+            shutil.copy2(image_path, copied)
+            copied_path = str(copied.resolve())
+        return {
+            "kind": kind,
+            "confidence": confidence,
+            "correct": correct,
+            "truth": _calibration_label(label.get("truth")),
+            "prediction": _calibration_label(label.get("prediction")),
+            "image": image_value,
+            "debug_image": copied_path,
+            "regime": str(label.get("regime", "unspecified")),
+            "condition": label.get("condition", label.get("conditions", "")),
+            "component": str(label.get("component", "all")),
+            "case": str(label.get("case", "unspecified")),
+        }
+
+    incorrect = sorted(
+        (item for item in candidates if not item[1]),
+        key=lambda item: item[0], reverse=True,
+    )[:CALIBRATION_PARAMETERS["representative_error_limit"]]
+    low_confidence_correct = sorted(
+        (item for item in candidates if item[1]),
+        key=lambda item: item[0],
+    )[:CALIBRATION_PARAMETERS["representative_error_limit"]]
+    return {
+        "highest_confidence_incorrect": [
+            describe(confidence, correct, label, "incorrect", index)
+            for index, (confidence, correct, label) in enumerate(incorrect)
+        ],
+        "lowest_confidence_correct": [
+            describe(confidence, correct, label, "correct", index)
+            for index, (confidence, correct, label) in enumerate(low_confidence_correct)
+        ],
+    }
+
+
+def _label_conditions(label):
+    conditions = label.get("conditions", label.get("condition", []))
+    if isinstance(conditions, str):
+        conditions = [item.strip() for item in conditions.split(",") if item.strip()]
+    if not conditions:
+        return ["unspecified"]
+    return [str(condition) for condition in conditions]
+
+
+def detector_calibration(records, source_dir=None, debug_dir=None):
+    """Evaluate labeled detector rows without making production decisions."""
+    by_detector = {}
+    for record in records:
+        detector = str(record.get("detector", "")).strip().lower()
+        if not detector or "truth" not in record or "prediction" not in record:
+            continue
+        by_detector.setdefault(detector, []).append(record)
+
+    result = {
+        "schema_version": 1,
+        "calibration_parameters": CALIBRATION_PARAMETERS,
+        "detectors": {},
+    }
+    for detector, labels in sorted(by_detector.items()):
+        regimes = {}
+        conditions = {}
+        components = {}
+        cases = {}
+        for label in labels:
+            regimes.setdefault(str(label.get("regime", "unspecified")), []).append(label)
+            for condition in _label_conditions(label):
+                conditions.setdefault(condition, []).append(label)
+            component = str(label.get("component", "all")).strip().lower() or "all"
+            components.setdefault(component, []).append(label)
+            case = str(label.get("case", "unspecified")).strip().lower() or "unspecified"
+            cases.setdefault(case, []).append(label)
+        frame_metrics = _calibration_metrics(labels)
+        target = DETECTOR_ACCEPTANCE_TARGETS.get(
+            detector,
+            {"minimum_labeled": 30, "precision_min": 0.95,
+             "recall_min": 0.95, "false_positive_rate_max": 0.02},
+        )
+        result["detectors"][detector] = {
+            "frame": frame_metrics,
+            "transition": _calibration_metrics(_transition_labels(labels)),
+            "regimes": {
+                regime: _calibration_metrics(regime_labels)
+                for regime, regime_labels in sorted(regimes.items())
+            },
+            "conditions": {
+                condition: _calibration_metrics(condition_labels)
+                for condition, condition_labels in sorted(conditions.items())
+            },
+            "components": {
+                component: _calibration_metrics(component_labels)
+                for component, component_labels in sorted(components.items())
+            },
+            "cases": {
+                case: _calibration_metrics(case_labels)
+                for case, case_labels in sorted(cases.items())
+            },
+            "acceptance_target": _target_evaluation(frame_metrics, target),
+            "threshold_sweep": _threshold_sweep(labels),
+            "robust_operating_point": _robust_operating_point(labels, target),
+            "representative_errors": _representative_errors(
+                labels, source_dir=source_dir, debug_dir=debug_dir),
+        }
+        target_status = result["detectors"][detector]["acceptance_target"]["status"]
+        result["detectors"][detector]["interpretation"] = {
+            "strength": "strong" if target_status == "pass" else
+            "weak" if target_status == "insufficient_data" else "advisory",
+            "production_use": "advisory_only",
+            "reason": "calibration metrics do not alter production detector decisions",
+        }
+    return result
+
+
+def compare_calibration_metrics(baseline, candidate):
+    """Report metric damage when a candidate calibration changes thresholds."""
+    result = {"status": "match", "detectors": {}, "regressions": []}
+    tolerances = CALIBRATION_PARAMETERS["regression_tolerances"]
+    baseline_detectors = baseline.get("detectors", {})
+    candidate_detectors = candidate.get("detectors", {})
+    for detector in sorted(set(baseline_detectors) | set(candidate_detectors)):
+        baseline_metrics = (baseline_detectors.get(detector, {}).get("frame", {}) or {})
+        candidate_metrics = (candidate_detectors.get(detector, {}).get("frame", {}) or {})
+        changes = {}
+        for field in ("precision", "recall", "false_positive_rate", "false_negative_rate"):
+            left = baseline_metrics.get(field)
+            right = candidate_metrics.get(field)
+            changes[field] = right - left if left is not None and right is not None else None
+        result["detectors"][detector] = changes
+        checks = (
+            changes["precision"] is not None and
+            changes["precision"] < -tolerances["precision_drop_max"],
+            changes["recall"] is not None and
+            changes["recall"] < -tolerances["recall_drop_max"],
+            changes["false_positive_rate"] is not None and
+            changes["false_positive_rate"] > tolerances["false_positive_rate_increase_max"],
+        )
+        if any(checks):
+            result["regressions"].append({"detector": detector, "changes": changes})
+    if result["regressions"]:
+        result["status"] = "regressed"
+    return result
+
+
+def detector_calibration_file(path, debug_dir=None):
+    records, errors = read_diagnostic_records(path)
+    result = detector_calibration(
+        records, source_dir=Path(path).resolve().parent, debug_dir=debug_dir)
+    result["source"] = str(Path(path).resolve())
+    result["malformed_lines"] = errors
+    result["status"] = "invalid_trace" if errors else "ok"
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 1 if errors else 0
+
+
 def _replay_event_layer(event):
     """Map an event mismatch to the earliest reusable pipeline layer."""
     event = str(event or "")
@@ -311,6 +785,13 @@ def compare_replay_traces(source_path, replay_path):
         "malformed_replay_lines": replay_errors,
         "mapper_mismatches": [],
         "event_mismatches": [],
+        "semantic_mismatches": {
+            "accepted_moves": [],
+            "clocks": [],
+            "recovery": [],
+            "variations": [],
+        },
+        "semantic_equivalence": {},
         "first_divergence": None,
     }
 
@@ -400,6 +881,111 @@ def compare_replay_traces(source_path, replay_path):
             }
             result["event_mismatches"].append(mismatch)
 
+    def ordered_records(records, predicate):
+        return sorted(
+            (record for record in records if predicate(record)),
+            key=lambda record: (
+                int(record.get("sequence", 0)),
+                float(record.get("timestamp", 0.0)),
+                str(record.get("event", "")),
+            ),
+        )
+
+    def semantic_signature(record, fields):
+        evidence = record.get("evidence", {}) or {}
+        return tuple(
+            evidence.get(field, record.get(field, ""))
+            for field in fields
+        )
+
+    def compare_semantic(name, source_items, replay_items, fields, layer):
+        source_signatures = [semantic_signature(record, fields) for record in source_items]
+        replay_signatures = [semantic_signature(record, fields) for record in replay_items]
+        mismatches = result["semantic_mismatches"][name]
+        for index in range(max(len(source_signatures), len(replay_signatures))):
+            source_signature = source_signatures[index] if index < len(source_signatures) else None
+            replay_signature = replay_signatures[index] if index < len(replay_signatures) else None
+            if source_signature != replay_signature:
+                mismatches.append({
+                    "index": index,
+                    "source": source_signature,
+                    "replay": replay_signature,
+                    "layer": layer,
+                })
+                break
+        result["semantic_equivalence"][name] = not mismatches
+
+    accepted_fields = (
+        "event", "outcome", "best_move", "active_ply", "fen", "branch_id",
+        "state_generation", "revert_generation",
+    )
+    compare_semantic(
+        "accepted_moves",
+        ordered_records(source_records, lambda record: record.get("event") == "ACCEPT"),
+        ordered_records(replay_records, lambda record: record.get("event") == "ACCEPT"),
+        accepted_fields,
+        "reducer_state",
+    )
+
+    clock_fields = (
+        "event", "active_ply", "fen", "best_move", "clock_decision",
+        "active_clock_player", "moved_clock", "previous_moved_clock",
+        "clock_ocr_skipped",
+    )
+    clock_predicate = lambda record: (
+        str(record.get("event", "")).startswith("CLOCK_") or
+        any(
+            (record.get("evidence", {}) or {}).get(field)
+            for field in ("clock_decision", "active_clock_player", "moved_clock", "previous_moved_clock")
+        )
+    )
+    compare_semantic(
+        "clocks",
+        ordered_records(source_records, clock_predicate),
+        ordered_records(replay_records, clock_predicate),
+        clock_fields,
+        "clock_provenance",
+    )
+
+    recovery_predicate = lambda record: (
+        "REVERT" in str(record.get("event", "")).upper()
+        or "HANDOFF" in str(record.get("event", "")).upper()
+        or "REBASE" in str(record.get("event", "")).upper()
+        or "HISTORICAL" in str(record.get("event", "")).upper()
+    )
+    recovery_fields = (
+        "event", "outcome", "active_ply", "fen", "best_move", "branch_id",
+        "state_generation", "revert_generation", "metadata",
+    )
+    compare_semantic(
+        "recovery",
+        ordered_records(source_records, recovery_predicate),
+        ordered_records(replay_records, recovery_predicate),
+        recovery_fields,
+        "revert_or_rebase",
+    )
+
+    variation_predicate = lambda record: (
+        "VARIATION" in str(record.get("event", "")).upper()
+        or str(record.get("event", "")).upper() == "FINAL_VARIATION"
+    )
+    variation_fields = (
+        "event", "outcome", "active_ply", "fen", "best_move", "branch_id", "metadata",
+    )
+    compare_semantic(
+        "variations",
+        ordered_records(source_records, variation_predicate),
+        ordered_records(replay_records, variation_predicate),
+        variation_fields,
+        "variation_state",
+    )
+
+    semantic_mismatches = [
+        mismatch
+        for mismatches in result["semantic_mismatches"].values()
+        for mismatch in mismatches
+    ]
+
     if result["mapper_mismatches"]:
         result["status"] = "diverged"
         result["first_divergence"] = {
@@ -409,6 +995,9 @@ def compare_replay_traces(source_path, replay_path):
     elif result["event_mismatches"]:
         result["status"] = "diverged"
         result["first_divergence"] = result["event_mismatches"][0]
+    elif semantic_mismatches:
+        result["status"] = "diverged"
+        result["first_divergence"] = semantic_mismatches[0]
     elif source_errors or replay_errors:
         result["status"] = "invalid_trace"
         result["first_divergence"] = {
@@ -427,6 +1016,166 @@ def compare_replay_traces_from_records(source_records, replay_records):
 def compare_replay_trace_files(source_path, replay_path):
     """Print a machine-readable replay comparison summary."""
     result = compare_replay_traces(source_path, replay_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["status"] == "match" else 1
+
+
+def compare_mapper_runs(sequential_path, parallel_path):
+    """Compare mapper-only output while preserving the earliest pipeline layer.
+
+    A diagnostic record may contain several reducer events for one candidate,
+    so mapper emissions are de-duplicated by observation ID before alignment.
+    The comparison is intentionally positional after timestamp ordering: a
+    changed emission sequence must be visible even when generated IDs differ.
+    """
+    if isinstance(sequential_path, (str, Path)):
+        sequential, sequential_errors = read_diagnostic_records(sequential_path)
+        sequential_label = str(Path(sequential_path).resolve())
+    else:
+        sequential, sequential_errors = sequential_path, []
+        sequential_label = "<records>"
+    if isinstance(parallel_path, (str, Path)):
+        parallel, parallel_errors = read_diagnostic_records(parallel_path)
+        parallel_label = str(Path(parallel_path).resolve())
+    else:
+        parallel, parallel_errors = parallel_path, []
+        parallel_label = "<records>"
+
+    def emissions(records):
+        by_id = {}
+        for record in records:
+            evidence = record.get("evidence", {}) or {}
+            mapper = record.get("mapper", {}) or {}
+            observation_id = record.get("observation_id")
+            key = str(observation_id or f"sequence:{record.get('sequence', 0)}")
+            by_id.setdefault(key, {
+                "observation_id": observation_id,
+                "timestamp": record.get("timestamp", 0.0),
+                "mapper_chunk": evidence.get("mapper_chunk", mapper.get("chunk", 0)),
+                "source_frame_index": evidence.get(
+                    "source_frame_index", mapper.get("source_frame_index", 0)
+                ),
+                "mapper_emission_reason": evidence.get(
+                    "mapper_emission_reason", mapper.get("emission_reason", "")
+                ),
+                "board_hash": evidence.get("board_hash", []),
+                "detectors": {
+                    name: evidence.get(f"{name}_assessment", {}) or {}
+                    for name in ("yellow", "hover", "clock", "geometry")
+                },
+                "score": {
+                    name: record.get(name, evidence.get(name))
+                    for name in ("best_move", "best_score", "active_ply")
+                },
+                "reducer": {
+                    name: record.get(name, "")
+                    for name in ("event", "fen", "reducer_state", "branch_id")
+                },
+            })
+        return sorted(
+            by_id.values(),
+            key=lambda item: (float(item["timestamp"] or 0.0), str(item["observation_id"])),
+        )
+
+    left = emissions(sequential)
+    right = emissions(parallel)
+    result = {
+        "status": "match",
+        "sequential": sequential_label,
+        "parallel": parallel_label,
+        "sequential_emission_count": len(left),
+        "parallel_emission_count": len(right),
+        "differences": [],
+        "reducer_equivalent": True,
+        "reducer_mismatches": [],
+        "first_divergence": None,
+        "malformed_sequential_lines": sequential_errors,
+        "malformed_parallel_lines": parallel_errors,
+    }
+    mapper_fields = ("observation_id", "timestamp", "mapper_chunk", "source_frame_index",
+                     "mapper_emission_reason")
+    for index in range(max(len(left), len(right))):
+        if index >= len(left) or index >= len(right):
+            difference = {
+                "index": index,
+                "kind": "emission_count",
+                "sequential": left[index] if index < len(left) else None,
+                "parallel": right[index] if index < len(right) else None,
+                "layer": "mapper_emission",
+            }
+        else:
+            difference = None
+            for field in mapper_fields:
+                if left[index][field] != right[index][field]:
+                    difference = {
+                        "index": index, "kind": field,
+                        "sequential": left[index][field], "parallel": right[index][field],
+                        "layer": "mapper_emission",
+                    }
+                    break
+            if difference is None:
+                left_hash, right_hash = left[index]["board_hash"], right[index]["board_hash"]
+                if left_hash and right_hash and (
+                    len(left_hash) != len(right_hash) or
+                    max(abs(float(a) - float(b)) for a, b in zip(left_hash, right_hash)) > 1e-6
+                ):
+                    difference = {"index": index, "kind": "board_hash",
+                                  "sequential": left_hash, "parallel": right_hash,
+                                  "layer": "detector_evidence"}
+            if difference is None:
+                for section, layer in (("detectors", "detector_evidence"),
+                                       ("score", "scoring"), ("reducer", "reducer_state")):
+                    if left[index][section] != right[index][section]:
+                        difference = {"index": index, "kind": section,
+                                      "sequential": left[index][section],
+                                      "parallel": right[index][section], "layer": layer}
+                        break
+        if difference is not None:
+            result["differences"].append(difference)
+
+    def reducer_outcomes(records):
+        terminal_events = {
+            "ACCEPT", "REVERT_APPLIED", "PRESERVED_MAINLINE_RESTORED",
+            "HISTORICAL_HANDOFF", "REPEATED_BRANCH_HANDOFF",
+        }
+        return [
+            (record.get("event", ""), record.get("best_move", ""),
+             record.get("active_ply", 0), record.get("fen", ""))
+            for record in records if record.get("event") in terminal_events
+        ]
+
+    sequential_outcomes = reducer_outcomes(sequential)
+    parallel_outcomes = reducer_outcomes(parallel)
+    if sequential_outcomes != parallel_outcomes:
+        result["reducer_equivalent"] = False
+        for index in range(max(len(sequential_outcomes), len(parallel_outcomes))):
+            left_outcome = sequential_outcomes[index] if index < len(sequential_outcomes) else None
+            right_outcome = parallel_outcomes[index] if index < len(parallel_outcomes) else None
+            if left_outcome != right_outcome:
+                result["reducer_mismatches"].append({
+                    "index": index,
+                    "sequential": left_outcome,
+                    "parallel": right_outcome,
+                    "layer": "reducer_state",
+                })
+                break
+
+    if result["differences"]:
+        result["status"] = "diverged"
+        result["first_divergence"] = result["differences"][0]
+    elif sequential_errors or parallel_errors:
+        result["status"] = "invalid_trace"
+        result["first_divergence"] = {
+            "layer": "trace_contract",
+            "sequential_errors": sequential_errors,
+            "parallel_errors": parallel_errors,
+        }
+    return result
+
+
+def compare_mapper_run_files(sequential_path, parallel_path):
+    """Print a machine-readable sequential/parallel mapper comparison."""
+    result = compare_mapper_runs(sequential_path, parallel_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["status"] == "match" else 1
 
@@ -501,8 +1250,384 @@ def _decision_counts(records, field):
     return dict(counts)
 
 
+def _diagnostic_outcome(record):
+    """Normalize reducer diagnostics into reviewable, non-mutating outcomes."""
+    evidence = record.get("evidence", {}) or {}
+    explicit = str(record.get("outcome", evidence.get("outcome", ""))).strip().lower()
+    explicit_outcomes = {
+        "accepted": "ACCEPT",
+        "rejected": "REJECT",
+        "deferred": "WAIT_FOR_SETTLE",
+        "ambiguous": "AMBIGUOUS",
+        "recovered": "RECOVERING",
+    }
+    if explicit in explicit_outcomes:
+        return explicit_outcomes[explicit]
+
+    event = str(record.get("event", "")).upper()
+    if event == "ACCEPT":
+        return "ACCEPT"
+    if event == "QUIET":
+        return "INFORMATIONAL"
+    if event in {"VALIDATION_REJECTED", "REJECTED_FRAME", "SCORE_THRESHOLD_REJECTED"}:
+        return "REJECT"
+    if event in {"SETTLE_PROBE", "SETTLE_RETARGET", "COALESCED_STOP"}:
+        return "WAIT_FOR_SETTLE"
+    if event == "ORIGIN_CANDIDATE":
+        return "AMBIGUOUS"
+    if (
+        event.startswith("REVERT")
+        or event.startswith("REBASE")
+        or event.startswith("HANDOFF")
+        or event.startswith("HISTORICAL")
+        or event in {"PRESERVED_MAINLINE_RESTORED", "REBASED_CONTINUATION"}
+    ):
+        return "RECOVERING"
+    return "OBSERVED" if event else "INFORMATIONAL"
+
+
+def _strength_summary(states):
+    counts = Counter(states)
+    return {
+        "record_count": len(states),
+        "counts": dict(counts),
+        "strong_count": counts.get("strong", 0),
+        "weak_count": counts.get("weak", 0),
+        "missing_count": counts.get("missing", 0),
+        "conflicting_count": counts.get("conflicting", 0),
+    }
+
+
+def _record_evidence_strength(record):
+    """Classify each evidence family from explicit measurements and decisions.
+
+    This is deliberately categorical. A missing clock or an ambiguous highlight
+    must remain visible as missing/ambiguous evidence rather than being folded
+    into a plausible-looking aggregate confidence value.
+    """
+    evidence = record.get("evidence", {}) or {}
+    changed_squares = evidence.get("changed_squares", []) or []
+    changed_count = evidence.get("changed_square_count")
+    if changed_squares or changed_count is not None:
+        try:
+            measured_count = int(changed_count if changed_count is not None else len(changed_squares))
+        except (TypeError, ValueError):
+            measured_count = len(changed_squares)
+        board_difference = "strong" if measured_count == 2 and changed_squares else "weak"
+    else:
+        board_difference = "missing"
+
+    yellow_decision = str(evidence.get("yellow_decision", "")).lower()
+    if not evidence.get("yellow_checked") and not yellow_decision:
+        highlights = "missing"
+    elif yellow_decision in {"ambiguous", "conflicting"}:
+        highlights = "conflicting"
+    elif yellow_decision in {"no_highlight", "missing", "ocr_missing"}:
+        highlights = "missing"
+    elif yellow_decision in {"passed", "accepted", "strong"}:
+        highlights = "strong"
+    else:
+        highlights = "weak"
+
+    clock_decision = str(evidence.get("clock_decision", "")).lower()
+    if not evidence.get("clock_checked") and not clock_decision:
+        clocks = "missing"
+    elif clock_decision in {"ambiguous", "conflicting", "turn_mismatch"}:
+        clocks = "conflicting"
+    elif clock_decision in {"ocr_missing", "missing"}:
+        clocks = "missing"
+    elif clock_decision in {"ocr_plausible", "passed", "accepted", "turn_match"}:
+        clocks = "strong"
+    else:
+        clocks = "weak"
+
+    settle_decision = str(evidence.get("settle_decision", "")).lower()
+    temporal_checked = bool(evidence.get("yellow_temporal_checked"))
+    if not temporal_checked and not settle_decision:
+        temporal_stability = "missing"
+    elif settle_decision in {"ambiguous", "conflicting", "rejected_unrelated_motion"}:
+        temporal_stability = "conflicting"
+    elif settle_decision in {"accepted_same_move", "accepted_new_move", "stable", "passed"}:
+        temporal_stability = "strong"
+    elif settle_decision or temporal_checked:
+        temporal_stability = "weak"
+    else:
+        temporal_stability = "missing"
+
+    hover_decision = str(evidence.get("hover_decision", "")).lower()
+    if not evidence.get("hover_checked") and not hover_decision:
+        hover_state = "missing"
+    elif hover_decision in {"ambiguous", "conflicting"}:
+        hover_state = "conflicting"
+    elif hover_decision in {"detected", "detected_but_overridden"}:
+        hover_state = "weak"
+    elif hover_decision in {"clear", "passed", "accepted"}:
+        hover_state = "strong"
+    else:
+        hover_state = "weak"
+
+    return {
+        "board_difference": board_difference,
+        "highlights": highlights,
+        "clocks": clocks,
+        "temporal_stability": temporal_stability,
+        "hover_state": hover_state,
+    }
+
+
+def summarize_evidence_strength(records):
+    """Summarize independent evidence families and weak-acceptance hazards."""
+    family_states = {
+        family: [] for family in (
+            "board_difference", "highlights", "clocks", "temporal_stability", "hover_state"
+        )
+    }
+    record_states = []
+    for record in records:
+        states = _record_evidence_strength(record)
+        for family, state in states.items():
+            family_states[family].append(state)
+        record_states.append({
+            "sequence": record.get("sequence", 0),
+            "timestamp": record.get("timestamp", 0.0),
+            "event": record.get("event", ""),
+            "outcome": _diagnostic_outcome(record),
+            "states": states,
+        })
+
+    accepted_with_non_strong = [
+        item for item in record_states
+        if item["outcome"] == "ACCEPT" and any(
+            state != "strong" for state in item["states"].values()
+        )
+    ]
+    return {
+        "families": {
+            family: _strength_summary(states)
+            for family, states in family_states.items()
+        },
+        "accepted_with_non_strong_evidence_count": len(accepted_with_non_strong),
+        "accepted_with_non_strong_evidence": accepted_with_non_strong,
+        "records": record_states,
+    }
+
+
+def summarize_uncertainty(records, evidence_strength=None):
+    """Report outcome and evidence uncertainty without changing reducer state."""
+    evidence_strength = evidence_strength or summarize_evidence_strength(records)
+    record_states = evidence_strength["records"]
+    outcome_counts = Counter(item["outcome"] for item in record_states)
+    weak_records = [
+        item for item in record_states
+        if item["outcome"] in {"WAIT_FOR_SETTLE", "AMBIGUOUS"}
+        or any(state in {"weak", "conflicting"} for state in item["states"].values())
+        or (
+            item["event"] in {"CANDIDATE", "ORIGIN_CANDIDATE", "VALIDATION_REJECTED", "REJECTED_FRAME"}
+            and any(state == "missing" for state in item["states"].values())
+        )
+        or (
+            item["outcome"] == "ACCEPT"
+            and any(state != "strong" for state in item["states"].values())
+        )
+    ]
+    missing_counts = Counter()
+    conflicting_counts = Counter()
+    for item in record_states:
+        if item["outcome"] == "INFORMATIONAL":
+            continue
+        for family, state in item["states"].items():
+            if state == "missing":
+                missing_counts[family] += 1
+            elif state == "conflicting":
+                conflicting_counts[family] += 1
+    return {
+        "outcome_counts": dict(outcome_counts),
+        "weak_evidence_record_count": len(weak_records),
+        "weak_evidence_records": weak_records,
+        "missing_evidence_counts": dict(missing_counts),
+        "conflicting_evidence_counts": dict(conflicting_counts),
+        "accepted_with_non_strong_evidence_count": evidence_strength[
+            "accepted_with_non_strong_evidence_count"
+        ],
+    }
+
+
+def _svg_text(lines, x, y, line_height=16, css_class="body"):
+    return "".join(
+        f'<text class="{css_class}" x="{x}" y="{y + index * line_height}">'
+        f"{html.escape(str(line))}</text>"
+        for index, line in enumerate(lines)
+    )
+
+
+def _move_squares(move):
+    move = str(move or "")
+    return [move[index:index + 2] for index in (0, 2) if len(move) >= index + 2]
+
+
+def _square_svg_rect(square, board_x, board_y, square_size, css_class):
+    match = re.fullmatch(r"([a-h])([1-8])", str(square or "").lower())
+    if not match:
+        return ""
+    file_index = ord(match.group(1)) - ord("a")
+    rank_index = 8 - int(match.group(2))
+    return (
+        f'<rect class="{css_class}" x="{board_x + file_index * square_size}" '
+        f'y="{board_y + rank_index * square_size}" width="{square_size}" '
+        f'height="{square_size}" />'
+    )
+
+
+def _artifact_image_href(image_value, artifact_dir):
+    """Return a portable image reference, copying standalone source images."""
+    if not image_value:
+        return ""
+    image_path = Path(str(image_value))
+    if str(image_value).replace("\\", "/").startswith("frames/"):
+        return "../" + str(image_value).replace("\\", "/")
+    if image_path.is_absolute() and image_path.is_file():
+        image_dir = artifact_dir / "images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        copied_image = image_dir / image_path.name
+        if not copied_image.exists():
+            shutil.copyfile(image_path, copied_image)
+        return str(copied_image.relative_to(artifact_dir)).replace("\\", "/")
+    return str(image_value).replace("\\", "/")
+
+
+def render_diagnostic_overlay(record, output_path):
+    """Write a dependency-free SVG review card for one diagnostic record."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence = record.get("evidence", {}) or {}
+    board_x, board_y, square_size = 24, 86, 40
+    image_href = _artifact_image_href(
+        evidence.get("diagnostic_board_path") or evidence.get("diagnostic_frame_path"),
+        output_path.parent,
+    )
+    changed_squares = evidence.get("changed_squares", []) or []
+    changed_names = [
+        item.get("square", item) if isinstance(item, dict) else item
+        for item in changed_squares
+    ]
+    selected_move = record.get("best_move") or evidence.get("selected_move", "")
+    alternatives = [
+        candidate.get("move", "") if isinstance(candidate, dict) else str(candidate)
+        for candidate in (evidence.get("legal_candidates", []) or [])[:6]
+    ]
+    states = _record_evidence_strength(record)
+    detail_lines = [
+        f"timestamp: {record.get('timestamp', '')}",
+        f"event/outcome: {record.get('event', '')} / {_diagnostic_outcome(record)}",
+        f"active ply: {record.get('active_ply', '')}; reducer: {record.get('reducer_state', '')}",
+        f"selected move: {selected_move or '<none>'}",
+        f"changed squares: {', '.join(map(str, changed_names)) or '<none>'}",
+        f"alternatives: {', '.join(alternatives) or '<none>'}",
+        f"evidence: {', '.join(f'{key}={value}' for key, value in states.items())}",
+    ]
+    image_markup = ""
+    if image_href:
+        image_markup = (
+            f'<image href="{html.escape(image_href, quote=True)}" x="390" y="220" '
+            'width="390" height="200" preserveAspectRatio="xMidYMid meet" />'
+        )
+    square_markup = []
+    for rank in range(8):
+        for file_index in range(8):
+            fill = "#f0d9b5" if (rank + file_index) % 2 == 0 else "#b58863"
+            square_markup.append(
+                f'<rect x="{board_x + file_index * square_size}" '
+                f'y="{board_y + rank * square_size}" width="{square_size}" '
+                f'height="{square_size}" fill="{fill}" />'
+            )
+    overlays = [
+        _square_svg_rect(square, board_x, board_y, square_size, "changed")
+        for square in changed_names
+    ]
+    highlight_names = [
+        candidate.get("square", "") if isinstance(candidate, dict) else str(candidate)
+        for candidate in (evidence.get("yellow_candidates", []) or [])[:8]
+    ]
+    overlays.extend(
+        _square_svg_rect(square, board_x, board_y, square_size, "highlighted")
+        for square in highlight_names
+    )
+    overlays.extend(
+        _square_svg_rect(square, board_x, board_y, square_size, "selected")
+        for square in _move_squares(selected_move)
+    )
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="820" height="470" viewBox="0 0 820 470">
+<style>
+  .background {{ fill: #20252b; }} .panel {{ fill: #2b323a; stroke: #73808c; }}
+  .heading {{ fill: #f2f5f7; font: 700 18px sans-serif; }}
+  .body {{ fill: #dce3e8; font: 13px monospace; }}
+  .changed {{ fill: #e6c84f; fill-opacity: .55; stroke: #fff2a6; stroke-width: 2; }}
+  .selected {{ fill: #55b9d6; fill-opacity: .35; stroke: #b9f0ff; stroke-width: 3; }}
+  .highlighted {{ fill: #f5d34f; fill-opacity: .28; stroke: #fff1a8; stroke-width: 2; stroke-dasharray: 4 2; }}
+</style>
+<rect class="background" width="820" height="470" />
+<rect class="panel" x="12" y="12" width="796" height="446" rx="8" />
+<text class="heading" x="24" y="42">ChessTube diagnostic overlay</text>
+{''.join(square_markup)}
+{''.join(overlays)}
+<rect x="24" y="86" width="320" height="320" fill="none" stroke="#dce3e8" />
+{image_markup}
+{_svg_text(detail_lines, 390, 112, 16, "body")}
+</svg>
+'''
+    output_path.write_text(svg, encoding="utf-8")
+
+
+def write_diagnostic_artifacts(records, output_dir):
+    """Create SVG overlays and an HTML contact sheet for a bounded trace."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for index, record in enumerate(records):
+        overlay_path = output_dir / f"overlay_{index:04d}.svg"
+        render_diagnostic_overlay(record, overlay_path)
+        evidence = record.get("evidence", {}) or {}
+        image_value = evidence.get("diagnostic_board_path") or evidence.get("diagnostic_frame_path")
+        entries.append({
+            "index": index,
+            "overlay": overlay_path.name,
+            "event": record.get("event", ""),
+            "outcome": _diagnostic_outcome(record),
+            "timestamp": record.get("timestamp", 0.0),
+            "image": str(image_value or ""),
+        })
+    cards = []
+    for entry in entries:
+        cards.append(
+            '<article class="card">'
+            f'<a href="{html.escape(entry["overlay"], quote=True)}">'
+            f'<img src="{html.escape(entry["overlay"], quote=True)}" alt="diagnostic overlay {entry["index"]}"></a>'
+            f'<div>#{entry["index"]} {html.escape(str(entry["event"]))} '
+            f'/ {html.escape(entry["outcome"])} @ {html.escape(str(entry["timestamp"]))}</div>'
+            '</article>'
+        )
+    contact_sheet_path = output_dir / "contact_sheet.html"
+    contact_sheet_path.write_text(
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>ChessTube diagnostic contact sheet</title>\n"
+        "<style>body{font-family:sans-serif;background:#20252b;color:#dce3e8}"
+        ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}"
+        ".card{background:#2b323a;padding:8px;border-radius:6px}img{width:100%;height:auto}</style>"
+        f"</head><body><h1>ChessTube diagnostic contact sheet ({len(entries)} records)</h1>"
+        f"<div class=\"grid\">{''.join(cards)}</div></body></html>\n",
+        encoding="utf-8",
+    )
+    return {
+        "directory": str(output_dir.resolve()),
+        "contact_sheet": str(contact_sheet_path.resolve()),
+        "overlay_count": len(entries),
+        "entries": entries,
+    }
+
+
 def summarize_detector_quality(records):
     """Summarize detector measurements without turning them into pass/fail claims."""
+    evidence_strength = summarize_evidence_strength(records)
+    uncertainty_summary = summarize_uncertainty(records, evidence_strength)
     yellow_checked = sum(
         bool((record.get("evidence", {}) or {}).get("yellow_checked"))
         for record in records
@@ -526,6 +1651,11 @@ def summarize_detector_quality(records):
     unavailable_localization_count = sum(score < 0.0 for score in localization_scores)
     localization_scales = _numeric_evidence_values(records, "localization_scale")
     measured_localization_scales = [scale for scale in localization_scales if scale > 0.0]
+    localization_confidences = _numeric_evidence_values(records, "localization_confidence")
+    measured_localization_confidences = [
+        confidence for confidence in localization_confidences
+        if 0.0 <= confidence <= 1.0
+    ]
     changed_square_counts = _numeric_evidence_values(records, "changed_square_count")
     yellow_records = [
         record for record in records
@@ -695,6 +1825,7 @@ def summarize_detector_quality(records):
         },
         "localization": {
             "score_summary": _numeric_summary(measured_localization_scores),
+            "confidence_summary": _numeric_summary(measured_localization_confidences),
             "unavailable_count": unavailable_localization_count,
             "scale_summary": _numeric_summary(measured_localization_scales),
         },
@@ -705,7 +1836,9 @@ def summarize_detector_quality(records):
             "rejected_candidate_count": sum(rejected_candidate_ids.values()),
             "repeated_rejected_candidate_count": repeated_rejected_candidates,
             "rejection_reason_counts": dict(rejection_reason_counts),
+            **uncertainty_summary,
         },
+        "evidence_strength": evidence_strength["families"],
         "template": {
             "identity_counts": dict(template_identities),
             "unique_identity_count": len(template_identities),
@@ -1070,6 +2203,11 @@ def write_failure_bundle(
     if diagnostic_path and Path(diagnostic_path).exists():
         bundle_observations = bundle_dir / "observations.jsonl"
         write_compact_observation_trace(bundle_diagnostic_records, bundle_observations)
+    bundle_artifacts = None
+    if bundle_diagnostic_records:
+        bundle_artifacts = write_diagnostic_artifacts(
+            bundle_diagnostic_records, bundle_dir / "artifacts"
+        )
 
     summary = {
         "schema_version": 1,
@@ -1079,6 +2217,7 @@ def write_failure_bundle(
         "invariants": str(bundle_invariants.resolve()) if bundle_invariants else "",
         "frames": str(bundle_frames.resolve()) if bundle_frames else "",
         "observations": str(bundle_observations.resolve()) if bundle_observations else "",
+        "artifacts": bundle_artifacts or {},
         "failure": report,
         "classification": classification,
         "detector_quality": classification["detector_quality"],
@@ -1217,6 +2356,11 @@ def main():
         sys.exit(replay_bundle(args.replay_bundle))
     if args.compare_replay_traces:
         sys.exit(compare_replay_trace_files(*args.compare_replay_traces))
+    if args.compare_mapper_runs:
+        sys.exit(compare_mapper_run_files(*args.compare_mapper_runs))
+    if args.detector_calibration:
+        sys.exit(detector_calibration_file(
+            args.detector_calibration, args.calibration_debug_dir))
     build_dir = os.path.join(root_dir, args.build_dir)
     temp_dir = os.path.join(build_dir, "tmp")
     test_file = os.path.join(root_dir, "tests", "test_ui_detectors.cpp")

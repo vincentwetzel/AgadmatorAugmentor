@@ -1,0 +1,9 @@
+{"image":"black_1-31-28_1-30-36.png","detector":"clock","component":"active_side","truth":"positive","expected_active":"black","expected_white":"1:31:28","expected_black":"1:30:36","case":"changed"}
+{"image":"black_1-31-28_1-30-36.png","detector":"clock","component":"white_ocr","truth":"positive","expected_active":"black","expected_white":"1:31:28","expected_black":"1:30:36","case":"changed"}
+{"image":"black_1-31-28_1-30-36.png","detector":"clock","component":"black_ocr","truth":"positive","expected_active":"black","expected_white":"1:31:28","expected_black":"1:30:36","case":"changed"}
+{"image":"white_1-30-34_1-30-34.png","detector":"clock","component":"active_side","truth":"positive","expected_active":"white","expected_white":"1:30:34","expected_black":"1:30:34","case":"unchanged"}
+{"image":"white_1-30-34_1-30-34.png","detector":"clock","component":"white_ocr","truth":"positive","expected_active":"white","expected_white":"1:30:34","expected_black":"1:30:34","case":"unchanged"}
+{"image":"white_1-30-34_1-30-34.png","detector":"clock","component":"black_ocr","truth":"positive","expected_active":"white","expected_white":"1:30:34","expected_black":"1:30:34","case":"unchanged"}
+{"image":"white_1-31-28_1-30-07.png","detector":"clock","component":"active_side","truth":"positive","expected_active":"white","expected_white":"1:31:28","expected_black":"1:30:07","case":"changed"}
+{"image":"white_1-31-28_1-30-07.png","detector":"clock","component":"white_ocr","truth":"positive","expected_active":"white","expected_white":"1:31:28","expected_black":"1:30:07","case":"changed"}
+{"image":"white_1-31-28_1-30-07.png","detector":"clock","component":"black_ocr","truth":"positive","expected_active":"white","expected_white":"1:31:28","expected_black":"1:30:07","case":"changed"}

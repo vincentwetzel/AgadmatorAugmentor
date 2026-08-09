@@ -40,6 +40,7 @@ Acts as the game logic authority and state machine filter.
 
 - Maintains an internal `libchess::Position` board state throughout video scanning. The chronological reducer is the correctness boundary; mapper concurrency defaults to one worker and can be raised only for controlled experiments.
 - Generates all strictly legal moves for the current position.
+- Exposes opt-in, timestamp-bounded diagnostics: structured observations, mapper/reducer traces, invariant reports, first-divergence bundles, and observation replay. These controls are investigation inputs and never select moves from fixture identifiers.
 - Scores each legal move against the visual square diffs of the current frame.
 - Validates candidates against UI rules:
   - **Yellow square check:** Both origin and destination must be highlighted.
@@ -60,7 +61,7 @@ Acts as the game logic authority and state machine filter.
 
 ### Output
 
-Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN, optional SRT subtitles, and Analysis Video). The intermediate JSON file is no longer written to disk.
+Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN, optional SRT subtitles, and Analysis Video). The intermediate JSON file is no longer written to disk; JSONL is reserved for diagnostic/replay evidence.
 
 ## 3. The Commentary Agent — 🔜 Future
 

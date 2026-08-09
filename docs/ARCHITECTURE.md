@@ -22,7 +22,7 @@ The scan uses a 5 FPS baseline (`0.2s`) and adaptive cadence: quiet stretches ca
 
 `BoardLocalizer` locates the board from `assets/board/board.png` using three Golden Section Search passes: coarse, fine, and exact. Early passes use reduced resolution; the final pass resolves full-resolution coordinates and square geometry. Sparse sampled correlation avoids dense full-frame matching during scale search, with a linear fallback for unusual dimensions.
 
-The result contains the board origin, width and height, and per-square dimensions. Geometry can be cached for a repeated video/template pair, but move verification still treats every visual measurement as noisy because of compression, antialiasing, highlights, pieces, and transient UI states.
+The result contains the board origin, width and height, per-square dimensions, localization score/scale, and normalized `geometry_confidence` in `[0, 1]`. The confidence is diagnostic evidence only; it is not currently a move-selection veto. Geometry can be cached for a repeated video/template pair, but move verification still treats every visual measurement as noisy because of compression, antialiasing, highlights, pieces, and transient UI states.
 
 ## 3. UI detectors
 
@@ -113,7 +113,9 @@ Diagnostic controls are generic and timestamp-bounded; they do not select a move
 | `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set the interval for diagnostic geometry rechecks, clamped to 1-30 seconds |
 | `CTA_REPLAY_OBSERVATIONS` | Replay a compact `observations.jsonl` trace using saved board/clock artifacts instead of source-video decoding |
 
-`tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, diagnostic JSONL/TSV paths, automatic first-divergence bundles, `--replay-bundle`, and `--compare-replay-traces`. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
+`tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, diagnostic JSONL/TSV paths, automatic first-divergence bundles, SVG/contact-sheet artifacts, `--replay-bundle`, `--compare-replay-traces`, `--compare-mapper-runs`, and detector calibration reports. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
+
+Replay comparison has two layers. The trace contract checks observation IDs, mapper provenance, board hashes, and event ordering; semantic contracts separately compare accepted moves, clock provenance, recovery/revert state, and variation state. A trace can therefore have matching event names while still failing because a branch, clock source, or accepted move changed. Diagnostic detector confidence is reported as raw evidence until calibration provides a supported probability model.
 
 ## 10. Trade-offs and future scope
 

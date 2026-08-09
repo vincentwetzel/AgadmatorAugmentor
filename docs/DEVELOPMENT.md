@@ -13,6 +13,8 @@ This guide covers the normal edit, build, test, and diagnostic workflow for Ches
 
 `README.md`, `CHANGELOG.md`, and `agents.md` intentionally remain at the repository root: they are the project landing page, release history, and repository-agent instructions respectively.
 
+Do not commit generated diagnostic bundles, build outputs, logs, caches, extracted videos, or calibration debug copies. Keep them under an ignored build or temporary directory and link to a reproducible command in the handoff instead.
+
 ## Configure and build
 
 The standard incremental GUI build is:
@@ -99,7 +101,11 @@ The diagnostic environment controls are generic and do not alter ordinary full-v
 When an integration test fails, `tests\run_tests.py` automatically reruns the
 first-divergence window and creates a sibling failure bundle containing the
 failure report, verbose JSONL diagnostics, compact `observations.jsonl`, and
-retained full-frame, board-crop, and clock-ROI images. Reanalyze an existing
+retained full-frame, board-crop, and clock-ROI images. It also writes
+dependency-free SVG overlays and an HTML contact sheet under the bundle's
+`artifacts` directory. Each overlay shows changed/highlighted squares, the
+selected move, alternatives, reducer state, normalized outcome, and available
+source imagery. Reanalyze an existing
 bundle without decoding the video again:
 
 ```cmd
@@ -117,11 +123,97 @@ trace, run:
 python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
 ```
 
+To compare mapper output from two bounded runs (for example, one with
+`CTA_MAX_WORKERS=1` and one with a controlled larger worker count), use:
+
+```cmd
+python tests\run_tests.py --compare-mapper-runs sequential.jsonl parallel.jsonl
+```
+
+Diagnostic quality reports preserve uncertainty as separate fields. Every
+record is normalized to `ACCEPT`, `WAIT_FOR_SETTLE`, `REJECT`, `AMBIGUOUS`,
+`RECOVERING`, `OBSERVED`, or `INFORMATIONAL`; the report counts weak outcomes
+and lists missing/conflicting evidence. Board differences, highlights, clocks,
+temporal stability, and hover state each receive independent categorical
+`strong`, `weak`, `missing`, or `conflicting` counts. An auxiliary signal that
+is absent does not become fabricated confidence or a fabricated clock value;
+the chronological reducer remains the only component allowed to advance the
+position, and accepted moves retain the detector/clock provenance that justified
+them.
+
+The command emits JSON with aligned emission counts, every difference, and the
+first divergence classified as `mapper_emission`, `detector_evidence`,
+`scoring`, `reducer_state`, or `trace_contract`. It also reports
+`reducer_equivalent` separately, so mapper timing differences do not obscure
+whether accepted moves, reverts, and variations changed.
+
+Mapper workers explicitly seek to every non-initial chunk boundary. This keeps
+sequential decoder carry-over consistent with workers that open a fresh
+decoder, which is required for diagnostic ordering to remain comparable across
+`CTA_MAX_WORKERS` settings.
+
+Detector calibration uses a separate labeled JSONL file so labels never enter
+production extraction. Each row has `detector`, `truth`, `prediction`, and an
+optional `confidence`, `transition_id`, and `regime`:
+
+```json
+{"detector":"yellow","component":"paired","truth":"positive","prediction":"positive","confidence":0.92,"transition_id":17,"regime":"clean"}
+```
+
+Run it with:
+
+```cmd
+python tests\run_tests.py --detector-calibration labels.jsonl
+```
+
+The report includes frame and transition confusion counts, precision, recall,
+false-positive/false-negative rates, confidence bins, and per-regime metrics.
+It also reports provisional detector-specific acceptance gates and sweeps every
+observed numeric `score` as a candidate threshold. Gates remain
+`insufficient_data` until at least 30 labeled determinate observations are
+available; they are review criteria, not production thresholds.
+The `robust_operating_point` report chooses among those thresholds using the
+worst supported regime (minimum five labeled observations per regime), so a
+clean-board aggregate cannot hide a compression or animation failure. It is
+reported as `pass`, `advisory`, or `insufficient_data` and remains advisory-only
+until the labeled corpus is representative.
+Rows may include `condition` or a list of `conditions` such as `compression`,
+`scaling`, `brightness`, `occlusion`, `animation`, or `geometry_error`; the
+report emits the same metrics for each condition group. An optional `component`
+field supports separate `origin`, `destination`, and `paired` detector metrics.
+Calibration parameters are versioned in the report. The report also selects
+highest-confidence incorrect and lowest-confidence correct examples. Pass
+`--calibration-debug-dir DIR` to copy referenced source images into a review
+directory. Interpretation is explicit: `strong`, `weak`, or `advisory`, and is
+always marked advisory-only for production.
+An optional `case` field provides separate metrics for categories such as
+`capture`, `double_pawn`, `check`, and `promotion`.
+The repository’s initial yellow-square label manifest is
+`assets/sample_yellow_squares/labels.jsonl`; it contains eight positive move
+examples and an unhighlighted-board negative control. It is intentionally a
+small seed set, not a calibrated acceptance corpus.
+The focused C++ calibration test currently measures destination at 8/8 recall
+and origin/paired endpoints at 7/8 recall; the `Na5` sample is the known
+origin-disambiguation miss (`c6a5` observed versus `c7a5` labeled).
+Clock labels are similarly seeded in `assets/sample_clock_changes/labels.jsonl`
+with active-side, white-OCR, black-OCR, changed, and unchanged fields. Missing
+and misread OCR examples remain an explicit gap in the clock corpus.
+
+`BoardGeometry::geometry_confidence` now exposes normalized template-match
+confidence in `[0, 1]`. Diagnostic JSONL carries the same value as
+`evidence.localization_confidence`, while periodic re-localization reports its
+confidence in the geometry detector assessment. This value is observational
+until calibration establishes a downstream acceptance gate.
+
 The comparison aligns observations by ID, checks mapper provenance and board
 hash fidelity first, then reports the first event divergence at the mapper,
 detector/validation, scoring, or reducer layer. Replay equivalence on traces
-containing accepted moves, clocks, reverts, and variations remains an active
-roadmap item.
+containing accepted moves, clocks, reverts, and variations is also checked as
+separate semantic contracts. The report exposes equivalence for accepted moves,
+clock provenance, recovery/revert state, and variation state, so a replay that
+preserves event names but changes a clock or branch is still reported as
+divergent. `compare_replay_traces` returns a non-zero process status on mapper,
+event, semantic, or malformed-trace divergence.
 
 Keep traces in an ignored build or temporary directory. Do not add fixture names, expected moves, expected clocks, or asset-specific branches to production extraction code.
 

@@ -83,6 +83,8 @@ output/
 debug_screenshots/
 analysis.json
 *.pgn
+__pycache__/
+full_game_variations_debug.txt
 
 # Video files (prevents accidental commits of large test files)
 *.mp4

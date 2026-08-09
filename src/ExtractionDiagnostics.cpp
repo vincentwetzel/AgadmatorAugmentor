@@ -40,6 +40,19 @@ void classify(const char* event, Phase& phase, Outcome& outcome, Reason& reason)
         phase = Phase::Validation;
         outcome = Outcome::Rejected;
         reason = Reason::FrameRejected;
+    } else if (is_event(event, "SCORE_THRESHOLD_REJECTED")) {
+        phase = Phase::Scoring;
+        outcome = Outcome::Rejected;
+        reason = Reason::ScoreThreshold;
+    } else if (is_event(event, "SETTLE_PROBE") ||
+               is_event(event, "SETTLE_RETARGET")) {
+        phase = Phase::Reducer;
+        outcome = Outcome::Deferred;
+        reason = Reason::CandidateHeldForSettling;
+    } else if (is_event(event, "ORIGIN_CANDIDATE")) {
+        phase = Phase::Scoring;
+        outcome = Outcome::Ambiguous;
+        reason = Reason::CandidateAmbiguous;
     } else if (is_event(event, "COALESCED_STOP")) {
         phase = Phase::Mapper;
         outcome = Outcome::Deferred;
@@ -101,6 +114,7 @@ const char* to_string(Outcome outcome) {
     case Outcome::Accepted: return "accepted";
     case Outcome::Rejected: return "rejected";
     case Outcome::Deferred: return "deferred";
+    case Outcome::Ambiguous: return "ambiguous";
     case Outcome::Recovered: return "recovered";
     }
     return "informational";
@@ -114,6 +128,9 @@ const char* to_string(Reason reason) {
     case Reason::ValidationRejected: return "validation_rejected";
     case Reason::FrameRejected: return "frame_rejected";
     case Reason::FrameCoalesced: return "frame_coalesced";
+    case Reason::CandidateHeldForSettling: return "candidate_held_for_settling";
+    case Reason::CandidateAmbiguous: return "candidate_ambiguous";
+    case Reason::ScoreThreshold: return "score_threshold";
     case Reason::ClockObservation: return "clock_observation";
     case Reason::RevertSearch: return "revert_search";
     case Reason::RevertApplied: return "revert_applied";
@@ -228,6 +245,7 @@ void write_json_line(std::ostream& output, const Record& record) {
             {"square_height", record.evidence.square_height},
             {"localization_score", record.evidence.localization_score},
             {"localization_scale", record.evidence.localization_scale},
+            {"localization_confidence", record.evidence.localization_confidence},
             {"board_hash", record.evidence.board_hash},
             {"geometry_checked", record.evidence.geometry_checked},
             {"geometry_anomaly", record.evidence.geometry_anomaly},

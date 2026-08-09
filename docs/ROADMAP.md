@@ -13,6 +13,7 @@ This roadmap reflects the current implementation. Completed work is summarized s
 | Tests | Google Test, PGN-backed integration baselines, clock-time coverage, and fixture-independence guard |
 | GUI/headless | Qt6 queue UI plus persisted-settings headless mode |
 | Templates | Built-in and custom channel templates with per-queue snapshots |
+| Diagnostics | Observation replay, first-divergence bundles, mapper comparison, and advisory detector calibration |
 
 ## Remaining for v1.0.0
 
@@ -20,6 +21,7 @@ This roadmap reflects the current implementation. Completed work is summarized s
 - [ ] **Clean CPU-only build matrix:** validate fresh Windows builds with no CUDA/NPP installation and with `ENABLE_SYSTEM_CUDA=OFF`.
 - [ ] **CUDA build matrix:** validate headers, delay-loaded libraries, and NPP symbol availability on a fresh CUDA-enabled environment.
 - [ ] **Release validation:** record GUI, CLI, test, CPU-fallback, and CUDA/NPP results from fresh build directories.
+- [ ] **Diagnostic validation:** confirm repeated source runs produce deterministic diagnostic output and verify first-divergence reporting with an intentionally induced failure.
 
 ## Long-term scope
 
@@ -52,7 +54,8 @@ This roadmap reflects the current implementation. Completed work is summarized s
 - `CTA_STOP_AFTER_SECONDS` and bounded `CTA_TRACE_*` controls support focused reducer replays without changing normal extraction.
 - Clock, settle, historical-state, nearest-state, geometry, and exhaustive-revert diagnostics are available through generic environment switches.
 - Structured JSONL observations can retain mapper provenance, detector assessments, board features, and sampled image artifacts; `CTA_REPLAY_OBSERVATIONS` reuses that contract for reducer replay.
-- `tests/run_tests.py` supports filtered/no-build runs, selectable build directories, diagnostic JSONL/TSV output, automatic first-divergence bundles, bundle reanalysis, replay-trace comparison, cached Google Test sources, and a production fixture-override scan.
+- `tests/run_tests.py` supports filtered/no-build runs, selectable build directories, diagnostic JSONL/TSV output, automatic first-divergence bundles with SVG/contact-sheet artifacts, bundle reanalysis, mapper comparison, replay-trace comparison, cached Google Test sources, and a production fixture-override scan.
+- Detector calibration reports frame/transition metrics, uncertainty, confidence bins, threshold sweeps, condition/regime breakdowns, and representative errors. Seed labels are tracked under `assets/sample_yellow_squares/` and `assets/sample_clock_changes/`; they remain advisory until expanded.
 - Integration expectations are read from sample PGN files rather than fixture-specific production code or golden JSON artifacts.
 
 ## Reference commands

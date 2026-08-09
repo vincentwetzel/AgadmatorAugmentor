@@ -113,6 +113,7 @@ class DiagnosticClassificationTests(unittest.TestCase):
                     "score_margin": 4.0,
                     "localization_score": -1.0,
                     "localization_scale": 0.0,
+                    "localization_confidence": 0.7,
                     "yellow_endpoint_threshold": 25.0,
                     "yellow_pair_threshold": 70.0,
                     "yellow_measurements": [
@@ -149,6 +150,7 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(quality["mapper"]["records_with_source_frame"], 1)
         self.assertEqual(quality["score_margin"]["low_margin_count"], 1)
         self.assertEqual(quality["localization"]["unavailable_count"], 1)
+        self.assertEqual(quality["localization"]["confidence_summary"]["mean"], 0.7)
         self.assertEqual(quality["uncertainty"]["rejected_candidate_count"], 0)
         self.assertEqual(quality["template"]["unique_identity_count"], 0)
         self.assertEqual(quality["observation"]["tag_counts"].get("motion", 0), 0)
@@ -178,6 +180,87 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(uncertainty["rejected_candidate_count"], 3)
         self.assertEqual(uncertainty["repeated_rejected_candidate_count"], 1)
         self.assertEqual(uncertainty["rejection_reason_counts"]["missing_yellow"], 2)
+
+    def test_uncertainty_keeps_outcomes_and_evidence_families_separate(self):
+        records = [
+            {
+                "event": "SETTLE_PROBE",
+                "evidence": {
+                    "changed_square_count": 2,
+                    "changed_squares": [{"square": "e2"}, {"square": "e4"}],
+                    "yellow_checked": True,
+                    "yellow_decision": "ambiguous",
+                    "clock_checked": False,
+                    "hover_checked": True,
+                    "hover_decision": "clear",
+                    "yellow_temporal_checked": True,
+                    "settle_decision": "candidate_found",
+                },
+            },
+            {
+                "event": "ACCEPT",
+                "evidence": {
+                    "changed_square_count": 2,
+                    "changed_squares": [{"square": "e2"}, {"square": "e4"}],
+                    "yellow_checked": True,
+                    "yellow_decision": "passed",
+                    "clock_checked": True,
+                    "clock_decision": "ocr_plausible",
+                    "hover_checked": True,
+                    "hover_decision": "clear",
+                    "yellow_temporal_checked": True,
+                    "settle_decision": "accepted_same_move",
+                },
+            },
+        ]
+        quality = RUNNER.summarize_detector_quality(records)
+        uncertainty = quality["uncertainty"]
+        self.assertEqual(uncertainty["outcome_counts"]["WAIT_FOR_SETTLE"], 1)
+        self.assertEqual(uncertainty["outcome_counts"]["ACCEPT"], 1)
+        self.assertGreaterEqual(uncertainty["weak_evidence_record_count"], 1)
+        self.assertEqual(uncertainty["missing_evidence_counts"]["clocks"], 1)
+        self.assertEqual(uncertainty["conflicting_evidence_counts"]["highlights"], 1)
+        self.assertEqual(quality["evidence_strength"]["board_difference"]["strong_count"], 2)
+        self.assertEqual(quality["evidence_strength"]["clocks"]["missing_count"], 1)
+
+    def test_accepted_record_with_missing_evidence_is_visible(self):
+        quality = RUNNER.summarize_detector_quality([{"event": "ACCEPT", "evidence": {}}])
+        uncertainty = quality["uncertainty"]
+        self.assertEqual(uncertainty["outcome_counts"], {"ACCEPT": 1})
+        self.assertEqual(uncertainty["accepted_with_non_strong_evidence_count"], 1)
+
+    def test_diagnostic_artifacts_create_overlay_and_contact_sheet(self):
+        root = Path("build_tests") / "tmp" / "diagnostic_artifacts_test"
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            source_image = root / "board.png"
+            source_image.write_bytes(b"png-placeholder")
+            records = [{
+                "timestamp": 4.2,
+                "event": "CANDIDATE",
+                "active_ply": 3,
+                "reducer_state": "candidate_pending",
+                "best_move": "e2e4",
+                "evidence": {
+                    "diagnostic_board_path": str(source_image.resolve()),
+                    "changed_squares": [{"square": "e2"}, {"square": "e4"}],
+                    "yellow_checked": True,
+                    "yellow_decision": "passed",
+                    "legal_candidates": [{"move": "e2e4"}, {"move": "d2d4"}],
+                },
+            }]
+            result = RUNNER.write_diagnostic_artifacts(records, root / "artifacts")
+            self.assertEqual(result["overlay_count"], 1)
+            self.assertTrue(Path(result["contact_sheet"]).exists())
+            overlay = root / "artifacts" / "overlay_0000.svg"
+            self.assertTrue(overlay.exists())
+            overlay_text = overlay.read_text(encoding="utf-8")
+            self.assertIn("e2e4", overlay_text)
+            self.assertIn("candidate", overlay_text)
+            self.assertTrue((root / "artifacts" / "images" / "board.png").exists())
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_compact_observations_are_grouped_and_sequence_ordered(self):
         records = [
@@ -442,6 +525,165 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(result["status"], "diverged")
         self.assertEqual(result["first_divergence"]["layer"], "reducer")
 
+    def test_replay_equivalence_covers_moves_clocks_recovery_and_variations(self):
+        source = [
+            {"sequence": 1, "observation_id": 1, "event": "ACCEPT", "active_ply": 1,
+             "best_move": "e2e4", "fen": "after-e4", "branch_id": 0,
+             "evidence": {"clock_decision": "ocr_plausible", "moved_clock": "9:59"}},
+            {"sequence": 2, "observation_id": 2, "event": "CLOCK_BACKFILL", "active_ply": 1,
+             "best_move": "e2e4", "fen": "after-e4", "evidence": {"moved_clock": "9:58"}},
+            {"sequence": 3, "observation_id": 3, "event": "REVERT_APPLIED", "active_ply": 0,
+             "fen": "initial", "branch_id": 0},
+            {"sequence": 4, "observation_id": 4, "event": "VARIATION_DEMOTED", "active_ply": 0,
+             "fen": "initial", "metadata": "parent=0;moves=e2e4"},
+        ]
+        replay = json.loads(json.dumps(source))
+        result = RUNNER.compare_replay_traces_from_records(source, replay)
+        self.assertEqual(result["status"], "match")
+        self.assertEqual(result["semantic_equivalence"], {
+            "accepted_moves": True,
+            "clocks": True,
+            "recovery": True,
+            "variations": True,
+        })
+
+    def test_replay_equivalence_reports_clock_provenance_damage(self):
+        source = [{
+            "observation_id": 2,
+            "event": "CLOCK_BACKFILL",
+            "active_ply": 1,
+            "fen": "after-e4",
+            "evidence": {"moved_clock": "9:58"},
+        }]
+        replay = [{
+            "observation_id": 2,
+            "event": "CLOCK_BACKFILL",
+            "active_ply": 1,
+            "fen": "after-e4",
+            "evidence": {"moved_clock": "9:57"},
+        }]
+        result = RUNNER.compare_replay_traces_from_records(source, replay)
+        self.assertEqual(result["status"], "diverged")
+        self.assertEqual(result["first_divergence"]["layer"], "clock_provenance")
+        self.assertFalse(result["semantic_equivalence"]["clocks"])
+
+    def test_mapper_run_comparison_reports_emission_divergence(self):
+        sequential = [{
+            "observation_id": 7, "timestamp": 1.0,
+            "evidence": {"mapper_chunk": 0, "source_frame_index": 10,
+                         "mapper_emission_reason": "settled_tail"},
+        }]
+        parallel = [{
+            "observation_id": 8, "timestamp": 1.0,
+            "evidence": {"mapper_chunk": 0, "source_frame_index": 11,
+                         "mapper_emission_reason": "motion_leading_edge"},
+        }]
+        result = RUNNER.compare_mapper_runs(sequential, parallel)
+        self.assertEqual(result["status"], "diverged")
+        self.assertEqual(result["first_divergence"]["layer"], "mapper_emission")
+        self.assertEqual(result["first_divergence"]["kind"], "observation_id")
+
+    def test_mapper_run_comparison_reports_detector_layer_after_matching_emission(self):
+        sequential = [{
+            "observation_id": 7, "timestamp": 1.0,
+            "evidence": {"mapper_chunk": 0, "source_frame_index": 10,
+                         "mapper_emission_reason": "settled_tail",
+                         "yellow_assessment": {"confidence": 0.8}},
+        }]
+        parallel = [{
+            "observation_id": 7, "timestamp": 1.0,
+            "evidence": {"mapper_chunk": 0, "source_frame_index": 10,
+                         "mapper_emission_reason": "settled_tail",
+                         "yellow_assessment": {"confidence": 0.4}},
+        }]
+        result = RUNNER.compare_mapper_runs(sequential, parallel)
+        self.assertEqual(result["first_divergence"]["layer"], "detector_evidence")
+
+    def test_mapper_run_comparison_reports_reducer_equivalence_separately(self):
+        sequential = [{"observation_id": 1, "event": "ACCEPT",
+                       "best_move": "e2e4", "active_ply": 1, "fen": "after"}]
+        parallel = [{"observation_id": 9, "event": "ACCEPT",
+                     "best_move": "e2e4", "active_ply": 1, "fen": "after"}]
+        result = RUNNER.compare_mapper_runs(sequential, parallel)
+        self.assertEqual(result["status"], "diverged")
+        self.assertTrue(result["reducer_equivalent"])
+        self.assertEqual(result["reducer_mismatches"], [])
+
+    def test_detector_calibration_reports_confusion_rates_and_transitions(self):
+        records = [
+            {"detector": "yellow", "truth": "positive", "prediction": "positive",
+             "confidence": 0.9, "score": 0.9, "transition_id": 1, "regime": "clean",
+             "condition": "none", "component": "paired"},
+            {"detector": "yellow", "truth": "negative", "prediction": "negative",
+             "confidence": 0.8, "score": 0.8, "transition_id": 2, "regime": "clean",
+             "condition": "none", "component": "destination"},
+            {"detector": "yellow", "truth": "negative", "prediction": "positive",
+             "confidence": 0.7, "score": 0.7, "transition_id": 3, "regime": "compressed",
+             "condition": "compression", "component": "origin", "case": "capture"},
+            {"detector": "yellow", "truth": "positive", "prediction": "negative",
+             "confidence": 0.6, "score": 0.6, "transition_id": 4, "regime": "compressed",
+             "condition": "geometry_error"},
+            {"detector": "yellow", "truth": "uncertain", "prediction": "positive",
+             "confidence": 0.5, "score": 0.5, "transition_id": 5, "regime": "occluded",
+             "conditions": ["occlusion", "animation"]},
+        ]
+        result = RUNNER.detector_calibration(records)["detectors"]["yellow"]
+        self.assertEqual(result["frame"]["true_positive"], 1)
+        self.assertEqual(result["frame"]["true_negative"], 1)
+        self.assertEqual(result["frame"]["false_positive"], 1)
+        self.assertEqual(result["frame"]["false_negative"], 1)
+        self.assertEqual(result["frame"]["uncertain"], 1)
+        self.assertEqual(result["frame"]["precision"], 0.5)
+        self.assertEqual(result["frame"]["recall"], 0.5)
+        self.assertEqual(result["transition"]["labeled"], 4)
+        self.assertEqual(result["regimes"]["compressed"]["false_positive"], 1)
+        self.assertEqual(result["conditions"]["compression"]["false_positive"], 1)
+        self.assertEqual(result["conditions"]["occlusion"]["uncertain"], 1)
+        self.assertEqual(result["components"]["origin"]["false_positive"], 1)
+        self.assertEqual(result["cases"]["capture"]["false_positive"], 1)
+        self.assertEqual(result["frame"]["confidence_bins"][9]["count"], 1)
+        self.assertEqual(result["acceptance_target"]["status"], "insufficient_data")
+        self.assertEqual(len(result["threshold_sweep"]), 4)
+        self.assertEqual(result["threshold_sweep"][0]["threshold"], 0.6)
+        self.assertEqual(result["interpretation"]["strength"], "weak")
+        self.assertEqual(result["representative_errors"]["highest_confidence_incorrect"][0]["confidence"], 0.7)
+
+    def test_calibration_regression_report_flags_metric_damage(self):
+        baseline = {"detectors": {"yellow": {"frame": {
+            "precision": 0.95, "recall": 0.96, "false_positive_rate": 0.01,
+            "false_negative_rate": 0.04}}}}
+        candidate = {"detectors": {"yellow": {"frame": {
+            "precision": 0.90, "recall": 0.96, "false_positive_rate": 0.04,
+            "false_negative_rate": 0.04}}}}
+        result = RUNNER.compare_calibration_metrics(baseline, candidate)
+        self.assertEqual(result["status"], "regressed")
+        self.assertEqual(result["regressions"][0]["detector"], "yellow")
+
+    def test_calibration_selects_operating_point_from_worst_regime(self):
+        labels = []
+        for regime, values in {
+            "clean": [(0.9, "positive"), (0.8, "positive"),
+                      (0.2, "negative"), (0.1, "negative"),
+                      (0.05, "negative")],
+            "compressed": [(0.7, "positive"), (0.6, "positive"),
+                           (0.4, "negative"), (0.3, "negative"),
+                           (0.2, "negative")],
+        }.items():
+            labels.extend({
+                "truth": truth,
+                "score": score,
+                "regime": regime,
+            } for score, truth in values)
+        result = RUNNER._robust_operating_point(
+            labels,
+            {"minimum_labeled": 1, "precision_min": 0.95,
+             "recall_min": 0.95, "false_positive_rate_max": 0.02},
+        )
+        self.assertEqual(result["selected"]["threshold"], 0.6)
+        self.assertEqual(result["selected"]["worst_case"]["recall"], 1.0)
+        self.assertEqual(result["selected"]["worst_case"]["regime_count"], 2)
+        self.assertEqual(result["status"], "pass")
+
     def test_failure_bundle_copies_bounded_frame_artifacts(self):
         root = Path("build_tests") / "tmp" / "frame_bundle_test"
         shutil.rmtree(root, ignore_errors=True)
@@ -489,6 +731,10 @@ class DiagnosticClassificationTests(unittest.TestCase):
             self.assertEqual(compact["board"]["hash"], [1.0, 2.0])
             self.assertEqual(compact["images"]["frame"], str(Path("frames") / "before_frame.png"))
             self.assertTrue((bundle_dir / "frames" / "before_board.png").exists())
+            artifacts = json.loads(summary_path.read_text(encoding="utf-8"))["artifacts"]
+            self.assertEqual(artifacts["overlay_count"], 1)
+            self.assertTrue(Path(artifacts["contact_sheet"]).exists())
+            self.assertTrue((bundle_dir / "artifacts" / "overlay_0000.svg").exists())
             bundled_record = json.loads(
                 (bundle_dir / "diagnostics.jsonl").read_text(encoding="utf-8")
             )

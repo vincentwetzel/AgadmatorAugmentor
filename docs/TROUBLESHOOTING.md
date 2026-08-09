@@ -47,6 +47,8 @@ python tests\run_tests.py --no-build ^
 
 On Windows `cmd.exe`, use `^` for line continuation instead of `\`.
 
+For a failed integration test, inspect the automatically generated diagnostic bundle under the selected build directory's `diagnostics` folder. In addition to JSONL and TSV data, the bundle can contain SVG detector overlays and an HTML contact sheet. Use `--replay-bundle` to rerun the reducer from `observations.jsonl`, or `--compare-replay-traces` to compare source and replay semantics without opening the original video.
+
 ## Clocks are missing or implausible
 
 Clock OCR is intentionally conservative. The active-clock brightness gate runs before digit recognition, unchanged ROIs use the OCR cache, and replayed variations can inherit a branch-point clock without creating a false new observation.
@@ -75,6 +77,15 @@ python tests\run_tests.py --replay-bundle build_tests\diagnostics\first_divergen
 ```
 
 Use `--compare-replay-traces source.jsonl replay.jsonl` to compare observation IDs, mapper provenance, board hashes, and reducer events between a source run and an observation replay.
+
+To inspect detector quality independently of move extraction, run:
+
+```cmd
+python tests\run_tests.py --detector-calibration assets\sample_yellow_squares\labels.jsonl
+python tests\run_tests.py --detector-calibration assets\sample_clock_changes\labels.jsonl
+```
+
+The seed manifests are intentionally too small to establish production thresholds. Treat their precision/recall and confidence results as review evidence only.
 
 ## GPU acceleration is unavailable
 

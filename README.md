@@ -8,6 +8,8 @@ ChessTube Analyzer treats the chess.com UI as a deterministic visual state machi
 
 The extraction path uses a map-reduce scan: chunk workers emit visual candidates, while one chronological reducer maintains the strict chess state, validates moves, and detects analysis reverts. The correctness-first default uses one mapper worker; bounded concurrency can be enabled for controlled experiments with `CTA_MAX_WORKERS`. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches. Diagnostic runs can also retain structured JSONL observations, images, reducer events, and invariant reports for replay.
 
+The normal product contract is PGN-first and in-memory: JSONL is a diagnostic/replay format, not a normal user export. The reducer preserves timestamp, clock, revert, variation, and detector provenance so a failed extraction can be investigated without adding fixture-specific production behavior.
+
 Advanced extraction tuning is available through environment variables for benchmarking difficult storage paths: `CTA_CHUNK_SECONDS` controls map chunk duration (30-300 seconds), `CTA_MAX_CHUNK_LOOKAHEAD` controls reducer lookahead, and `CTA_MAX_WORKERS` caps mapper concurrency. The worker default is one for deterministic correctness.
 
 ## Features
@@ -81,7 +83,7 @@ cd build\Release
 "ChessTube Analyzer.exe" "path\to\video.mp4" --multi-pv 3 --pgn
 ```
 
-The GUI supports multiple videos in one queue. Headless mode accepts one positional video path per invocation; run the executable once per video when scripting batch processing.
+The GUI supports multiple videos in one queue. Headless mode accepts one positional video path per invocation; supported input extensions are `.mp4`, `.mkv`, `.avi`, `.mov`, and `.webm`. Run the executable once per video when scripting batch processing.
 
 ## Queue And Templates
 
@@ -107,6 +109,8 @@ Dependencies are managed via vcpkg on `E:\vcpkg`:
 | Google Test | Optional tests |
 | FFmpeg | Analysis video composition and audio muxing |
 | WinHTTP | Windows Lichess Explorer opening lookups |
+
+CUDA/NPP is optional and is used only for compatible acceleration paths. CPU move scoring and CPU fallbacks remain the correctness reference.
 
 Tesseract has been removed; clock OCR now uses the built-in Hu Moments recognizer.
 
@@ -168,10 +172,14 @@ ChessTubeAnalyzer/
 |   |-- VideoProcessorWorker_Utils.cpp
 |   `-- main_gui.cpp
 |-- tests/
+|   |-- run_tests.py
+|   |-- test_run_tests_diagnostics.py
 |   `-- test_ui_detectors.cpp
 |-- assets/
 |   |-- board/board.png
 |   |-- board/red_board.png
+|   |-- sample_clock_changes/labels.jsonl
+|   |-- sample_yellow_squares/labels.jsonl
 |   `-- sample_games_*/
 |-- docs/
 |   |-- README.md
@@ -198,6 +206,7 @@ ChessTubeAnalyzer/
 7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`. The fetcher can use an optional Lichess API token from settings, verifies access before processing, stores 64-bit game totals, and records top matching games for rare or unique positions.
 9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, and optional Stockfish-backed move-quality labels. Analysis video generation composites static overlays through FFmpeg, embeds temporary move subtitles when requested, then removes the temporary SRT file.
+10. **Diagnostic Replay:** Failure bundles retain compact observations, sampled imagery, SVG overlays, HTML contact sheets, invariant reports, and first-divergence classifications. Observation replay compares mapper, detector, scoring, reducer, clock, revert, and variation contracts without decoding the source video again.
 
 ## Testing
 
@@ -207,7 +216,9 @@ python tests\run_tests.py
 
 The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
 
-For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle` or `--compare-replay-traces source.jsonl replay.jsonl` to inspect it without decoding the source video.
+For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. It also supports `--replay-bundle`, `--compare-replay-traces`, `--compare-mapper-runs`, `--detector-calibration`, and `--calibration-debug-dir`. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, SVG overlays, an HTML contact sheet, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle` or `--compare-replay-traces source.jsonl replay.jsonl` to inspect it without decoding the source video.
+
+The seed calibration manifests are `assets/sample_yellow_squares/labels.jsonl` and `assets/sample_clock_changes/labels.jsonl`. They are intentionally small review fixtures; calibration results are advisory until a representative labeled corpus exists.
 
 ## Performance Snapshot
 

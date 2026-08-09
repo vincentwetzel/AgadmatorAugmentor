@@ -17,6 +17,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | BL-3 | Scale evaluation must use OpenCV `TM_CCOEFF_NORMED` or sparse sampled correlation. NPP cross-correlation is not required. |
 | BL-4 | Early passes may downscale frames for speed; the final pass must resolve full-resolution board coordinates. |
 | BL-5 | Output must include top-left board coordinates, board dimensions, and per-square dimensions. |
+| BL-6 | Localization must expose the final correlation, selected scale, and normalized geometry confidence for diagnostics; geometry confidence is observational until calibrated. |
 
 ### 1.2 Visual Scan And Reduction
 
@@ -28,7 +29,8 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | VP-4 | The reducer must consume candidates chronologically and compare them against the last verified board state. |
 | VP-5 | Move settling may inspect later candidates, but the settle window must be bounded so one animation cannot drift into unrelated moves. |
 | VP-6 | Environment variables `CTA_CHUNK_SECONDS`, `CTA_MAX_CHUNK_LOOKAHEAD`, and `CTA_MAX_WORKERS` may tune chunk scheduling. The default worker cap is one for deterministic decoder boundaries. |
-| VP-7 | Diagnostic extraction must be opt-in and must not change ordinary move selection; structured JSONL records must retain observation IDs, mapper provenance, detector assessments, board features, and reducer events. |
+| VP-7 | Diagnostic extraction must be opt-in and must not change ordinary move selection; structured JSONL records must retain observation IDs, mapper provenance, detector assessments, board features, reducer events, and geometry confidence. |
+| VP-8 | Replay comparison must report mapper/event divergence separately from semantic divergence in accepted moves, clocks, reverts, and variations. |
 
 ### 1.3 UI Element Extraction
 
@@ -89,7 +91,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | NF-5 | NPP operations may accelerate compatible grayscale `absdiff` or device resize paths, but CPU move scoring remains the deterministic reference. |
 | NF-6 | The extraction pipeline must use the map-reduce chunking model; the old `FramePrefetcher` model is removed. |
 | NF-7 | Per-frame allocations should be minimized with scratch buffers, reusable Mats, and GPU buffers where applicable. |
-| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, structured JSONL/TSV output, failure bundles, and replay-trace comparison. |
+| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, structured JSONL/TSV output, failure bundles, mapper comparison, detector calibration, and replay-trace comparison. |
 | NF-9 | Integration tests should derive expected UCI moves from sample PGN files instead of separate golden JSON files. |
 | NF-10 | Production extraction must not branch on fixture names, expected moves, expected clocks, or asset paths; the test runner must reject such overrides. |
 
@@ -161,6 +163,8 @@ Important environment toggles:
 | `CTA_REPLAY_OBSERVATIONS` | Use a saved compact observation trace and artifacts instead of decoding source video |
 | `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
 | `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
+
+Detector calibration is deliberately separate from production extraction. Labeled JSONL rows may include `detector`, `component`, `truth`, `prediction`, `confidence`, `transition_id`, `regime`, `condition`, and `case`. The report provides frame/transition confusion metrics, confidence bins, threshold sweeps, representative errors, and advisory operating points. The repository manifests are seed data, not acceptance thresholds.
 
 ## 7. Accuracy Contract
 

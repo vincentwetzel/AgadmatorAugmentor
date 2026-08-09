@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Full-Game PGN Baseline Test:** Added an optional integration path that derives expected UCI moves directly from a sample full-game PGN.
 - **Diagnostic Reducer Replay:** Added generic timestamp cutoffs and bounded TSV traces for candidate, settle, revert, historical-state, and variation events.
 - **Observation Replay Bundles:** Added structured JSONL diagnostics, compact observation traces, sampled frame/board/clock artifacts, automatic first-divergence bundles, bundle reanalysis, and source/replay trace comparison.
+- **Diagnostic Visual Review:** Failure bundles now include dependency-free SVG detector overlays and an HTML contact sheet with changed squares, alternatives, reducer state, outcome, and available source imagery.
+- **Mapper Run Comparison:** Added a generic comparison command that classifies the first divergence as mapper emission, detector evidence, scoring, reducer state, or trace-contract mismatch and reports reducer equivalence separately.
+- **Detector Calibration Reports:** Added labeled-JSONL calibration for frame/transition metrics, confidence bins, threshold sweeps, condition/regime breakdowns, and representative errors. Results remain advisory until the corpus is representative.
+- **Geometry Confidence:** Board localization now exposes normalized final-match confidence in diagnostic records without using it as an uncalibrated move veto.
+- **Replay Semantic Contracts:** Source/replay comparison now checks accepted moves, clock provenance, recovery/revert state, and variation state in addition to event and observation alignment.
 - **Fixture-Independence Guard:** The test runner now scans production sources for fixture-specific detector overrides before building or running tests.
 - **Clock Provenance:** Added explicit observed/missing clock state so replayed analysis branches can retain continuity without fabricating OCR readings.
 - **State-Based Variation Reconciliation:** Variations are validated from root FEN transitions, preserve visual confidence, and prune only proven replays or superseded tails.

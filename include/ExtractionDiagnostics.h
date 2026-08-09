@@ -31,6 +31,7 @@ enum class Outcome {
     Accepted,
     Rejected,
     Deferred,
+    Ambiguous,
     Recovered,
 };
 
@@ -42,6 +43,9 @@ enum class Reason {
     ValidationRejected,
     FrameRejected,
     FrameCoalesced,
+    CandidateHeldForSettling,
+    CandidateAmbiguous,
+    ScoreThreshold,
     ClockObservation,
     RevertSearch,
     RevertApplied,
@@ -116,6 +120,7 @@ struct Evidence {
     double square_height = 0.0;
     double localization_score = 0.0;
     double localization_scale = 0.0;
+    double localization_confidence = 0.0;
     std::vector<double> board_hash;
     bool geometry_checked = false;
     bool geometry_anomaly = false;
