@@ -117,6 +117,10 @@ Tesseract has been removed; clock OCR now uses the built-in Hu Moments recognize
 
 ## Project Structure
 
+`include/` is intentionally a top-level directory: it contains the headers
+exposed between project modules, while implementation files live in `src/`.
+This keeps include paths stable for the libraries, CLI, GUI, and tests.
+
 ```text
 ChessTubeAnalyzer/
 |-- CMakeLists.txt
@@ -180,11 +184,12 @@ ChessTubeAnalyzer/
 |   |-- test_run_tests_diagnostics.py
 |   `-- test_ui_detectors.cpp
 |-- assets/
-|   |-- board/board.png
-|   |-- board/red_board.png
-|   |-- sample_clock_changes/labels.jsonl
-|   |-- sample_yellow_squares/labels.jsonl
-|   `-- sample_games_*/
+|   |-- reference/board/board.png
+|   |-- reference/pieces/{white,black}/*.png
+|   |-- fixtures/detectors/<detector-name>/
+|   |-- fixtures/games/<size>/<fixture-name>/
+|   |-- templates/*.json
+|   `-- icons/thumbs-up.png
 |-- docs/
 |   |-- README.md
 |   |-- USAGE.md
@@ -222,7 +227,7 @@ The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `bui
 
 For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. It also supports `--replay-bundle`, `--compare-replay-traces`, `--compare-source-runs`, `--compare-mapper-runs`, `--detector-calibration`, `--calibration-debug-dir`, `--induce-failure`, and test-side calibration outputs for clocks, yellow squares, and hover/animation. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, SVG overlays, an HTML contact sheet, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle`, `--compare-replay-traces source.jsonl replay.jsonl`, or `--compare-source-runs source_a.jsonl source_b.jsonl` to inspect runs without decoding the source video again.
 
-The seed calibration manifests are `assets/sample_yellow_squares/labels.jsonl` and `assets/sample_clock_changes/labels.jsonl`. They are intentionally small review fixtures; calibration results are advisory until a representative labeled corpus exists.
+The seed calibration manifests are `assets/fixtures/detectors/yellow-squares/labels.jsonl` and `assets/fixtures/detectors/clock-changes/labels.jsonl`. They are intentionally small review fixtures; calibration results are advisory until a representative labeled corpus exists.
 
 ## Performance Snapshot
 

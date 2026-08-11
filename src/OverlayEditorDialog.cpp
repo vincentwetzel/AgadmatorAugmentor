@@ -173,9 +173,9 @@ void OverlayEditorDialog::setupUi() {
 
 void OverlayEditorDialog::setupOverlays() {
     // Generate mock visual representations for the overlays
-    QString assetPath = "assets/board/board.png";
+    QString assetPath = "assets/reference/board/board.png";
     if (!QFileInfo::exists(assetPath)) {
-        assetPath = QDir(QCoreApplication::applicationDirPath()).filePath("../../assets/board/board.png");
+        assetPath = QDir(QCoreApplication::applicationDirPath()).filePath("../../assets/reference/board/board.png");
     }
     QPixmap boardMock(assetPath);
     if (boardMock.isNull()) {

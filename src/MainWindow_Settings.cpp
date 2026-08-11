@@ -34,7 +34,7 @@ ProcessingSettings MainWindow::gatherSettings() const {
     if (!boardOverride.isEmpty()) {
         s.boardAssetPath = boardOverride;
     } else {
-        QString assetPath = "assets/board/board.png";
+        QString assetPath = "assets/reference/board/board.png";
         if (QFileInfo::exists(assetPath)) {
             s.boardAssetPath = assetPath;
         } else {

@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
     std::string video_path = "";
     app.add_option("video_path", video_path, "Path to the input video file");
 
-    std::string board_asset = "assets/board/board.png";
+    std::string board_asset = "assets/reference/board/board.png";
     app.add_option("--board-asset", board_asset, "Path to board template image");
 
     std::string output = "";
@@ -54,8 +54,8 @@ int main(int argc, char* argv[]) {
 
     // F5 convenience: use sample video when no args provided
     if (video_path.empty()) {
-        video_path = R"(e:\coding_workspaces\CPP\ChessTubeAnalyzer\assets\sample_games_short\7 plies\7 plies.mp4)";
-        board_asset = R"(e:\coding_workspaces\CPP\ChessTubeAnalyzer\assets\board\board.png)";
+        video_path = "assets/fixtures/games/short/seven-plies/video.mp4";
+        board_asset = "assets/reference/board/board.png";
         debug_level_str = "MOVES";
     }
 

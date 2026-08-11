@@ -74,6 +74,22 @@ ui_*.h
 *.mov
 *.webm
 
+# Generated and compiled project metadata.
+*.qm
+*.tlog
+*.idb
+*.opendb
+*.VC.db
+*.user
+*.suo
+*.sln
+*.sln.docstates
+*.vcxproj
+*.vcxproj.filters
+*.pro.user
+*.qmake.stash
+*.qmake.cache
+
 # Local credentials and secret configuration.
 .env
 .env.*

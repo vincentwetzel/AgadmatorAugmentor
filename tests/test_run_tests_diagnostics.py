@@ -690,10 +690,10 @@ class DiagnosticClassificationTests(unittest.TestCase):
     def test_seed_calibration_manifests_contain_measured_predictions(self):
         root = Path(__file__).resolve().parent.parent
         yellow_records, yellow_errors = RUNNER.read_diagnostic_records(
-            root / "assets" / "sample_yellow_squares" / "labels.jsonl"
+            root / "assets" / "fixtures" / "detectors" / "yellow-squares" / "labels.jsonl"
         )
         clock_records, clock_errors = RUNNER.read_diagnostic_records(
-            root / "assets" / "sample_clock_changes" / "labels.jsonl"
+            root / "assets" / "fixtures" / "detectors" / "clock-changes" / "labels.jsonl"
         )
         self.assertEqual(yellow_errors, [])
         self.assertEqual(clock_errors, [])

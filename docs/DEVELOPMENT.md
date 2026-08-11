@@ -7,7 +7,10 @@ This guide covers the normal edit, build, test, and diagnostic workflow for Ches
 - `include/` contains public headers and shared data/configuration types.
 - `src/` contains all production C++ sources compiled by CMake.
 - `tests/` contains Google Test detector and integration tests.
-- `assets/` contains board templates, detector fixtures, and sample games.
+- `assets/` contains runtime reference images, detector fixtures, integration
+  game fixtures, built-in overlay templates, and icons. See
+  [`assets/README.md`](../assets/README.md) for the asset ownership and naming
+  conventions.
 - `docs/` contains usage, architecture, specification, roadmap, development, and troubleshooting documentation.
 - `build*`, `tmp/`, and diagnostic output files are generated artifacts and should not be committed.
 
@@ -35,6 +38,11 @@ Useful build presets are:
 | `release-package` | Optimized GUI and CLI build with runtime packaging enabled |
 
 The CMake targets are `analyzer_gui`, `extract_moves`, and, when enabled, `test_extract_moves`. The GUI target produces `ChessTube Analyzer.exe`.
+
+The GUI target copies `assets/templates/` to a `templates/` directory beside
+the executable after each build. Runtime board and piece references are read
+from `assets/reference/` when running from the repository; keep that directory
+available for checkout-based GUI and analysis-video runs.
 
 On Windows, keep the `x64-windows` vcpkg triplet and dynamic MSVC runtime (`/MD` or `/MDd`) consistent across the application and dependencies. The documented default toolchain is `E:/vcpkg`; adjust it in a local configure command if your installation is elsewhere.
 
@@ -228,7 +236,7 @@ always marked advisory-only for production.
 An optional `case` field provides separate metrics for categories such as
 `capture`, `double_pawn`, `check`, and `promotion`.
 The repository's initial yellow-square label manifest is
-`assets/sample_yellow_squares/labels.jsonl`; it contains eight positive move
+`assets/fixtures/detectors/yellow-squares/labels.jsonl`; it contains eight positive move
 examples and an unhighlighted-board negative control, with the current C++
 detector predictions recorded separately for each origin, destination, and
 paired row. It is intentionally a small seed set, not a calibrated acceptance
@@ -286,7 +294,7 @@ flash, and a transient flash; all four cases matched their expected outcomes
 `passed_temporal` and retain weak evidence provenance even after the temporal
 gate is calibrated.
 
-Clock labels are similarly seeded in `assets/sample_clock_changes/labels.jsonl`
+Clock labels are similarly seeded in `assets/fixtures/detectors/clock-changes/labels.jsonl`
 with measured predictions for active-side, white-OCR, black-OCR, changed, and
 unchanged fields. Missing and misread OCR examples remain an explicit gap in
 the checked-in clock corpus; transformed regime runs now report misreads and

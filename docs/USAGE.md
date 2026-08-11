@@ -25,6 +25,12 @@ The GUI build target is named `analyzer_gui`, while the generated executable rem
 
 The `vs2022-dev` preset keeps Qt runtime deployment enabled, so the GUI should launch directly from the build output after a successful build.
 
+The GUI post-build step also copies the bundled overlay templates into the
+executable directory. On first launch, `TemplateManager` copies those defaults
+to `%APPDATA%\ChessTubeAnalyzer\templates`, where user edits are stored. The
+board and piece reference images remain under the repository `assets` tree and
+are used when processing from a checkout.
+
 On Windows, use the `x64-windows` vcpkg triplet with the dynamic MSVC runtime. Avoid mixing an old `x64-windows-static` build tree with a dynamic-runtime configuration.
 
 If CMake fails after changing triplets or generator platforms, start with a clean build directory:
@@ -157,6 +163,6 @@ Compare a source diagnostic trace with an observation-replay trace:
 python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
 ```
 
-The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output, `--compare-source-runs` for repeated source determinism, and `--detector-calibration` for labeled detector quality reports. Test-side calibration observations can be emitted with `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`. Use `--induce-failure` to verify that the first-divergence bundle path is operational. The seed manifests are `assets\sample_yellow_squares\labels.jsonl` and `assets\sample_clock_changes\labels.jsonl`; their results are advisory until the corpus is expanded.
+The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output, `--compare-source-runs` for repeated source determinism, and `--detector-calibration` for labeled detector quality reports. Test-side calibration observations can be emitted with `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`. Use `--induce-failure` to verify that the first-divergence bundle path is operational. The seed manifests are `assets\fixtures\detectors\yellow-squares\labels.jsonl` and `assets\fixtures\detectors\clock-changes\labels.jsonl`; their results are advisory until the corpus is expanded.
 
 Clock records preserve `initial`, `direct`, `contextual`, `temporal`, `inherited`, `missing`, or `rejected` provenance. A temporal repair requires repeated plausible settled readings; a single or conflicting OCR result remains uncertain and cannot by itself veto a visually legal move.

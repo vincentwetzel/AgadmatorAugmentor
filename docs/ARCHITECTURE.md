@@ -20,7 +20,7 @@ The scan uses a 5 FPS baseline (`0.2s`) and adaptive cadence: quiet stretches ca
 
 ## 2. Board localization
 
-`BoardLocalizer` locates the board from `assets/board/board.png` using three Golden Section Search passes: coarse, fine, and exact. Early passes use reduced resolution; the final pass resolves full-resolution coordinates and square geometry. Sparse sampled correlation avoids dense full-frame matching during scale search, with a linear fallback for unusual dimensions.
+`BoardLocalizer` locates the board from `assets/reference/board/board.png` using three Golden Section Search passes: coarse, fine, and exact. Early passes use reduced resolution; the final pass resolves full-resolution coordinates and square geometry. Sparse sampled correlation avoids dense full-frame matching during scale search, with a linear fallback for unusual dimensions. Analysis-video rendering loads the matching piece images from `assets/reference/pieces/{white,black}/` and the thumbs-up icon from `assets/icons/`.
 
 The result contains the board origin, width and height, per-square dimensions, localization score/scale, and normalized `geometry_confidence` in `[0, 1]`. The confidence is diagnostic evidence only; it is not currently a move-selection veto. Geometry can be cached for a repeated video/template pair, but move verification still treats every visual measurement as noisy because of compression, antialiasing, highlights, pieces, and transient UI states.
 
@@ -79,6 +79,12 @@ Clock provenance is explicit. A moved clock can be `direct`, `contextual`, `temp
 `VideoExportHelper` writes the PGN and optionally creates a temporary SRT track from verified timestamps and SAN. Subtitle cues use only finite timestamps and later logical timestamps, so stale timestamps adjacent to restored analysis branches cannot create negative-duration cues for the MP4 muxer. The temporary SRT is removed after it is embedded in an analysis video. PGN annotations run Stockfish only when their output toggle is enabled; analysis-video overlays run Stockfish when the selected overlay set needs engine data.
 
 `OpeningFetcher` performs cached Lichess Explorer lookups through WinHTTP on Windows. It can use the optional API token from Advanced settings, stores results under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`, and stops once a position is likely unique.
+
+`TemplateManager` loads built-in templates from the `templates/` directory beside
+the executable, copies missing defaults into
+`%APPDATA%\ChessTubeAnalyzer\templates`, and treats that AppData directory as
+the editable user store. The GUI build creates the bundled directory as a
+post-build step from `assets/templates/`.
 
 ## 7. Analysis video
 

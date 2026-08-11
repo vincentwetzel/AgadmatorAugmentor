@@ -34,7 +34,7 @@ Moves-only PGN extraction does not require Stockfish.
 
 ## No moves are detected
 
-Confirm that the video contains a supported chess board layout and that the board template is available at `assets/board/board.png` or through `--board-asset`. Use `--debug-level MOVES` or `FULL` to produce detector output, then check localization, yellow-square evidence, hover-box rejection, and clock-turn validation.
+Confirm that the video contains a supported chess board layout and that the board template is available at `assets/reference/board/board.png` or through `--board-asset`. Use `--debug-level MOVES` or `FULL` to produce detector output, then check localization, yellow-square evidence, hover-box rejection, and clock-turn validation.
 
 For a long fixture, use a bounded trace rather than changing production thresholds:
 
@@ -93,8 +93,8 @@ python tests\run_tests.py --compare-source-runs source_a.jsonl source_b.jsonl
 To inspect detector quality independently of move extraction, run:
 
 ```cmd
-python tests\run_tests.py --detector-calibration assets\sample_yellow_squares\labels.jsonl
-python tests\run_tests.py --detector-calibration assets\sample_clock_changes\labels.jsonl
+python tests\run_tests.py --detector-calibration assets\fixtures\detectors\yellow-squares\labels.jsonl
+python tests\run_tests.py --detector-calibration assets\fixtures\detectors\clock-changes\labels.jsonl
 ```
 
 The seed manifests are intentionally too small to establish production thresholds. Treat their precision/recall and confidence results as review evidence only.

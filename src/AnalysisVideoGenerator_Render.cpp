@@ -11,14 +11,14 @@
 namespace cta {
 
 AnalysisVideoGenerator::AnalysisVideoGenerator(const std::string& assets_dir) {
-    std::string board_path = assets_dir + "/board/board.png";
+    std::string board_path = assets_dir + "/reference/board/board.png";
     board_template_ = cv::imread(board_path, cv::IMREAD_COLOR);
     
     if (board_template_.empty()) {
         throw std::runtime_error("AnalysisVideoGenerator: Failed to load board asset at " + board_path);
     }
 
-    std::string thumbs_up_path = assets_dir + "/thumbs_up.png";
+    std::string thumbs_up_path = assets_dir + "/icons/thumbs-up.png";
     thumbs_up_icon_ = cv::imread(thumbs_up_path, cv::IMREAD_UNCHANGED);
     if (thumbs_up_icon_.empty()) {
         std::cerr << "Warning: Failed to load thumbs up asset at " << thumbs_up_path << std::endl;
@@ -28,25 +28,24 @@ AnalysisVideoGenerator::AnalysisVideoGenerator(const std::string& assets_dir) {
 }
 
 void AnalysisVideoGenerator::load_piece_assets(const std::string& assets_dir) {
-    // Support both the repo's descriptive filenames and shorter legacy names.
     std::map<char, std::vector<std::string>> piece_files = {
-        {'P', {"white/white_pawn.png", "white/P.png"}},
-        {'N', {"white/white_knight.png", "white/N.png"}},
-        {'B', {"white/white_bishop.png", "white/B.png"}},
-        {'R', {"white/white_rook.png", "white/R.png"}},
-        {'Q', {"white/white_queen.png", "white/Q.png"}},
-        {'K', {"white/white_king.png", "white/K.png"}},
-        {'p', {"black/black_pawn.png", "black/p.png"}},
-        {'n', {"black/black_knight.png", "black/n.png"}},
-        {'b', {"black/black_bishop.png", "black/b.png"}},
-        {'r', {"black/black_rook.png", "black/r.png"}},
-        {'q', {"black/black_queen.png", "black/q.png"}},
-        {'k', {"black/black_king.png", "black/k.png"}}
+        {'P', {"reference/pieces/white/pawn.png"}},
+        {'N', {"reference/pieces/white/knight.png"}},
+        {'B', {"reference/pieces/white/bishop.png"}},
+        {'R', {"reference/pieces/white/rook.png"}},
+        {'Q', {"reference/pieces/white/queen.png"}},
+        {'K', {"reference/pieces/white/king.png"}},
+        {'p', {"reference/pieces/black/pawn.png"}},
+        {'n', {"reference/pieces/black/knight.png"}},
+        {'b', {"reference/pieces/black/bishop.png"}},
+        {'r', {"reference/pieces/black/rook.png"}},
+        {'q', {"reference/pieces/black/queen.png"}},
+        {'k', {"reference/pieces/black/king.png"}}
     };
 
     for (const auto& [fen_char, candidates] : piece_files) {
         for (const auto& rel_path : candidates) {
-            std::string full_path = assets_dir + "/pieces/" + rel_path;
+            std::string full_path = assets_dir + "/" + rel_path;
             // IMREAD_UNCHANGED is vital to keep the 4th alpha channel for transparent pieces.
             cv::Mat piece = cv::imread(full_path, cv::IMREAD_UNCHANGED);
             if (!piece.empty()) {

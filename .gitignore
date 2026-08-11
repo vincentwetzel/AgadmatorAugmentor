@@ -1,4 +1,7 @@
 # CMake / Build directories
+.build-temp/
+.msvc-temp/
+.tmp_build/
 build/
 build-*/
 .build-*/
@@ -7,6 +10,7 @@ build_*/
 out/
 temp/
 tmp/
+.tmp/
 bin/
 CMakeCache.txt
 CMakeFiles/
@@ -45,6 +49,7 @@ CPackSourceConfig.cmake
 *.userosscache
 .clangd/
 .ccls-cache/
+.cache/
 
 # Compiled Binaries & Libraries
 *.exe
@@ -88,11 +93,16 @@ full_game_variations_debug.txt
 *.mov
 *.webm
 
+# Checked-in integration fixtures
+!assets/fixtures/
+!assets/fixtures/games/
+!assets/fixtures/games/**/*.pgn
+!assets/fixtures/games/**/*.mp4
+
 # Logs & Crash dumps
 *.crash
 *.dmp
 *.core
-.cache/
 
 # Temporary / OS files
 *.swp

@@ -9,8 +9,8 @@ validation. Product milestones and longer-term architecture belong in
 ### Detector calibration
 
 The seed manifests at
-`assets/sample_yellow_squares/labels.jsonl` and
-`assets/sample_clock_changes/labels.jsonl` verify the report format and basic
+`assets/fixtures/detectors/yellow-squares/labels.jsonl` and
+`assets/fixtures/detectors/clock-changes/labels.jsonl` verify the report format and basic
 detector paths, but they are not large or varied enough to establish production
 gates.
 

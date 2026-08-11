@@ -12,7 +12,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 
 | ID | Requirement |
 |----|-------------|
-| BL-1 | The system must locate the chess board using `assets/board/board.png` as the reference board template. |
+| BL-1 | The system must locate the chess board using `assets/reference/board/board.png` as the reference board template. |
 | BL-2 | Localization must use Golden Section Search across coarse, fine, and exact passes, with a linear fallback for unusual frame dimensions. |
 | BL-3 | Scale evaluation must use OpenCV `TM_CCOEFF_NORMED` or sparse sampled correlation. NPP cross-correlation is not required. |
 | BL-4 | Early passes may downscale frames for speed; the final pass must resolve full-resolution board coordinates. |

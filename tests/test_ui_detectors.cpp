@@ -559,7 +559,7 @@ static std::string find_assets_dir() {
         "assets",
         "../assets",
         "../../assets",
-        "../../../assets" // Legacy, just in case
+        "../../../assets"
     };
     for (const auto& p : paths_to_check) {
         if (std::filesystem::exists(p) && std::filesystem::is_directory(p)) {
@@ -1342,8 +1342,8 @@ protected:
             GTEST_SKIP() << "Could not find 'assets' directory. Tests skipped.";
         }
 
-        board_path_ = (std::filesystem::path(assets_dir_) / "board" / "board.png").string();
-        red_board_path_ = (std::filesystem::path(assets_dir_) / "board" / "red_board.png").string();
+        board_path_ = (std::filesystem::path(assets_dir_) / "reference" / "board" / "board.png").string();
+        red_board_path_ = (std::filesystem::path(assets_dir_) / "reference" / "board" / "red-board.png").string();
 
         board_ = cv::imread(board_path_);
         if (board_.empty()) {
@@ -1624,7 +1624,7 @@ TEST(ClockValidationTest, VetoRequiresCalibratedTemporalAgreement) {
 }
 
 TEST_F(DetectorsTest, YellowSquares) {
-    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_yellow_squares").string();
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "yellow-squares").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -1661,7 +1661,7 @@ TEST_F(DetectorsTest, YellowSquares) {
 }
 
 TEST_F(DetectorsTest, YellowSquareCalibrationLabels) {
-    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_yellow_squares";
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "yellow-squares";
     const auto labels_path = dataset_dir / "labels.jsonl";
     std::ifstream labels(labels_path);
     if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
@@ -1897,8 +1897,8 @@ static cv::Mat make_yellow_category_calibration_board(
         }
         const std::string colour = std::isupper(static_cast<unsigned char>(piece))
             ? "white" : "black";
-        const auto piece_path = assets_dir / "pieces" / colour /
-            (colour + "_" + piece_name->second + ".png");
+        const auto piece_path = assets_dir / "reference" / "pieces" / colour /
+            (piece_name->second + ".png");
         cv::Mat source = cv::imread(piece_path.string(), cv::IMREAD_UNCHANGED);
         if (source.empty() || source.channels() != 4) {
             pieces_loaded = false;
@@ -1928,7 +1928,7 @@ static cv::Mat make_yellow_category_calibration_board(
 }
 
 TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
-    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_yellow_squares";
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "yellow-squares";
     const auto labels_path = dataset_dir / "labels.jsonl";
     std::ifstream labels(labels_path);
     if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
@@ -2406,7 +2406,7 @@ TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
 #if TEST_PIECE_COUNTS
 
 TEST_F(DetectorsTest, PieceCounts) {
-    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_piece_counts").string();
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "piece-counts").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -2432,7 +2432,7 @@ TEST_F(DetectorsTest, PieceCounts) {
 #if TEST_RED_SQUARES
 
 TEST_F(DetectorsTest, RedSquares) {
-    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_red_squares").string();
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "red-squares").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -2475,7 +2475,7 @@ TEST_F(DetectorsTest, RedSquares) {
 #if TEST_YELLOW_ARROWS
 
 TEST_F(DetectorsTest, YellowArrows) {
-    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_yellow_arrows").string();
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "yellow-arrows").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -2582,7 +2582,7 @@ static cv::Mat make_hover_calibration_frame(
 }
 
 TEST_F(DetectorsTest, MisalignedPiece) {
-    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_misaligned_piece").string();
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "misaligned-pieces").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -2992,7 +2992,7 @@ static void write_clock_calibration_observation(
 }
 
 TEST_F(DetectorsTest, GameClocks) {
-    const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_clock_changes").string();
+    const std::string images_dir = (std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "clock-changes").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
     if (files.empty()) GTEST_SKIP() << "Directory not found: " << images_dir;
 
@@ -3072,7 +3072,7 @@ TEST_F(DetectorsTest, GameClocks) {
 }
 
 TEST_F(DetectorsTest, GameClockCalibrationLabels) {
-    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_clock_changes";
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "clock-changes";
     const auto labels_path = dataset_dir / "labels.jsonl";
     std::ifstream labels(labels_path);
     if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
@@ -3153,7 +3153,7 @@ TEST_F(DetectorsTest, GameClockCalibrationLabels) {
 }
 
 TEST_F(DetectorsTest, GameClockCalibrationRegimes) {
-    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_clock_changes";
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "clock-changes";
     const auto labels_path = dataset_dir / "labels.jsonl";
     std::ifstream labels(labels_path);
     if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
@@ -3260,7 +3260,7 @@ TEST_F(DetectorsTest, GameClockCalibrationRegimes) {
 }
 
 TEST_F(DetectorsTest, GameClockCalibrationRoiRegimes) {
-    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_clock_changes";
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "fixtures" / "detectors" / "clock-changes";
     const auto labels_path = dataset_dir / "labels.jsonl";
     std::ifstream labels(labels_path);
     if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
@@ -3365,7 +3365,7 @@ TEST_F(DetectorsTest, ConstructorThrowsOnMissingAsset) {
 #if TEST_7_PLIES_EXTRACTION
 
 TEST_F(DetectorsTest, SevenPliesExtraction) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.mp4").string();
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "short" / "seven-plies" / "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3375,7 +3375,7 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 
     IntegrationTestResult result;
     result.name = "7 Plies Extraction";
-    result.video_file = "7 plies.mp4";
+    result.video_file = std::filesystem::path(video_path).filename().string();
     result.video_duration_sec = get_video_duration(video_path);
 
     auto t_start = std::chrono::steady_clock::now();
@@ -3386,7 +3386,7 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.pgn").string();
+    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "short" / "seven-plies" / "expected.pgn").string();
     ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
@@ -3444,8 +3444,8 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 #if TEST_MEDIUM_GAME_REVERT
 
 TEST_F(DetectorsTest, MediumGameWithRevert) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "medium_game_with_analysis_line_and_revert.mp4").string();
-    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "game.pgn").string();
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "medium" / "analysis-line-and-revert" / "video.mp4").string();
+    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "medium" / "analysis-line-and-revert" / "expected.pgn").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3456,7 +3456,7 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 
     IntegrationTestResult result;
     result.name = "Medium Game + Revert";
-    result.video_file = "medium_game_with_revert.mp4";
+    result.video_file = std::filesystem::path(video_path).filename().string();
     result.video_duration_sec = get_video_duration(video_path);
 
     auto t_start = std::chrono::steady_clock::now();
@@ -3515,7 +3515,7 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 #if TEST_FULL_GAME_1_EXTRACTION
 
 TEST_F(DetectorsTest, FullGame1Extraction) {
-    const std::string dir_path = (std::filesystem::path(assets_dir_) / "sample_games_full" / "game_1").string();
+    const std::string dir_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "full" / "agadmator-game").string();
     auto vid_files = list_files(dir_path, {".mp4", ".mkv", ".webm", ".avi"});
     
     if (vid_files.empty()) {
@@ -3645,7 +3645,7 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
 #if TEST_INTEGRATION_CLOCK_TIMES
 
 TEST_F(DetectorsTest, IntegrationClockTimes) {
-    const std::string dir_path = (std::filesystem::path(assets_dir_) / "test_clock_times").string();
+    const std::string dir_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "clock-times").string();
     auto vid_files = list_files(dir_path, {".mp4", ".mkv", ".webm", ".avi"});
     
     if (vid_files.empty()) {
@@ -3669,7 +3669,7 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
     auto t_start = std::chrono::steady_clock::now();
 
     ChessVideoExtractor extractor(board_path_, "", DebugLevel::None);
-    GameData data = extractor.extract_moves_from_video(video_path, "test_clock_times");
+    GameData data = extractor.extract_moves_from_video(video_path, "clock-times");
 
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
@@ -3717,7 +3717,7 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
 #if TEST_MEMORY_LIMIT
 
 TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_medium" / "medium_game_with_analysis_line_and_revert.mp4").string();
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "medium" / "analysis-line-and-revert" / "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3758,7 +3758,7 @@ TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
 #if TEST_CACHE_CORRECTNESS
 
 TEST_F(DetectorsTest, CacheCorrectness) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "sample_games_short" / "7 plies" / "7 plies.mp4").string();
+    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "short" / "seven-plies" / "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;

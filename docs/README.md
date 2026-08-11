@@ -10,6 +10,7 @@ Use this directory for project documentation that is more detailed than the repo
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Contributors | Build presets, test workflow, diagnostic replay, and contribution checklist |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Users and contributors | Build, runtime, engine, FFmpeg, OCR, GPU, and network troubleshooting |
 | [ROADMAP.md](ROADMAP.md) | Maintainers | Current status, completed milestones, and future work |
+| [../assets/README.md](../assets/README.md) | Contributors | Runtime asset, fixture, template, and naming conventions |
 
 Repository-wide contributor rules are in [CODING_STANDARDS.md](../CODING_STANDARDS.md). Outstanding detector and replay work is tracked in [TODO.md](../TODO.md); the roadmap summarizes the larger product milestones.
 
