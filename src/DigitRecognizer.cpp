@@ -380,7 +380,9 @@ static char classify_clock_glyph_shape(const cv::Mat& glyph) {
     return '3';
 }
 
-static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
+static std::string recognize_clock_by_components(
+    const cv::Mat& roi_bgr,
+    RecognitionDiagnostics* diagnostics) {
     if (roi_bgr.empty()) return "";
 
     cv::Mat gray;
@@ -395,7 +397,8 @@ static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
     cv::threshold(gray, otsu_inverse, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
     candidates.push_back(otsu_inverse);
 
-    for (const cv::Mat& thresh : candidates) {
+    for (size_t candidate_index = 0; candidate_index < candidates.size(); ++candidate_index) {
+        const cv::Mat& thresh = candidates[candidate_index];
         cv::Mat labels;
         cv::Mat stats;
         cv::Mat centroids;
@@ -448,10 +451,13 @@ static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
         }
 
         std::string digits;
+        std::vector<SegmentDiagnostics> segments;
+        segments.reserve(digit_boxes.size());
         digits.reserve(digit_boxes.size());
         bool all_ok = true;
         for (const cv::Rect& box : digit_boxes) {
             char c = classify_clock_glyph_shape(thresh(box));
+            segments.push_back({box.x, box.y, box.width, box.height, c});
             if (!std::isdigit(static_cast<unsigned char>(c))) {
                 all_ok = false;
                 break;
@@ -459,13 +465,23 @@ static std::string recognize_clock_by_components(const cv::Mat& roi_bgr) {
             digits += c;
         }
         if (all_ok) {
+            std::string formatted;
             if (digits.size() == 5) {
-                return std::string(1, digits[0]) + ":" + digits.substr(1, 2) + ":" + digits.substr(3, 2);
+                formatted = std::string(1, digits[0]) + ":" + digits.substr(1, 2) + ":" + digits.substr(3, 2);
+            } else if (digits.size() == 4) {
+                formatted = digits.substr(0, 2) + ":" + digits.substr(2, 2);
+            } else {
+                formatted = std::string(1, digits[0]) + ":" + digits.substr(1, 2);
             }
-            if (digits.size() == 4) {
-                return digits.substr(0, 2) + ":" + digits.substr(2, 2);
+            if (diagnostics) {
+                diagnostics->segments = std::move(segments);
+                diagnostics->thresholding_mode = candidate_index == 0
+                    ? "component_otsu_binary"
+                    : "component_otsu_inverse";
+                diagnostics->selected_reading = formatted;
+                diagnostics->used_component_path = true;
             }
-            return std::string(1, digits[0]) + ":" + digits.substr(1, 2);
+            return formatted;
         }
     }
 
@@ -541,7 +557,13 @@ static char classify_segment_fast(const cv::Mat& char_img) {
     return best_dist <= 2 ? best_digit : '?';
 }
 
-std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
+std::string recognize_time_with_diagnostics(const cv::Mat& roi_bgr,
+                                            bool is_active,
+                                            RecognitionDiagnostics* diagnostics) {
+    if (diagnostics) {
+        *diagnostics = {};
+        diagnostics->preprocessing_variant = "scaled_linear";
+    }
     if (roi_bgr.empty()) return "";
 
     cv::Mat scaled;
@@ -555,12 +577,17 @@ std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
     cv::Mat gray;
     cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
 
-    std::string component_clock = recognize_clock_by_components(scaled);
+    std::string component_clock = recognize_clock_by_components(scaled, diagnostics);
     if (!component_clock.empty()) {
         return component_clock;
     }
 
     cv::Mat thresh;
+    if (diagnostics) {
+        diagnostics->thresholding_mode = is_active
+            ? "adaptive_gaussian_binary_inverse"
+            : "adaptive_gaussian_binary";
+    }
     if (is_active) {
         // Dark text on a bright background (active player clock)
         cv::adaptiveThreshold(gray, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY_INV, 11, 5);
@@ -585,6 +612,16 @@ std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
 
     std::string fast_clock = extract_clock_substring(raw_result);
     if (!fast_clock.empty()) {
+        if (diagnostics) {
+            diagnostics->segments.clear();
+            diagnostics->segments.reserve(boxes.size());
+            for (size_t index = 0; index < boxes.size(); ++index) {
+                diagnostics->segments.push_back({
+                    boxes[index].x, boxes[index].y, boxes[index].width,
+                    boxes[index].height, raw_result[index]});
+            }
+            diagnostics->selected_reading = fast_clock;
+        }
         return fast_clock;
     }
 
@@ -595,7 +632,22 @@ std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
         raw_result += c;
     }
 
-    return extract_clock_substring(raw_result);
+    const std::string template_clock = extract_clock_substring(raw_result);
+    if (diagnostics) {
+        diagnostics->segments.clear();
+        diagnostics->segments.reserve(boxes.size());
+        for (size_t index = 0; index < boxes.size(); ++index) {
+            diagnostics->segments.push_back({
+                boxes[index].x, boxes[index].y, boxes[index].width,
+                boxes[index].height, raw_result[index]});
+        }
+        diagnostics->selected_reading = template_clock;
+    }
+    return template_clock;
+}
+
+std::string recognize_time(const cv::Mat& roi_bgr, bool is_active) {
+    return recognize_time_with_diagnostics(roi_bgr, is_active, nullptr);
 }
 
 } // namespace DigitRecognizer

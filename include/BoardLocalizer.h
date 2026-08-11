@@ -16,6 +16,29 @@ struct BoardGeometry {
     double geometry_confidence = 0.0;
 };
 
+/// Returns normalized geometry uncertainty in [0, 1]. Zero means the
+/// localized geometry has full template confidence; one means unavailable or
+/// completely untrusted geometry. This is advisory metadata for detectors.
+double geometry_uncertainty(const BoardGeometry& geo);
+
+struct GeometryStability {
+    bool stable = true;
+    bool anchor_drift_exceeded = false;
+    bool step_drift_exceeded = false;
+    double anchor_position_drift_pixels = 0.0;
+    double anchor_size_drift_pixels = 0.0;
+    double step_position_drift_pixels = 0.0;
+    double step_size_drift_pixels = 0.0;
+};
+
+/// Compares a fresh localization with the anchored geometry and, when
+/// available, the preceding probe. The result is an evidence guard rather
+/// than a localization replacement because mapper frames use the anchor.
+GeometryStability assess_geometry_stability(
+    const BoardGeometry& anchor,
+    const BoardGeometry& observed,
+    const BoardGeometry* previous = nullptr);
+
 /// Performs multi-pass template matching to find the exact board coordinates and scale.
 ///
 /// Three sequential passes: coarse (0.3x–1.5x, 25 steps) → fine (±0.05, 21 steps) → exact (±0.01, 21 steps).

@@ -6,7 +6,7 @@ A C++20 application that analyzes chess videos, reconstructs legal games from th
 
 ChessTube Analyzer treats the chess.com UI as a deterministic visual state machine. It localizes the board, watches highlights/clocks/arrows/hover state, verifies candidate moves with libchess, handles analysis reverts, and writes a clean PGN with clock data, optional opening tags, and optional move-quality labels.
 
-The extraction path uses a map-reduce scan: chunk workers emit visual candidates, while one chronological reducer maintains the strict chess state, validates moves, and detects analysis reverts. The correctness-first default uses one mapper worker; bounded concurrency can be enabled for controlled experiments with `CTA_MAX_WORKERS`. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches. Diagnostic runs can also retain structured JSONL observations, images, reducer events, and invariant reports for replay.
+The extraction path uses a map-reduce scan: chunk workers emit visual candidates, while one chronological reducer maintains the strict chess state, validates moves, and detects analysis reverts. The correctness-first default uses one mapper worker; bounded concurrency can be enabled for controlled experiments with `CTA_MAX_WORKERS`. Revert detection first compares compact 64-square hashes and only runs full-board image diffs for likely matches. Periodic geometry probes reject frames measured against stale board coordinates, while repeated clock readings preserve uncertainty instead of inventing OCR values. Diagnostic runs can also retain structured JSONL observations, images, reducer events, and invariant reports for replay.
 
 The normal product contract is PGN-first and in-memory: JSONL is a diagnostic/replay format, not a normal user export. The reducer preserves timestamp, clock, revert, variation, and detector provenance so a failed extraction can be investigated without adding fixture-specific production behavior.
 
@@ -28,6 +28,7 @@ Advanced extraction tuning is available through environment variables for benchm
 - **Channel-Specific Templates:** Auto-select and edit per-channel overlay layouts stored under `%APPDATA%\ChessTubeAnalyzer\templates`.
 - **Analysis Variations:** Preserve stable, legal analysis branches with their originating FEN, timestamps, confidence scores, and inherited branch clocks.
 - **Diagnostic Replay:** Bound a run to a timestamp and export reducer events to TSV/JSONL without changing production detector rules; failed integration runs can be reanalyzed from a compact observation bundle.
+- **Detector Calibration:** Generate labeled yellow-square, clock, hover, animation, and localization reports with frame/transition metrics while keeping calibration data separate from production move selection.
 
 ## Quick Start
 
@@ -126,6 +127,9 @@ ChessTubeAnalyzer/
 |   |-- ClockRecognizer.h
 |   |-- ChessVideoExtractor.h
 |   |-- ExtractionDiagnostics.h
+|   |-- MoveScorer.h / MoveValidations.h
+|   |-- RevertManager.h
+|   |-- VideoChunkMapper.h
 |   |-- OpeningFetcher.h
 |   |-- StockfishAnalyzer.h
 |   |-- GPUAccelerator.h
@@ -203,7 +207,7 @@ ChessTubeAnalyzer/
 4. **Square Diffing:** Candidate frames are compared against verified board history with `absdiff` and direct square ROI means. CUDA/NPP can accelerate compatible grayscale diffs, with OpenCV CPU fallback.
 5. **Sequential Chess Reducer:** Candidate frames are consumed chronologically so libchess state, indexed revert handling, settle-window checks, hover rejection, and clock validation stay deterministic.
 6. **Legal Move Scoring:** libchess generates legal moves and visual diffs choose the best candidate.
-7. **Validation:** Yellow highlights, hover-box rejection, clock turn check, and revert detection filter false positives.
+7. **Validation:** Yellow highlights, hover-box rejection, clock-turn checks, temporal evidence gates, geometry-stability rejection, and revert detection filter false positives.
 8. **Opening Lookup:** Verified video FENs are queued for background Lichess Explorer lookup, with responses cached under `%APPDATA%\ChessTubeAnalyzer`. The fetcher can use an optional Lichess API token from settings, verifies access before processing, stores 64-bit game totals, and records top matching games for rare or unique positions.
 9. **Analysis and Export:** `VideoProcessorWorker` delegates engine analysis, opening synchronization, PGN/SRT writing, and analysis-video export to focused helper modules. PGN is written with timestamps, clock data, optional opening tags, and optional Stockfish-backed move-quality labels. Analysis video generation composites static overlays through FFmpeg, embeds temporary move subtitles when requested, then removes the temporary SRT file.
 10. **Diagnostic Replay:** Failure bundles retain compact observations, sampled imagery, SVG overlays, HTML contact sheets, invariant reports, and first-divergence classifications. Observation replay compares mapper, detector, scoring, reducer, clock, revert, and variation contracts without decoding the source video again.
@@ -216,7 +220,7 @@ python tests\run_tests.py
 
 The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
 
-For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. It also supports `--replay-bundle`, `--compare-replay-traces`, `--compare-mapper-runs`, `--detector-calibration`, and `--calibration-debug-dir`. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, SVG overlays, an HTML contact sheet, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle` or `--compare-replay-traces source.jsonl replay.jsonl` to inspect it without decoding the source video.
+For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. It also supports `--replay-bundle`, `--compare-replay-traces`, `--compare-source-runs`, `--compare-mapper-runs`, `--detector-calibration`, `--calibration-debug-dir`, `--induce-failure`, and test-side calibration outputs for clocks, yellow squares, and hover/animation. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, SVG overlays, an HTML contact sheet, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle`, `--compare-replay-traces source.jsonl replay.jsonl`, or `--compare-source-runs source_a.jsonl source_b.jsonl` to inspect runs without decoding the source video again.
 
 The seed calibration manifests are `assets/sample_yellow_squares/labels.jsonl` and `assets/sample_clock_changes/labels.jsonl`. They are intentionally small review fixtures; calibration results are advisory until a representative labeled corpus exists.
 

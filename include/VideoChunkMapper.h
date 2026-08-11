@@ -12,6 +12,11 @@
 
 namespace cta {
 
+inline constexpr double kMapperFineScanStepSeconds = 0.1;
+inline constexpr double kMapperMotionBurstCapSeconds = 0.3;
+inline constexpr double kMapperSettleConfirmationSeconds = 0.2;
+inline constexpr double kMapperQuietCoarseScanDelaySeconds = 2.0;
+
 struct CandidateFrame {
     // Stable within one extraction run: high 32 bits identify the source
     // chunk and low 32 bits identify emission order within that chunk.

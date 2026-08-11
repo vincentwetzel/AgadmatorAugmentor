@@ -1,14 +1,9 @@
 # CMake / Build directories
 build/
 build-*/
+.build-*/
 cmake-build-*/
-build_cpu/
-build_dyn/
-build_tmp/
 build_*/
-build_tests/
-build_zero_copy/
-build_codex*
 out/
 temp/
 tmp/

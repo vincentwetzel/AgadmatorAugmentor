@@ -5,10 +5,26 @@
 namespace cta {
 namespace validation {
 
+bool passes_temporal_yellow_check(const YellowTemporalEvidence& evidence) {
+    return evidence.sample_count >= kYellowTemporalMinimumSamples &&
+        evidence.pair_pass_count >= kYellowTemporalMinimumPairPasses &&
+        evidence.max_from >= kYellowEndpointThreshold &&
+        evidence.max_to >= kYellowEndpointThreshold &&
+        evidence.max_pair >= kYellowPairThreshold;
+}
+
+bool passes_clock_veto_reliability_gate(const ClockVetoEvidence& evidence) {
+    return evidence.direct_reading_plausible && evidence.temporal_checked &&
+        evidence.temporal_sample_count >= kClockVetoMinimumTemporalSamples &&
+        evidence.temporal_observed_count >= kClockVetoMinimumObservedReadings &&
+        evidence.temporal_agreement_count >= kClockVetoMinimumAgreements;
+}
+
 YellowSquareMeasurement measure_yellowness(const cv::Mat& board_bgr,
                                            const BoardGeometry& geo,
                                            const char* sq_name,
-                                           bool include_edge_metrics) {
+                                           bool include_edge_metrics,
+                                           double corner_fraction) {
     int col = sq_name[0] - 'a';
     int rank = sq_name[1] - '1';
     int row = 7 - rank;
@@ -16,8 +32,9 @@ YellowSquareMeasurement measure_yellowness(const cv::Mat& board_bgr,
     int y2 = static_cast<int>((row + 1) * geo.sq_h);
     int x1 = static_cast<int>(col * geo.sq_w);
     int x2 = static_cast<int>((col + 1) * geo.sq_w);
-    int ch = static_cast<int>(geo.sq_h * 0.12);
-    int cw = static_cast<int>(geo.sq_w * 0.12);
+    const double clamped_corner_fraction = std::clamp(corner_fraction, 0.02, 0.45);
+    int ch = static_cast<int>(geo.sq_h * clamped_corner_fraction);
+    int cw = static_cast<int>(geo.sq_w * clamped_corner_fraction);
 
     // Clamp to frame bounds
     int fh = board_bgr.rows, fw = board_bgr.cols;
@@ -34,6 +51,7 @@ YellowSquareMeasurement measure_yellowness(const cv::Mat& board_bgr,
     };
 
     YellowSquareMeasurement measurement;
+    measurement.geometry_uncertainty = geometry_uncertainty(geo);
     for (size_t corner_index = 0; corner_index < 4; ++corner_index) {
         const auto& c = corners[corner_index];
         if (c.width <= 0 || c.height <= 0) continue;
@@ -119,6 +137,7 @@ HoverBoxMeasurement measure_hover_box(const cv::Mat& board_bgr,
     double r3 = static_cast<double>(cv::countNonZero(reduced)) / std::max(1, sh);
 
     HoverBoxMeasurement measurement;
+    measurement.geometry_uncertainty = geometry_uncertainty(geo);
     measurement.top_edge = r0;
     measurement.bottom_edge = r1;
     measurement.left_edge = r2;

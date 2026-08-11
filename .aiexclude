@@ -1,0 +1,94 @@
+# Keep repository metadata and local editor state out of AI context.
+.git/
+.vs/
+.vscode/
+.VSCodeCounter/
+.idea/
+.qwen/
+
+# Build trees, dependency installations, and CMake-generated files.
+.build-temp/
+.msvc-temp/
+.tmp_build/
+build/
+build-*/
+build_*/
+cmake-build-*/
+out/
+bin/
+vcpkg_installed/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+_deps/
+.cmake/
+compile_commands.json
+cmake_install.cmake
+install_manifest.txt
+
+# Generated application output and diagnostics.
+output/
+debug_screenshots/
+full_game_variations_debug.txt
+analysis.json
+*.log
+*.crash
+*.dmp
+*.core
+
+# Temporary files and caches.
+.tmp/
+temp/
+tmp/
+.cache/
+__pycache__/
+*.swp
+*.swo
+*~
+
+# Compiled objects, libraries, and generated Qt files.
+*.exe
+*.exp
+*.dll
+*.lib
+*.so
+*.dylib
+*.a
+*.app/
+*.obj
+*.o
+*.pdb
+*.ilk
+*.idb
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+qrc_*.h
+ui_*.h
+
+# Large video inputs and generated exports.
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+
+# Local credentials and secret configuration.
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+*.credentials
+*.pem
+*.p12
+*.pfx
+secrets/
+
+# Operating-system metadata.
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/

@@ -1,6 +1,7 @@
 #include "VideoChunkMapper.h"
 #include "BoardAnalysis.h"
 #include "ArrowDetector.h"
+#include "ClockRecognizer.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <algorithm>
@@ -30,12 +31,14 @@ VideoChunkMapper::VideoChunkMapper(const std::string& safe_video_path, double du
       diagnostic_frame_end_(diagnostic_frame_end),
       observation_replay_path_(observation_replay_path),
       chunk_results_(total_chunks), chunk_done_(total_chunks, false) {
-    roi_x1_ = std::max(0, static_cast<int>(geo_.bx + geo_.bw * 0.70));
-    roi_x2_ = std::min(frame_width_, static_cast<int>(geo_.bx + geo_.bw));
-    top_roi_y1_ = std::max(0, static_cast<int>(geo_.by - geo_.sq_h * 0.55));
-    top_roi_y2_ = std::max(top_roi_y1_ + 1, static_cast<int>(geo_.by - geo_.sq_h * 0.08));
-    bot_roi_y1_ = std::min(frame_height_ - 1, static_cast<int>(geo_.by + geo_.bh + geo_.sq_h * 0.18));
-    bot_roi_y2_ = std::min(frame_height_, static_cast<int>(geo_.by + geo_.bh + geo_.sq_h * 0.58));
+    const ClockRoiBounds clock_bounds = clock_roi_bounds(
+        geo_, frame_width_, frame_height_);
+    roi_x1_ = clock_bounds.x1;
+    roi_x2_ = clock_bounds.x2;
+    top_roi_y1_ = clock_bounds.top_y1;
+    top_roi_y2_ = clock_bounds.top_y2;
+    bot_roi_y1_ = clock_bounds.bottom_y1;
+    bot_roi_y2_ = clock_bounds.bottom_y2;
     if (!diagnostic_frame_dir_.empty()) {
         std::error_code error;
         std::filesystem::create_directories(diagnostic_frame_dir_, error);
@@ -210,7 +213,9 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
     }
 
     auto round_t = [](double val) { return std::round(val * 100.0) / 100.0; };
-    constexpr double fine_step = 0.1, quiet_coarse_step = 1.0, quiet_before_coarse_scan = 2.0;
+    constexpr double fine_step = kMapperFineScanStepSeconds;
+    constexpr double quiet_coarse_step = 1.0;
+    constexpr double quiet_before_coarse_scan = kMapperQuietCoarseScanDelaySeconds;
 
     while (true) {
         int chunk_idx = next_chunk_to_map_.fetch_add(1);
@@ -281,9 +286,12 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
             cf.board_gray = gray.clone();
             cf.board_hash = compute_all_square_means(
                 cf.board_gray, geo_, margin_h_, margin_w_);
+            // Geometry validation needs periodic source frames during normal
+            // extraction as well as diagnostic runs. Artifact emission remains
+            // bounded below, but the in-memory probe must not disappear simply
+            // because a diagnostic window was not requested.
             const bool retain_full_frame = debug_level_ != 0 ||
-                (retain_full_frames_ && candidate_t >= next_full_frame_t &&
-                 (diagnostic_frame_dir_.empty() || in_diagnostic_frame_window));
+                (retain_full_frames_ && candidate_t >= next_full_frame_t);
             if (retain_full_frame) {
                 cf.full_bgr = frame.clone();
                 if (retain_full_frames_ && debug_level_ == 0) {
@@ -335,6 +343,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
         std::uint64_t source_frame_index = 0;
         std::uint64_t prev_source_frame_index = 0;
         bool emitted_initial = false, has_pending_motion = false;
+        double quiet_after_motion_seconds = 0.0;
         double quiet_seconds = 0.0;
         
         while (local_t < end_t && (!cancel_flag || !*cancel_flag)) {
@@ -388,18 +397,23 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                     last_emit_t = local_t;
                 }
                 has_pending_motion = true; 
-                // Cap burst durations to 0.3s so slow drags don't hide mid-animation states indefinitely.
-                if (local_t - last_emit_t > 0.3) {
+                // Cap burst durations so slow drags don't hide mid-animation
+                // states indefinitely.
+                if (local_t - last_emit_t > kMapperMotionBurstCapSeconds) {
                     emit_candidate(local_t, frame, board_bgr_view, board_gray,
                                    "motion_burst_cap", source_frame_index);
                     last_emit_t = local_t;
                 }
             }
             else if (has_pending_motion) { 
-                emit_candidate(local_t, frame, board_bgr_view, board_gray,
-                               "settled_tail", source_frame_index);
-                has_pending_motion = false; 
-                last_emit_t = local_t;
+                quiet_after_motion_seconds += fine_step;
+                if (quiet_after_motion_seconds >= kMapperSettleConfirmationSeconds) {
+                    emit_candidate(local_t, frame, board_bgr_view, board_gray,
+                                   "settled_tail", source_frame_index);
+                    has_pending_motion = false;
+                    quiet_after_motion_seconds = 0.0;
+                    last_emit_t = local_t;
+                }
             }
 
             board_gray.copyTo(prev_gray);
@@ -411,7 +425,12 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
             double scan_step = (quiet_seconds >= quiet_before_coarse_scan && !has_pending_motion) ? quiet_coarse_step : fine_step;
             int frame_skip = std::max(0, static_cast<int>(std::round(v_fps * scan_step)) - 1);
             for (int j = 0; j < frame_skip; ++j) { if ((cancel_flag && *cancel_flag) || !cap.grab()) break; }
-            if (has_motion) quiet_seconds = 0.0; else quiet_seconds += scan_step;
+            if (has_motion) {
+                quiet_seconds = 0.0;
+                quiet_after_motion_seconds = 0.0;
+            } else {
+                quiet_seconds += scan_step;
+            }
             local_t = round_t(local_t + scan_step);
         }
         std::lock_guard<std::mutex> lock(results_mutex_);

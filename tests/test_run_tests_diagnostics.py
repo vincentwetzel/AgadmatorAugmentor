@@ -96,6 +96,12 @@ class DiagnosticClassificationTests(unittest.TestCase):
                     "yellow_candidates": [{"square": "d4", "score": 68.0}],
                     "clock_checked": True,
                     "clock_decision": "ocr_plausible",
+                    "clock_provenance": "temporal",
+                    "clock_temporal_checked": True,
+                    "clock_temporal_sample_count": 3,
+                    "clock_temporal_observed_count": 2,
+                    "clock_temporal_agreement_count": 2,
+                    "clock_temporal_decision": "reconciled",
                     "clock_candidates": ["1:30:00"],
                     "clock_top_width": 120,
                     "clock_top_bright_ratio": 0.15,
@@ -114,6 +120,7 @@ class DiagnosticClassificationTests(unittest.TestCase):
                     "localization_score": -1.0,
                     "localization_scale": 0.0,
                     "localization_confidence": 0.7,
+                    "geometry_uncertainty": 0.3,
                     "yellow_endpoint_threshold": 25.0,
                     "yellow_pair_threshold": 70.0,
                     "yellow_measurements": [
@@ -143,6 +150,9 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(quality["yellow"]["checked_count"], 1)
         self.assertEqual(quality["yellow"]["candidate_measurement_count"], 1)
         self.assertEqual(quality["clock"]["candidate_reading_count"], 1)
+        self.assertEqual(quality["clock"]["provenance_counts"], {"temporal": 1})
+        self.assertEqual(quality["clock"]["temporal_checked_count"], 1)
+        self.assertEqual(quality["clock"]["temporal_agreement_count"]["maximum"], 2.0)
         self.assertEqual(quality["clock"]["records_with_roi_measurements"], 1)
         self.assertEqual(quality["clock"]["bright_ratio_delta"]["mean"], 0.27)
         self.assertEqual(quality["hover"]["measurement_count"], 1)
@@ -151,6 +161,7 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(quality["score_margin"]["low_margin_count"], 1)
         self.assertEqual(quality["localization"]["unavailable_count"], 1)
         self.assertEqual(quality["localization"]["confidence_summary"]["mean"], 0.7)
+        self.assertEqual(quality["localization"]["uncertainty_summary"]["mean"], 0.3)
         self.assertEqual(quality["uncertainty"]["rejected_candidate_count"], 0)
         self.assertEqual(quality["template"]["unique_identity_count"], 0)
         self.assertEqual(quality["observation"]["tag_counts"].get("motion", 0), 0)
@@ -180,6 +191,22 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(uncertainty["rejected_candidate_count"], 3)
         self.assertEqual(uncertainty["repeated_rejected_candidate_count"], 1)
         self.assertEqual(uncertainty["rejection_reason_counts"]["missing_yellow"], 2)
+
+    def test_temporal_yellow_acceptance_remains_weak_until_calibrated(self):
+        quality = RUNNER.summarize_detector_quality([{
+            "event": "ACCEPT",
+            "evidence": {
+                "yellow_checked": True,
+                "yellow_decision": "passed_temporal",
+                "yellow_temporal_checked": True,
+                "yellow_temporal_sample_count": 2,
+                "yellow_temporal_pair_pass_count": 2,
+            },
+        }])
+        self.assertEqual(
+            quality["evidence_strength"]["highlights"]["weak_count"], 1)
+        self.assertEqual(
+            quality["evidence_strength"]["highlights"]["strong_count"], 0)
 
     def test_uncertainty_keeps_outcomes_and_evidence_families_separate(self):
         records = [
@@ -609,6 +636,76 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertTrue(result["reducer_equivalent"])
         self.assertEqual(result["reducer_mismatches"], [])
 
+    def test_source_run_comparison_ignores_artifact_paths(self):
+        source = [{
+            "observation_id": 4,
+            "sequence": 8,
+            "event": "ACCEPT",
+            "evidence": {
+                "diagnostic_frame_path": "run_a.frames/frame_0004.png",
+                "board_hash": [1.0, 2.0],
+                "yellow_decision": "passed",
+            },
+        }]
+        repeat = [{
+            "observation_id": 4,
+            "sequence": 8,
+            "event": "ACCEPT",
+            "evidence": {
+                "diagnostic_frame_path": "run_b.frames/frame_0004.png",
+                "board_hash": [1.0, 2.0],
+                "yellow_decision": "passed",
+            },
+        }]
+        result = RUNNER.compare_source_runs(source, repeat)
+        self.assertEqual(result["status"], "match")
+        self.assertIsNone(result["first_divergence"])
+
+    def test_source_run_comparison_reports_first_detector_difference(self):
+        source = [{
+            "observation_id": 4,
+            "event": "CANDIDATE",
+            "evidence": {"yellow_assessment": {"confidence": 0.8}},
+        }]
+        repeat = [{
+            "observation_id": 4,
+            "event": "CANDIDATE",
+            "evidence": {"yellow_assessment": {"confidence": 0.6}},
+        }]
+        result = RUNNER.compare_source_runs(source, repeat)
+        self.assertEqual(result["status"], "diverged")
+        self.assertEqual(
+            result["first_divergence"]["path"],
+            "$[0].evidence.yellow_assessment.confidence",
+        )
+        self.assertEqual(result["first_divergence"]["layer"], "source_run_determinism")
+
+    def test_source_run_comparison_accepts_parsed_records_without_io_errors(self):
+        result = RUNNER.compare_source_runs(
+            [{"event": "ACCEPT"}],
+            [{"event": "ACCEPT"}],
+        )
+        self.assertEqual(result["status"], "match")
+
+    def test_seed_calibration_manifests_contain_measured_predictions(self):
+        root = Path(__file__).resolve().parent.parent
+        yellow_records, yellow_errors = RUNNER.read_diagnostic_records(
+            root / "assets" / "sample_yellow_squares" / "labels.jsonl"
+        )
+        clock_records, clock_errors = RUNNER.read_diagnostic_records(
+            root / "assets" / "sample_clock_changes" / "labels.jsonl"
+        )
+        self.assertEqual(yellow_errors, [])
+        self.assertEqual(clock_errors, [])
+        yellow = RUNNER.detector_calibration(yellow_records)["detectors"]["yellow"]
+        clock = RUNNER.detector_calibration(clock_records)["detectors"]["clock"]
+        self.assertEqual(yellow["frame"]["labeled"], 27)
+        self.assertEqual(yellow["components"]["origin"]["false_negative"], 1)
+        self.assertEqual(clock["frame"]["labeled"], 9)
+        self.assertEqual(clock["frame"]["false_negative"], 0)
+        self.assertEqual(clock["ocr"]["rows"], 0)
+        self.assertEqual(clock["ocr"]["unmeasured_rows"], 6)
+
     def test_detector_calibration_reports_confusion_rates_and_transitions(self):
         records = [
             {"detector": "yellow", "truth": "positive", "prediction": "positive",
@@ -647,6 +744,286 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(result["threshold_sweep"][0]["threshold"], 0.6)
         self.assertEqual(result["interpretation"]["strength"], "weak")
         self.assertEqual(result["representative_errors"]["highest_confidence_incorrect"][0]["confidence"], 0.7)
+
+    def test_clock_calibration_reports_digit_accuracy_and_variant_provenance(self):
+        records = [
+            {
+                "detector": "clock", "component": "white_ocr",
+                "truth": "positive", "prediction": "positive",
+                "expected_white": "1:30:07", "selected_reading": "1:30:07",
+                "preprocessing_variant": "native",
+                "condition": "roi_geometry",
+                "ocr_preprocessing_variant": "scaled_linear:right_aligned_30pct",
+                "roi_variant": "roi_native",
+                "roi_geometry_offset_x_squares": 0.0,
+                "roi_geometry_offset_y_squares": 0.0,
+                "roi_left_edge_ratio": 0.70,
+                "segmented_digits": [{"symbol": digit} for digit in "13007"],
+            },
+            {
+                "detector": "clock", "component": "white_ocr",
+                "truth": "positive", "prediction": "positive",
+                "expected_white": "1:30:07", "selected_reading": "1:30:09",
+                "preprocessing_variant": "scaled_75",
+                "condition": "localization_error",
+                "ocr_preprocessing_variant": "scaled_linear:right_aligned_40pct",
+                "roi_variant": "roi_shift_left",
+                "roi_geometry_offset_x_squares": -0.08,
+                "roi_geometry_offset_y_squares": 0.0,
+                "roi_left_edge_ratio": 0.70,
+                "segmented_digits": [{"symbol": digit} for digit in "13009"],
+            },
+        ]
+        result = RUNNER.detector_calibration(records)["detectors"]["clock"]
+        self.assertEqual(result["ocr"]["digit_correct"], 9)
+        self.assertEqual(result["ocr"]["digit_total"], 10)
+        self.assertEqual(result["ocr"]["digit_accuracy"], 0.9)
+        self.assertEqual(result["ocr"]["complete_correct"], 1)
+        self.assertEqual(result["ocr"]["complete_total"], 2)
+        self.assertEqual(result["ocr"]["rows_with_segments"], 2)
+        self.assertEqual(
+            result["ocr"]["roi_geometry"]["variant_counts"],
+            {"roi_native": 1, "roi_shift_left": 1},
+        )
+        self.assertEqual(
+            result["ocr"]["roi_geometry"]["offset_x_squares"]["minimum"],
+            -0.08,
+        )
+        self.assertEqual(result["roi_calibration"]["rows"], 2)
+        self.assertEqual(result["roi_calibration"]["status"], "insufficient_data")
+        self.assertEqual(
+            result["roi_calibration"]["condition_coverage"]["missing"],
+            ["roi_margin"],
+        )
+        self.assertEqual(
+            set(result["preprocessing_variants"]),
+            {"native", "scaled_75"},
+        )
+
+    def test_clock_quality_targets_separate_activity_ocr_and_usability(self):
+        records = [
+            {
+                "detector": "clock", "component": "active_side",
+                "image": "frame.png", "truth": "positive", "prediction": "positive",
+                "expected_active": "white", "regime": "native",
+            },
+            {
+                "detector": "clock", "component": "white_ocr",
+                "image": "frame.png", "truth": "positive", "prediction": "positive",
+                "expected_white": "1:30:07", "selected_reading": "1:30:07",
+                "regime": "native",
+            },
+            {
+                "detector": "clock", "component": "black_ocr",
+                "image": "frame.png", "truth": "positive", "prediction": "positive",
+                "expected_black": "1:30:36", "selected_reading": "1:30:36",
+                "regime": "native",
+            },
+        ]
+        quality = RUNNER.detector_calibration(records)["detectors"]["clock"][
+            "quality_targets"]
+        self.assertEqual(quality["active_side"]["metrics"]["labeled"], 1)
+        self.assertEqual(quality["complete_ocr"]["metrics"]["labeled"], 2)
+        self.assertEqual(quality["usable_clock"]["metrics"]["labeled"], 1)
+        self.assertEqual(
+            quality["usable_clock"]["metrics"]["true_positive"], 1)
+        self.assertEqual(
+            quality["usable_clock"]["evaluation"]["status"],
+            "insufficient_data",
+        )
+
+    def test_clock_calibration_reports_required_stress_conditions(self):
+        records = [
+            {
+                "detector": "clock", "component": "white_ocr",
+                "truth": "positive", "prediction": "positive",
+                "condition": condition, "selected_reading": "1:30:07",
+                "expected_white": "1:30:07",
+            }
+            for condition in sorted(RUNNER.CLOCK_STRESS_CONDITIONS)
+        ]
+        coverage = RUNNER.detector_calibration(records)["detectors"]["clock"][
+            "condition_coverage"]
+        self.assertEqual(coverage["status"], "complete")
+        self.assertEqual(coverage["missing"], [])
+
+        incomplete = RUNNER.detector_calibration(records[:-1])["detectors"]["clock"][
+            "condition_coverage"]
+        self.assertEqual(incomplete["status"], "insufficient_data")
+        self.assertEqual(
+            incomplete["missing"], [sorted(RUNNER.CLOCK_STRESS_CONDITIONS)[-1]])
+
+    def test_yellow_calibration_reports_endpoint_and_geometry_sensitivity(self):
+        records = [
+            {
+                "detector": "yellow", "component": "paired",
+                "truth": "positive", "prediction": "positive",
+                "regime": "native", "geometry_available": True,
+                "corner_fraction": 0.12, "geometry_offset_x": 0,
+                "geometry_offset_y": 0, "origin_score": 42,
+                "destination_score": 58, "pair_score": 100,
+                "score": 100, "board_relative_score": 70,
+                "local_normalized_score": 64,
+                "case": "capture",
+                "pre_move_destination_occupancy": "occupied",
+                "post_move_origin_occupancy": "empty",
+                "post_move_destination_occupancy": "occupied",
+                "adjacent_highlight_scores": [
+                    {"square": "c4", "score": 4.0},
+                    {"square": "d5", "score": 6.0},
+                ],
+            },
+            {
+                "detector": "yellow", "component": "paired",
+                "truth": "negative", "prediction": "negative",
+                "regime": "geometry_shifted", "geometry_available": False,
+                "corner_fraction": 0.12, "geometry_offset_x": 14,
+                "geometry_offset_y": 14, "origin_score": 0,
+                "destination_score": 0, "pair_score": 0, "score": 0,
+                "board_relative_score": 4, "local_normalized_score": 2,
+            },
+        ]
+        result = RUNNER.detector_calibration(records)["detectors"]["yellow"]
+        measurements = result["yellow_measurements"]
+        self.assertEqual(measurements["rows"], 2)
+        self.assertEqual(measurements["endpoint_metrics"]["paired"]["true_positive"], 1)
+        self.assertEqual(measurements["paired_endpoint_target"]["status"], "insufficient_data")
+        self.assertEqual(measurements["regimes"]["geometry_shifted"]["geometry_unavailable"], 1)
+        self.assertEqual(measurements["regimes"]["native"]["pair_score"], [100.0])
+        self.assertEqual(
+            measurements["baseline_comparison"]["board_relative"]["field"],
+            "board_relative_score",
+        )
+        self.assertEqual(
+            measurements["baseline_comparison"]["local_normalized"]["rows"], 2,
+        )
+        self.assertEqual(measurements["category_coverage"]["status"], "insufficient_data")
+        self.assertEqual(
+            measurements["category_coverage"]["sources"],
+            {"labeled_frame": 1},
+        )
+        self.assertEqual(
+            measurements["occupancy"]["pre_move_destination_occupancy"],
+            {"occupied": 1},
+        )
+        self.assertEqual(measurements["adjacent_highlights"]["score_count"], 2)
+        self.assertEqual(measurements["threshold_grid"]["candidate_count"], 187)
+        self.assertEqual(measurements["threshold_grid"]["status"], "advisory")
+        self.assertEqual(measurements["edge_density"]["origin_edge_density"]["count"], 0)
+
+    def test_yellow_calibration_reports_temporal_persistence(self):
+        records = [
+            {
+                "detector": "yellow", "component": "temporal_pair",
+                "truth": "positive", "prediction": "positive",
+                "temporal_window_seconds": 0.75,
+                "temporal_sample_count": 2,
+                "temporal_pair_pass_count": 2,
+            },
+            {
+                "detector": "yellow", "component": "temporal_pair",
+                "truth": "negative", "prediction": "negative",
+                "temporal_window_seconds": 0.75,
+                "temporal_sample_count": 3,
+                "temporal_pair_pass_count": 1,
+            },
+        ]
+        result = RUNNER.detector_calibration(records)["detectors"]["yellow"]
+        temporal = result["yellow_measurements"]["temporal_calibration"]
+        self.assertEqual(temporal["rows"], 2)
+        self.assertEqual(temporal["status"], "pass")
+        self.assertEqual(temporal["metrics"]["true_positive"], 1)
+        self.assertEqual(temporal["metrics"]["true_negative"], 1)
+        self.assertEqual(temporal["pair_pass_count"]["maximum"], 2.0)
+
+    def test_yellow_calibration_reports_corner_and_edge_sweeps(self):
+        records = []
+        for fraction in (0.05, 0.08, 0.10, 0.12, 0.16):
+            records.extend([
+                {
+                    "detector": "yellow", "component": "paired",
+                    "truth": "positive", "prediction": "positive",
+                    "regime": f"corner_{fraction}",
+                    "corner_fraction": fraction,
+                    "origin_score": 40, "destination_score": 40,
+                    "pair_score": 80, "score": 80,
+                    "origin_edge_density": 0.02,
+                    "destination_edge_density": 0.03,
+                },
+                {
+                    "detector": "yellow", "component": "paired",
+                    "truth": "negative", "prediction": "negative",
+                    "regime": f"corner_{fraction}",
+                    "corner_fraction": fraction,
+                    "origin_score": 0, "destination_score": 0,
+                    "pair_score": 0, "score": 0,
+                    "origin_edge_density": 0.0,
+                    "destination_edge_density": 0.0,
+                },
+            ])
+        result = RUNNER.detector_calibration(records)["detectors"]["yellow"]
+        measurements = result["yellow_measurements"]
+        self.assertEqual(measurements["corner_sampling"]["count"], 5)
+        self.assertEqual(measurements["corner_sampling"]["status"], "measured")
+        edge_grid = measurements["edge_density_grid"]
+        self.assertEqual(edge_grid["candidate_count"], 41)
+        self.assertEqual(
+            edge_grid["selected"]["minimum_pair_edge_density"], 0.005)
+        self.assertEqual(edge_grid["selected"]["metrics"]["recall"], 1.0)
+        self.assertEqual(
+            edge_grid["selected"]["metrics"]["false_positive_rate"], 0.0)
+        self.assertEqual(edge_grid["status"], "advisory")
+
+    def test_hover_calibration_separates_settled_false_rejections(self):
+        records = [
+            {
+                "detector": "hover", "condition": "settled_board",
+                "truth": "negative", "prediction": "negative",
+            },
+            {
+                "detector": "hover", "condition": "cursor_overlay",
+                "truth": "negative", "prediction": "positive",
+            },
+            {
+                "detector": "hover", "condition": "fast_animation",
+                "truth": "positive", "prediction": "positive",
+            },
+            {
+                "detector": "hover", "condition": "partial_movement",
+                "truth": "positive", "prediction": "negative",
+            },
+        ]
+        result = RUNNER.detector_calibration(records)["detectors"]["hover"]
+        measurements = result["hover_measurements"]
+        self.assertEqual(measurements["rows"], 4)
+        self.assertEqual(measurements["settled_board_false_rejection_count"], 1)
+        self.assertEqual(measurements["true_mid_drag_rejection_count"], 1)
+        self.assertEqual(measurements["settled_board"]["false_positive"], 1)
+        self.assertEqual(measurements["mid_drag"]["false_negative"], 1)
+
+    def test_hover_calibration_reports_transition_settle_window(self):
+        records = [
+            {
+                "detector": "hover", "condition": "transition_level",
+                "truth": "positive", "prediction": "positive",
+                "settle_window_seconds": 0.2,
+                "settle_delay_seconds": 0.2,
+                "premature_settle": False,
+            },
+            {
+                "detector": "hover", "condition": "transition_level",
+                "truth": "positive", "prediction": "positive",
+                "settle_window_seconds": 0.2,
+                "settle_delay_seconds": 0.2,
+                "premature_settle": False,
+            },
+        ]
+        result = RUNNER.detector_calibration(records)["detectors"]["hover"]
+        transition = result["hover_measurements"]["transition_level"]
+        self.assertEqual(transition["rows"], 2)
+        self.assertEqual(transition["status"], "pass")
+        self.assertEqual(transition["premature_settle_count"], 0)
+        self.assertEqual(transition["settle_delay_seconds"]["mean"], 0.2)
 
     def test_calibration_regression_report_flags_metric_damage(self):
         baseline = {"detectors": {"yellow": {"frame": {

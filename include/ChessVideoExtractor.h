@@ -26,6 +26,9 @@ struct ClockInfo {
     // The moved clock could not be parsed at all. This is distinct from a
     // parsed reading that failed a temporal sanity check.
     bool moved_time_missing = false;
+    // Provenance of the moved-side reading: initial, direct, contextual,
+    // temporal, inherited, missing, or rejected.
+    std::string moved_time_provenance = "missing";
 };
 
 // A struct to hold a single analysis branch (a sequence of moves not on the main line)

@@ -95,7 +95,7 @@ The diagnostic environment controls are generic and do not alter ordinary full-v
 - `CTA_MAX_WORKERS` raises mapper concurrency for controlled performance experiments; the default is one for deterministic decoder boundaries.
 - `CTA_DIAGNOSTIC_FILE` writes structured reducer observations as JSONL.
 - `CTA_DIAGNOSTIC_FRAME_DIR` and `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS` retain sampled full-frame, board, and clock-ROI artifacts.
-- `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` controls diagnostic geometry rechecks and is clamped to 1-30 seconds.
+- `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` controls periodic geometry rechecks during extraction and is clamped to 1-30 seconds.
 - `CTA_REPLAY_OBSERVATIONS` replaces source-video decoding and board/template initialization with a compact `observations.jsonl` input and its board/clock artifacts. The first observation seeds the bounded replay position and geometry; the normal chronological reducer then processes the reconstructed observations.
 
 When an integration test fails, `tests\run_tests.py` automatically reruns the
@@ -129,6 +129,45 @@ To compare mapper output from two bounded runs (for example, one with
 ```cmd
 python tests\run_tests.py --compare-mapper-runs sequential.jsonl parallel.jsonl
 ```
+
+To verify that two source-video runs are deterministic, write each run to a
+different diagnostic file and compare them after both runs complete:
+
+```cmd
+python tests\run_tests.py --no-build ^
+  --gtest-filter DetectorsTest.FullGame1Extraction ^
+  --diagnostic-file build_diag\source_a.jsonl
+python tests\run_tests.py --no-build ^
+  --gtest-filter DetectorsTest.FullGame1Extraction ^
+  --diagnostic-file build_diag\source_b.jsonl
+python tests\run_tests.py --compare-source-runs ^
+  build_diag\source_a.jsonl build_diag\source_b.jsonl
+```
+
+The source-run comparison is exact for reducer and detector evidence. It
+ignores only diagnostic artifact paths, which are expected to differ between
+runs, and reports the first differing JSON path when determinism fails. A
+bounded Full Game 1 window was repeated twice; both runs emitted 44 records and
+matched with no first divergence.
+
+The first-divergence workflow can be exercised without changing production
+extraction by enabling the test-only failure probe:
+
+```cmd
+python tests\run_tests.py --no-build ^
+  --gtest-filter DetectorsTest.FullGame1Extraction --induce-failure
+```
+
+The command succeeds only when the probe causes the integration assertion to
+fail and the runner creates a diagnostic failure bundle. It is useful for
+validating the reporting path, not for changing expected results in normal
+tests.
+
+The current full-game seed reaches its first ordinary extraction divergence
+around ply 36, so a normal run may still fail while producing useful evidence.
+The induced run is a separate workflow check: it swaps only test-side expected
+moves and confirms that the first-divergence report, bounded JSONL, and bundle
+are created without changing production extraction.
 
 Diagnostic quality reports preserve uncertainty as separate fields. Every
 record is normalized to `ACCEPT`, `WAIT_FOR_SETTLE`, `REJECT`, `AMBIGUOUS`,
@@ -188,22 +227,186 @@ directory. Interpretation is explicit: `strong`, `weak`, or `advisory`, and is
 always marked advisory-only for production.
 An optional `case` field provides separate metrics for categories such as
 `capture`, `double_pawn`, `check`, and `promotion`.
-The repository’s initial yellow-square label manifest is
+The repository's initial yellow-square label manifest is
 `assets/sample_yellow_squares/labels.jsonl`; it contains eight positive move
-examples and an unhighlighted-board negative control. It is intentionally a
-small seed set, not a calibrated acceptance corpus.
+examples and an unhighlighted-board negative control, with the current C++
+detector predictions recorded separately for each origin, destination, and
+paired row. It is intentionally a small seed set, not a calibrated acceptance
+corpus.
 The focused C++ calibration test currently measures destination at 8/8 recall
 and origin/paired endpoints at 7/8 recall; the `Na5` sample is the known
 origin-disambiguation miss (`c6a5` observed versus `c7a5` labeled).
+The yellow calibration regime test expands the same labels across native,
+scaled, brightness, blur, geometry-offset, and corner-margin variants. Its
+JSONL output retains endpoint/pair scores, geometry availability, offsets, and
+corner fractions; the report exposes separate endpoint metrics and a paired
+endpoint acceptance target. These controlled transforms are repeated evidence,
+not independent production-gate samples. Generate and inspect it with:
+
+```cmd
+python tests\run_tests.py --no-build ^
+  --gtest-filter DetectorsTest.YellowSquareCalibrationLabels:DetectorsTest.YellowSquareCalibrationRegimes ^
+  --yellow-calibration-output build_tests\yellow_calibration.jsonl
+python tests\run_tests.py --detector-calibration build_tests\yellow_calibration.jsonl
+```
+
+The report compares fixed raw scores with board-median-relative and
+neighborhood-median-relative scores using the same paired rows and threshold
+sweep. On the current seed matrix, all three remain advisory because the
+negative control overlaps the positive score distributions; no normalization
+is promoted into production validation yet.
+
+The yellow report evaluates 187 endpoint/pair threshold combinations, six
+corner-sampling fractions, and 41 minimum pair-edge-density terms. Its best
+edge-density point on the current matrix is a 0.005 minimum pair-edge score,
+with 98.35% recall and 0% false positives. The endpoint/pair grid remains
+advisory: the selected point changes when transformed corner regimes are
+included, and the production 25/70 point is intentionally unchanged until a
+broader independent-negative corpus supports a stable operating point.
+
+Yellow calibration rows now also retain post-move occupancy metadata, the
+pre-move destination occupancy used to distinguish captures, and yellowness
+measurements for neighboring squares around both endpoints. The current
+10-regime run reports the same occupancy fields across native, transformed,
+geometry-error, and six corner-sampling regimes, as well as adjacent-square
+measurements.
+Category coverage is explicit: `quiet`, `double_pawn`, `capture`, `check`, and
+`promotion` are now present. Check and promotion are covered by test-only legal
+synthetic board probes assembled from the checked-in board and piece assets;
+they close category measurement coverage but do not substitute for independent
+real-video labels. Adjacent-square measurements are diagnostic and do not
+change endpoint thresholds.
+
+Validation records a calibrated temporal fallback for weak current-frame
+evidence. It scans the next 0.75 seconds and accepts only after two samples
+contain complete origin/destination endpoint evidence. The yellow calibration
+matrix now includes persistent two- and three-sample highlights, a single-frame
+flash, and a transient flash; all four cases matched their expected outcomes
+(2 true positives and 2 true negatives). Such observations are reported as
+`passed_temporal` and retain weak evidence provenance even after the temporal
+gate is calibrated.
+
 Clock labels are similarly seeded in `assets/sample_clock_changes/labels.jsonl`
-with active-side, white-OCR, black-OCR, changed, and unchanged fields. Missing
-and misread OCR examples remain an explicit gap in the clock corpus.
+with measured predictions for active-side, white-OCR, black-OCR, changed, and
+unchanged fields. Missing and misread OCR examples remain an explicit gap in
+the checked-in clock corpus; transformed regime runs now report misreads and
+missing readings separately without turning them into seed labels.
+
+The clock calibration test can expand those seed labels into structured JSONL
+observations for controlled visual regimes:
+
+```cmd
+python tests\run_tests.py --no-build ^
+  --gtest-filter DetectorsTest.GameClockCalibrationLabels:DetectorsTest.GameClockCalibrationRegimes:DetectorsTest.GameClockCalibrationRoiRegimes ^
+  --clock-calibration-output build_tests\clock_calibration.jsonl
+python tests\run_tests.py --detector-calibration build_tests\clock_calibration.jsonl
+```
+
+Each observation keeps activity detection separate from white/black OCR and
+records the test preprocessing/ROI variant, OCR preprocessing path, thresholding
+mode, segmented glyph boxes, candidate readings, and selected reading. The
+calibration report adds per-digit accuracy, complete-string accuracy, and
+per-variant comparisons. It also records whether the complete reading was
+valid, missing, or misread. The current seed
+manifest remains label-only; its OCR section reports those rows as unmeasured
+until a calibration test emits a selected reading.
+The expanded clock regime matrix measures native, 75% scaling, small and large
+rendered scale, anti-aliasing, JPEG compression, reduced/increased brightness,
+blur, low-time formatting, separator removal, and a partial digit change. On
+the current three-image seed, native and JPEG compression retained complete OCR
+at 3/3; 75% scaling reached 1/3, small/large font-size transforms 0/3,
+anti-aliasing 0/3, reduced/increased brightness 2/3, blur 0/3, low-time
+formatting 3/3, separator removal 1/3, and partial change 3/3. Activity
+detection remained 3/3 except under reduced brightness (0/3). The report now
+requires explicit coverage for all seven stress categories and marks coverage
+complete for the expanded run. These are controlled transform measurements,
+not independent labeled frames, and they do not change production clock
+decisions.
+
+The ROI calibration test separately applies small localization shifts and
+left-margin changes to the clock crops. Across 42 OCR rows, the native ROI
+was 100% complete-string accurate; left/right shifts were 50%/100%, up/down
+shifts were 83%/33%, and expanded/narrowed left margins were both 83%. The
+report retains the signed geometry offsets and crop edge ratio, selects the
+native board-relative ROI as the baseline, and requires all three perturbation
+families to be present. The production ROI constants are shared by the mapper
+and full-frame fallback, so future tuning changes one contract rather than
+duplicated crop formulas.
+
+Clock calibration now reports three separate quality targets under
+`quality_targets`: `active_side`, `complete_ocr`, and `usable_clock`. The first
+measures turn detection, the second measures each fully displayed white/black
+time string, and the third measures a grouped frame where active-side detection
+and both complete readings agree. A row without a selected OCR reading stays
+unmeasured for the OCR targets; it is not silently counted as a failure. Each
+target has its own labeled-data status and remains advisory until its corpus is
+large enough to support the provisional target.
+
+Clock vetoes use the same conservative boundary: stale, deferred, and
+implausible-clock vetoes require a plausible direct reading plus at least two
+sampled, observed, agreeing settled readings. Below that reliability gate the
+clock remains diagnostic/advisory evidence and cannot reject a visually legal
+move by itself.
+
+Clock provenance now survives the reducer as `initial`, `direct`, `contextual`,
+`temporal`, `inherited`, `missing`, or `rejected`. Future-frame clock settling
+records sampled, observed, plausible, and repeated-agreement readings
+separately. A future reading can repair a state only when the same plausible
+reading repeats; conflicting or one-off readings remain rejected or
+unreconciled. The resulting diagnostic decision is
+`ocr_temporal_reconciled` only for an actual repair. Missing or rejected OCR
+remains visibly uncertain rather than becoming a direct observation.
 
 `BoardGeometry::geometry_confidence` now exposes normalized template-match
 confidence in `[0, 1]`. Diagnostic JSONL carries the same value as
 `evidence.localization_confidence`, while periodic re-localization reports its
 confidence in the geometry detector assessment. This value is observational
 until calibration establishes a downstream acceptance gate.
+
+The same localization result is also propagated as
+`evidence.geometry_uncertainty`, where zero is trusted geometry and one is
+unavailable or fully uncertain. Yellow-square corner measurements, hover and
+piece-edge assessment measurements, and clock assessment measurements retain
+this value so downstream reports can separate detector weakness from geometry
+weakness. It is advisory metadata only; detector thresholds remain unchanged
+until a labeled geometry-error corpus supports calibrated adjustments.
+
+The mapper retains one in-memory full-frame probe per geometry interval during
+normal extraction; diagnostic frame files are still written only inside the
+requested diagnostic window. The periodic stability probe compares fresh
+localization against both the anchor and the preceding probe. Large drift is
+reported as `relocalize_required` and the candidate frame is rejected before
+square evidence is evaluated. Small localization jitter remains accepted, and
+the interval can be shortened for investigation through the environment
+variable above.
+
+Hover calibration is available through the board-asset synthetic matrix:
+
+```cmd
+python tests\run_tests.py --no-build ^
+  --gtest-filter DetectorsTest.HoverCalibrationRegimes ^
+  --hover-calibration-output build_tests\hover_calibration.jsonl
+python tests\run_tests.py --detector-calibration build_tests\hover_calibration.jsonl
+```
+
+The matrix measures a settled board, a short cursor-like overlay, full hover
+outlines at fast/thin rendering, and partial outlines at two thicknesses. It
+also replays fast, slow, and partial transitions at the mapper's 0.1-second
+scan step. The calibrated settle confirmation is two quiet samples (0.2
+seconds): all three transition regimes reached `settled_tail` after 0.2
+seconds with zero premature settles. The report keeps settled-board false
+positives separate from true mid-drag detections and exposes transition-level
+settle delay metrics. These remain deterministic detector-regression controls;
+real video labels are still needed before animation thresholds become broad
+production gates.
+
+`DetectorsTest.BoardLocalizationCalibration` measures localization against
+known synthetic bounds at five board scales and offsets, including two frames
+with an in-board overlay. It prints pixel and board-size-normalized origin,
+size, and center errors. The current advisory test targets are a maximum
+normalized bound error of 2.5% and center error of 2.0%; the observed seed run
+reached 2.03% and 1.11%, respectively. These are review targets for the
+synthetic regime, not production vetoes for unrelated visual conditions.
 
 The comparison aligns observations by ID, checks mapper provenance and board
 hash fidelity first, then reports the first event divergence at the mapper,

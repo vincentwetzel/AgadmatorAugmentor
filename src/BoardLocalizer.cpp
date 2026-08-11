@@ -289,6 +289,47 @@ BoardGeometry locate_board(const cv::Mat& img_bgr, const cv::Mat& board_template
     return geo;
 }
 
+double geometry_uncertainty(const BoardGeometry& geo) {
+    if (geo.bw <= 0 || geo.bh <= 0 || geo.sq_w <= 0.0 || geo.sq_h <= 0.0) {
+        return 1.0;
+    }
+    return std::clamp(1.0 - geo.geometry_confidence, 0.0, 1.0);
+}
+
+GeometryStability assess_geometry_stability(
+    const BoardGeometry& anchor,
+    const BoardGeometry& observed,
+    const BoardGeometry* previous) {
+    constexpr double kPositionJumpPixels = 16.0;
+    constexpr double kSizeJumpPixels = 16.0;
+    constexpr double kPersistentOffsetPixels = 24.0;
+
+    GeometryStability result;
+    result.anchor_position_drift_pixels = std::max(
+        std::abs(static_cast<double>(observed.bx - anchor.bx)),
+        std::abs(static_cast<double>(observed.by - anchor.by)));
+    result.anchor_size_drift_pixels = std::max(
+        std::abs(static_cast<double>(observed.bw - anchor.bw)),
+        std::abs(static_cast<double>(observed.bh - anchor.bh)));
+    result.anchor_drift_exceeded =
+        result.anchor_position_drift_pixels > kPersistentOffsetPixels ||
+        result.anchor_size_drift_pixels > kPersistentOffsetPixels;
+
+    if (previous != nullptr) {
+        result.step_position_drift_pixels = std::max(
+            std::abs(static_cast<double>(observed.bx - previous->bx)),
+            std::abs(static_cast<double>(observed.by - previous->by)));
+        result.step_size_drift_pixels = std::max(
+            std::abs(static_cast<double>(observed.bw - previous->bw)),
+            std::abs(static_cast<double>(observed.bh - previous->bh)));
+        result.step_drift_exceeded =
+            result.step_position_drift_pixels > kPositionJumpPixels ||
+            result.step_size_drift_pixels > kSizeJumpPixels;
+    }
+    result.stable = !result.anchor_drift_exceeded && !result.step_drift_exceeded;
+    return result;
+}
+
 void draw_board_grid(cv::Mat& image, const BoardGeometry& geo,
                      const cv::Scalar& default_color,
                      int thickness, bool draw_labels) {

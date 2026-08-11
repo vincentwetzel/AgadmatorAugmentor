@@ -9,11 +9,83 @@
 #include <bit>
 #include <cctype>
 #include <cstdint>
+#include <iterator>
+#include <map>
 #include <string>
 #include <tuple>
 #include <vector>
 
 namespace cta {
+
+ClockRoiBounds clock_roi_bounds(const BoardGeometry& geo,
+                                int frame_width,
+                                int frame_height) {
+    ClockRoiBounds bounds;
+    bounds.x1 = std::max(0, static_cast<int>(geo.bx + geo.bw * kClockRoiLeftEdgeRatio));
+    bounds.x2 = std::min(frame_width, static_cast<int>(geo.bx + geo.bw));
+    bounds.top_y1 = std::max(0, static_cast<int>(geo.by - geo.sq_h * kClockRoiTopMarginSquares));
+    bounds.top_y2 = std::max(bounds.top_y1 + 1,
+                             static_cast<int>(geo.by - geo.sq_h * kClockRoiTopInsetSquares));
+    bounds.bottom_y1 = std::min(frame_height - 1,
+                                static_cast<int>(geo.by + geo.bh + geo.sq_h * kClockRoiBottomInsetSquares));
+    bounds.bottom_y2 = std::min(frame_height,
+                                static_cast<int>(geo.by + geo.bh + geo.sq_h * kClockRoiBottomMarginSquares));
+    return bounds;
+}
+
+ClockTemporalReconciliation reconcile_clock_readings(
+    const std::vector<std::string>& readings,
+    const std::string& inherited_reading) {
+    ClockTemporalReconciliation result;
+    result.sample_count = readings.size();
+    std::map<std::string, std::size_t> counts;
+    for (const auto& reading : readings) {
+        if (!reading.empty()) {
+            ++result.observed_count;
+            ++counts[reading];
+        }
+    }
+
+    if (counts.empty()) {
+        if (!inherited_reading.empty()) {
+            result.selected_reading = inherited_reading;
+            result.provenance = "inherited";
+        } else {
+            result.provenance = "missing";
+        }
+        return result;
+    }
+
+    if (counts.size() == 1) {
+        const auto& [reading, count] = *counts.begin();
+        result.agreement_count = count;
+        result.selected_reading = reading;
+        result.provenance = result.sample_count == 1
+            ? "direct"
+            : count >= 2 ? "temporally_plausible" : "rejected";
+        if (result.provenance == "rejected") result.selected_reading.clear();
+        return result;
+    }
+
+    auto best = counts.begin();
+    bool tied = false;
+    for (auto it = std::next(counts.begin()); it != counts.end(); ++it) {
+        if (it->second > best->second) {
+            best = it;
+            tied = false;
+        } else if (it->second == best->second) {
+            tied = true;
+        }
+    }
+    if (!tied && best->second >= 2) {
+        result.selected_reading = best->first;
+        result.agreement_count = best->second;
+        result.provenance = "temporally_plausible";
+    } else {
+        result.provenance = "rejected";
+    }
+    return result;
+}
 
 // ── Clock extraction ─────────────────────────────────────────────────────────
 
@@ -144,6 +216,100 @@ std::vector<std::string> recognize_clock_time_candidates_from_roi(const cv::Mat&
     add_candidate(DigitRecognizer::recognize_time(bgr, active_first));
     add_candidate(DigitRecognizer::recognize_time(bgr, !active_first));
     return candidates;
+}
+
+ClockOcrDiagnostics diagnose_clock_time_from_roi(const cv::Mat& bgr,
+                                                 bool active_first) {
+    static constexpr std::array<double, 6> active_left_ratios{0.30, 0.40, 0.50, 0.55, 0.60, 0.12};
+    static constexpr std::array<double, 6> inactive_left_ratios{0.12, 0.30, 0.40, 0.50, 0.55, 0.60};
+    const auto& left_ratios = active_first ? active_left_ratios : inactive_left_ratios;
+
+    ClockOcrDiagnostics result;
+    auto copy_diagnostics = [&](const DigitRecognizer::RecognitionDiagnostics& source,
+                                const std::string& reading,
+                                const std::string& roi_variant) {
+        result.preprocessing_variant = source.preprocessing_variant + ":" + roi_variant;
+        result.thresholding_mode = source.thresholding_mode;
+        result.selected_reading = reading;
+        result.segments.clear();
+        result.segments.reserve(source.segments.size());
+        for (const auto& segment : source.segments) {
+            result.segments.push_back({segment.x, segment.y, segment.width,
+                                       segment.height, segment.symbol});
+        }
+    };
+
+    std::string fallback;
+    DigitRecognizer::RecognitionDiagnostics fallback_diagnostics;
+    double fallback_ratio = left_ratios.front();
+    for (double left_ratio : left_ratios) {
+        const cv::Mat time_text = crop_right_aligned_clock_text(bgr, left_ratio);
+        DigitRecognizer::RecognitionDiagnostics diagnostics;
+        std::string reading = DigitRecognizer::recognize_time_with_diagnostics(
+            time_text, active_first, &diagnostics);
+        if (std::find(result.candidates.begin(), result.candidates.end(), reading) ==
+            result.candidates.end() && looks_like_clock_string(reading)) {
+            result.candidates.push_back(reading);
+        }
+        if (looks_like_full_clock_string(reading)) {
+            copy_diagnostics(diagnostics, reading,
+                             "right_aligned_" +
+                                 std::to_string(static_cast<int>(left_ratio * 100.0)) + "pct");
+            return result;
+        }
+        if (fallback.empty() && looks_like_clock_string(reading)) {
+            fallback = reading;
+            fallback_diagnostics = diagnostics;
+            fallback_ratio = left_ratio;
+        }
+
+        diagnostics = {};
+        reading = DigitRecognizer::recognize_time_with_diagnostics(
+            time_text, !active_first, &diagnostics);
+        if (std::find(result.candidates.begin(), result.candidates.end(), reading) ==
+            result.candidates.end() && looks_like_clock_string(reading)) {
+            result.candidates.push_back(reading);
+        }
+        if (looks_like_full_clock_string(reading)) {
+            copy_diagnostics(diagnostics, reading,
+                             "right_aligned_" +
+                                 std::to_string(static_cast<int>(left_ratio * 100.0)) + "pct");
+            return result;
+        }
+        if (fallback.empty() && looks_like_clock_string(reading)) {
+            fallback = reading;
+            fallback_diagnostics = diagnostics;
+            fallback_ratio = left_ratio;
+        }
+    }
+
+    for (bool hint : {active_first, !active_first}) {
+        DigitRecognizer::RecognitionDiagnostics diagnostics;
+        const std::string reading = DigitRecognizer::recognize_time_with_diagnostics(
+            bgr, hint, &diagnostics);
+        if (std::find(result.candidates.begin(), result.candidates.end(), reading) ==
+            result.candidates.end() && looks_like_clock_string(reading)) {
+            result.candidates.push_back(reading);
+        }
+        if (looks_like_full_clock_string(reading)) {
+            copy_diagnostics(diagnostics, reading, "full_roi");
+            return result;
+        }
+        if (fallback.empty() && looks_like_clock_string(reading)) {
+            fallback = reading;
+            fallback_diagnostics = diagnostics;
+            fallback_ratio = 1.0;
+        }
+    }
+
+    if (!fallback.empty()) {
+        const std::string roi_variant = fallback_ratio == 1.0
+            ? "full_roi"
+            : "right_aligned_" +
+                std::to_string(static_cast<int>(fallback_ratio * 100.0)) + "pct";
+        copy_diagnostics(fallback_diagnostics, fallback, roi_variant);
+    }
+    return result;
 }
 
 static std::string cached_recognize_clock_time(const cv::Mat& bgr,
@@ -305,20 +471,17 @@ ClockState extract_clocks(const cv::Mat& img_bgr,
 
     // The chess.com clocks are right-aligned to the board, so keep the ROI
     // tight around the pill instead of sweeping a broad strip that includes UI text.
-    int roi_x1 = std::max(0, static_cast<int>(geo.bx + geo.bw * 0.70));
-    int roi_x2 = std::min(img_bgr.cols, static_cast<int>(geo.bx + geo.bw));
-
-    int top_roi_y1 = std::max(0, static_cast<int>(geo.by - geo.sq_h * 0.55));
-    int top_roi_y2 = std::max(top_roi_y1 + 1, static_cast<int>(geo.by - geo.sq_h * 0.08));
-    int bot_roi_y1 = std::min(img_bgr.rows - 1, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.18));
-    int bot_roi_y2 = std::min(img_bgr.rows, static_cast<int>(geo.by + geo.bh + geo.sq_h * 0.58));
-
-    if (roi_x2 <= roi_x1 || top_roi_y2 <= top_roi_y1 || bot_roi_y2 <= bot_roi_y1) {
+    const ClockRoiBounds bounds = clock_roi_bounds(geo, img_bgr.cols, img_bgr.rows);
+    if (!bounds.valid()) {
         return {};
     }
 
-    cv::Mat top_roi = img_bgr(cv::Rect(roi_x1, top_roi_y1, roi_x2 - roi_x1, top_roi_y2 - top_roi_y1));
-    cv::Mat bot_roi = img_bgr(cv::Rect(roi_x1, bot_roi_y1, roi_x2 - roi_x1, bot_roi_y2 - bot_roi_y1));
+    cv::Mat top_roi = img_bgr(cv::Rect(
+        bounds.x1, bounds.top_y1, bounds.x2 - bounds.x1,
+        bounds.top_y2 - bounds.top_y1));
+    cv::Mat bot_roi = img_bgr(cv::Rect(
+        bounds.x1, bounds.bottom_y1, bounds.x2 - bounds.x1,
+        bounds.bottom_y2 - bounds.bottom_y1));
     return extract_clocks_from_rois(top_roi, bot_roi, cache);
 }
 

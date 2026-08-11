@@ -13,7 +13,7 @@ This roadmap reflects the current implementation. Completed work is summarized s
 | Tests | Google Test, PGN-backed integration baselines, clock-time coverage, and fixture-independence guard |
 | GUI/headless | Qt6 queue UI plus persisted-settings headless mode |
 | Templates | Built-in and custom channel templates with per-queue snapshots |
-| Diagnostics | Observation replay, first-divergence bundles, mapper comparison, and advisory detector calibration |
+| Diagnostics | Observation replay, first-divergence bundles, source/mapper comparison, geometry stability, temporal clock provenance, and advisory detector calibration |
 
 ## Remaining for v1.0.0
 
@@ -55,7 +55,8 @@ This roadmap reflects the current implementation. Completed work is summarized s
 - Clock, settle, historical-state, nearest-state, geometry, and exhaustive-revert diagnostics are available through generic environment switches.
 - Structured JSONL observations can retain mapper provenance, detector assessments, board features, and sampled image artifacts; `CTA_REPLAY_OBSERVATIONS` reuses that contract for reducer replay.
 - `tests/run_tests.py` supports filtered/no-build runs, selectable build directories, diagnostic JSONL/TSV output, automatic first-divergence bundles with SVG/contact-sheet artifacts, bundle reanalysis, mapper comparison, replay-trace comparison, cached Google Test sources, and a production fixture-override scan.
-- Detector calibration reports frame/transition metrics, uncertainty, confidence bins, threshold sweeps, condition/regime breakdowns, and representative errors. Seed labels are tracked under `assets/sample_yellow_squares/` and `assets/sample_clock_changes/`; they remain advisory until expanded.
+- `tests/run_tests.py` also compares repeated source runs, supports an intentional-failure bundle probe, and emits test-side clock, yellow-square, and hover/animation calibration JSONL.
+- Detector calibration reports frame/transition metrics, uncertainty, confidence bins, threshold sweeps, condition/regime breakdowns, geometry uncertainty, clock provenance/temporal metrics, and representative errors. Seed labels are tracked under `assets/sample_yellow_squares/` and `assets/sample_clock_changes/`; they remain advisory until expanded.
 - Integration expectations are read from sample PGN files rather than fixture-specific production code or golden JSON artifacts.
 
 ## Reference commands
@@ -71,6 +72,8 @@ cmake --build --preset gui-release
 
 python tests\run_tests.py
 python tests\run_tests.py --build-dir build_diag --no-build --gtest-filter DetectorsTest.FullGame1Extraction --stop-after 520 --trace-file build_diag\transition.tsv --trace-start 498 --trace-end 520
+python tests\run_tests.py --compare-source-runs build_diag\source_a.jsonl build_diag\source_b.jsonl
+python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extraction --induce-failure
 ```
 
 The GUI executable supports persisted settings and the GUI headless flags. The lower-level `extract_moves` target exposes extraction-oriented CLI options; use `--help` for its exact interface. Diagnostic cutoffs affect only the requested replay and never become fixture-specific production behavior.

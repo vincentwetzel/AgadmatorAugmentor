@@ -14,16 +14,21 @@
 #include <sstream>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <iterator>
+#include <numeric>
+#include <utility>
 #include <nlohmann/json.hpp>
 #include <libchess/position.hpp>
 #include <libchess/move.hpp>
 #include "BoardLocalizer.h"
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
+#include "ClockRecognizer.h"
 #include "ExtractionDiagnostics.h"
 #include "VideoChunkMapper.h"
+#include "../src/MoveValidations.h"
 #include "../src/ChessVideoExtractor_Internal.h"
 
 // ─── Test result tracking ────────────────────────────────────────────────────
@@ -161,6 +166,7 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     evidence.localization_score = 0.97;
     evidence.localization_scale = 1.25;
     evidence.localization_confidence = 0.985;
+    evidence.geometry_uncertainty = 0.015;
     evidence.board_hash = {1.0, 2.0, 3.0, 4.0};
     evidence.geometry_checked = true;
     evidence.geometry_anomaly = true;
@@ -205,6 +211,12 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     evidence.clock_top_bright_ratio = 0.15;
     evidence.clock_bottom_bright_ratio = 0.42;
     evidence.clock_bright_ratio_delta = 0.27;
+    evidence.clock_provenance = "temporal";
+    evidence.clock_temporal_checked = true;
+    evidence.clock_temporal_sample_count = 3;
+    evidence.clock_temporal_observed_count = 2;
+    evidence.clock_temporal_agreement_count = 2;
+    evidence.clock_temporal_decision = "reconciled";
     evidence.score_from_square_diff = 42.0;
     evidence.score_to_square_diff = 51.0;
     evidence.score_adjustment = -10.0;
@@ -257,6 +269,7 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     EXPECT_EQ(json.at("evidence").at("board_width"), 800);
     EXPECT_EQ(json.at("evidence").at("localization_score"), 0.97);
     EXPECT_EQ(json.at("evidence").at("localization_confidence"), 0.985);
+    EXPECT_EQ(json.at("evidence").at("geometry_uncertainty"), 0.015);
     EXPECT_EQ(json.at("evidence").at("board_hash").size(), 4u);
     EXPECT_TRUE(json.at("evidence").at("geometry_checked"));
     EXPECT_TRUE(json.at("evidence").at("geometry_anomaly"));
@@ -271,6 +284,7 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("corner_scores").at(2), 30.0);
     EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("corner_bgr").at(0).at(1), 150.0);
     EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("corner_edge_density").at(3), 0.11);
+    EXPECT_EQ(json.at("evidence").at("yellow_measurements").at(0).at("geometry_uncertainty"), 1.0);
     EXPECT_TRUE(json.at("evidence").at("yellow_temporal_checked"));
     EXPECT_EQ(json.at("evidence").at("yellow_temporal_sample_count"), 3);
     EXPECT_EQ(json.at("evidence").at("yellow_temporal_pair_pass_count"), 2);
@@ -294,9 +308,16 @@ TEST(ExtractionDiagnosticsTest, WritesStructuredJsonLine) {
     EXPECT_EQ(json.at("evidence").at("hover_measurements").at(0).at("square"), "e2");
     EXPECT_EQ(json.at("evidence").at("hover_measurements").at(0).at("visible_edges"), 3);
     EXPECT_TRUE(json.at("evidence").at("hover_measurements").at(0).at("detected"));
+    EXPECT_EQ(json.at("evidence").at("hover_measurements").at(0).at("geometry_uncertainty"), 1.0);
     EXPECT_EQ(json.at("evidence").at("clock_top_width"), 120);
     EXPECT_EQ(json.at("evidence").at("clock_bottom_height"), 24);
     EXPECT_EQ(json.at("evidence").at("clock_bright_ratio_delta"), 0.27);
+    EXPECT_EQ(json.at("evidence").at("clock_provenance"), "temporal");
+    EXPECT_TRUE(json.at("evidence").at("clock_temporal_checked"));
+    EXPECT_EQ(json.at("evidence").at("clock_temporal_sample_count"), 3);
+    EXPECT_EQ(json.at("evidence").at("clock_temporal_observed_count"), 2);
+    EXPECT_EQ(json.at("evidence").at("clock_temporal_agreement_count"), 2);
+    EXPECT_EQ(json.at("evidence").at("clock_temporal_decision"), "reconciled");
     EXPECT_EQ(json.at("evidence").at("yellow_decision"), "passed");
     EXPECT_EQ(json.at("evidence").at("clock_decision"), "ocr_plausible");
     EXPECT_EQ(json.at("evidence").at("settle_decision"), "accepted_same_move");
@@ -665,6 +686,18 @@ static size_t first_main_line_mismatch(const std::vector<std::string>& expected,
         ++mismatch;
     }
     return mismatch;
+}
+
+static void induce_expected_failure_for_diagnostics(std::vector<std::string>& expected_moves) {
+    const char* enabled = std::getenv("CTA_TEST_INDUCE_FAILURE");
+    if (enabled == nullptr || std::string(enabled) != "1" || expected_moves.size() < 2) {
+        return;
+    }
+
+    // The probe changes only test-side expectations. Production extraction,
+    // reducer state, and fixture data remain untouched, so the normal
+    // first-divergence path can be exercised safely and reproducibly.
+    std::swap(expected_moves[0], expected_moves[1]);
 }
 
 static void write_first_divergence_report(
@@ -1341,6 +1374,110 @@ TEST_F(DetectorsTest, LocateBoardOnItself) {
     EXPECT_LE(geo.geometry_confidence, 1.0);
 }
 
+struct GeometryCalibrationCase {
+    const char* name;
+    double scale;
+    cv::Point origin;
+    cv::Size canvas;
+    bool overlay;
+};
+
+static cv::Mat make_geometry_calibration_frame(
+    const cv::Mat& board_template, const GeometryCalibrationCase& test_case) {
+    const cv::Size board_size(
+        static_cast<int>(std::lround(board_template.cols * test_case.scale)),
+        static_cast<int>(std::lround(board_template.rows * test_case.scale)));
+    cv::Mat resized_board;
+    cv::resize(board_template, resized_board, board_size, 0.0, 0.0, cv::INTER_LINEAR);
+
+    cv::Mat frame(test_case.canvas, board_template.type(), cv::Scalar(32, 32, 32));
+    resized_board.copyTo(frame(cv::Rect(
+        test_case.origin.x, test_case.origin.y, board_size.width, board_size.height)));
+
+    if (test_case.overlay) {
+        // A UI overlay inside the board tests whether localization remains
+        // anchored by the board texture instead of a single unobscured area.
+        const cv::Point start(
+            test_case.origin.x + board_size.width / 5,
+            test_case.origin.y + board_size.height / 2);
+        const cv::Point end(
+            test_case.origin.x + board_size.width * 4 / 5,
+            test_case.origin.y + board_size.height / 2);
+        cv::line(frame, start, end, cv::Scalar(245, 245, 245), 5, cv::LINE_AA);
+    }
+    return frame;
+}
+
+TEST_F(DetectorsTest, BoardLocalizationCalibration) {
+    const std::array<GeometryCalibrationCase, 5> cases{{
+        {"half_scale_offset", 0.50, {80, 120}, {1100, 1100}, false},
+        {"three_quarter_scale_offset", 0.75, {40, 75}, {1400, 1400}, false},
+        {"native_scale_offset", 1.00, {120, 90}, {1900, 1900}, false},
+        {"scaled_with_overlay", 0.625, {210, 55}, {1300, 1300}, true},
+        {"small_scaled_with_overlay", 0.40, {300, 150}, {1100, 900}, true},
+    }};
+
+    double maximum_bound_error = 0.0;
+    double maximum_center_error = 0.0;
+    double maximum_normalized_bound_error = 0.0;
+    double maximum_normalized_center_error = 0.0;
+    constexpr double kMaximumNormalizedBoundError = 0.025;
+    constexpr double kMaximumNormalizedCenterError = 0.020;
+    for (const auto& test_case : cases) {
+        const cv::Mat frame = make_geometry_calibration_frame(board_, test_case);
+        const BoardGeometry detected = locate_board(frame, board_);
+        const int expected_width = static_cast<int>(
+            std::lround(board_.cols * test_case.scale));
+        const int expected_height = static_cast<int>(
+            std::lround(board_.rows * test_case.scale));
+
+        const double bound_error = std::max({
+            std::abs(static_cast<double>(detected.bx - test_case.origin.x)),
+            std::abs(static_cast<double>(detected.by - test_case.origin.y)),
+            std::abs(static_cast<double>(detected.bw - expected_width)),
+            std::abs(static_cast<double>(detected.bh - expected_height)),
+        });
+        const double detected_center_x = detected.bx + detected.bw / 2.0;
+        const double detected_center_y = detected.by + detected.bh / 2.0;
+        const double expected_center_x = test_case.origin.x + expected_width / 2.0;
+        const double expected_center_y = test_case.origin.y + expected_height / 2.0;
+        const double center_error = std::hypot(
+            detected_center_x - expected_center_x,
+            detected_center_y - expected_center_y);
+        const double board_extent = static_cast<double>(
+            std::max(expected_width, expected_height));
+        const double normalized_bound_error = bound_error / board_extent;
+        const double normalized_center_error = center_error / board_extent;
+
+        maximum_bound_error = std::max(maximum_bound_error, bound_error);
+        maximum_center_error = std::max(maximum_center_error, center_error);
+        maximum_normalized_bound_error = std::max(
+            maximum_normalized_bound_error, normalized_bound_error);
+        maximum_normalized_center_error = std::max(
+            maximum_normalized_center_error, normalized_center_error);
+        std::cout << "  Geometry " << test_case.name
+                  << ": bound_error=" << bound_error
+                  << " center_error=" << center_error
+                  << " normalized_bound_error=" << normalized_bound_error
+                  << " normalized_center_error=" << normalized_center_error
+                  << " detected_bounds=(" << detected.bx << "," << detected.by
+                  << "," << detected.bw << "," << detected.bh << ")"
+                  << " confidence=" << detected.geometry_confidence << "\n";
+
+        EXPECT_LE(normalized_bound_error, kMaximumNormalizedBoundError)
+            << "Failed on " << test_case.name;
+        EXPECT_LE(normalized_center_error, kMaximumNormalizedCenterError)
+            << "Failed on " << test_case.name;
+        EXPECT_GT(detected.localization_score, 0.0) << "Failed on " << test_case.name;
+        EXPECT_GT(detected.geometry_confidence, 0.5) << "Failed on " << test_case.name;
+    }
+
+    std::cout << "  Geometry calibration maximums: bound_error="
+              << maximum_bound_error << " center_error=" << maximum_center_error
+              << " normalized_bound_error=" << maximum_normalized_bound_error
+              << " normalized_center_error=" << maximum_normalized_center_error << "\n";
+}
+
 #endif // TEST_LOCATE_BOARD
 
 #if TEST_DRAW_GRID
@@ -1355,6 +1492,136 @@ TEST_F(DetectorsTest, DrawBoardGrid) {
 
 // ─── YELLOW SQUARE EXTRACTION ────────────────────────────────────────────────
 #if TEST_YELLOW_SQUARES
+
+TEST(YellowValidationTest, TemporalAcceptanceRequiresRepeatedCompletePairs) {
+    cta::validation::YellowTemporalEvidence evidence;
+    evidence.sample_count = 2;
+    evidence.pair_pass_count = 1;
+    evidence.max_from = 40.0;
+    evidence.max_to = 40.0;
+    evidence.max_pair = 80.0;
+    EXPECT_FALSE(cta::validation::passes_temporal_yellow_check(evidence));
+
+    evidence.pair_pass_count = 2;
+    EXPECT_TRUE(cta::validation::passes_temporal_yellow_check(evidence));
+
+    evidence.max_to = cta::validation::kYellowEndpointThreshold - 0.1;
+    EXPECT_FALSE(cta::validation::passes_temporal_yellow_check(evidence));
+}
+
+TEST(ClockValidationTest, TemporalReadingsPreserveUncertainty) {
+    const auto direct = cta::reconcile_clock_readings({"1:30:07"});
+    EXPECT_EQ(direct.selected_reading, "1:30:07");
+    EXPECT_EQ(direct.provenance, "direct");
+    EXPECT_EQ(direct.agreement_count, 1u);
+
+    const auto inherited = cta::reconcile_clock_readings({}, "1:30:07");
+    EXPECT_EQ(inherited.selected_reading, "1:30:07");
+    EXPECT_EQ(inherited.provenance, "inherited");
+
+    const auto repeated = cta::reconcile_clock_readings(
+        {"", "1:30:07", "1:30:07"});
+    EXPECT_EQ(repeated.selected_reading, "1:30:07");
+    EXPECT_EQ(repeated.provenance, "temporally_plausible");
+    EXPECT_EQ(repeated.agreement_count, 2u);
+
+    const auto conflict = cta::reconcile_clock_readings(
+        {"1:30:07", "1:30:08"});
+    EXPECT_TRUE(conflict.selected_reading.empty());
+    EXPECT_EQ(conflict.provenance, "rejected");
+}
+
+TEST(BoardGeometryTest, UncertaintyIsBoundedAndMonotonic) {
+    cta::BoardGeometry unavailable;
+    EXPECT_DOUBLE_EQ(cta::geometry_uncertainty(unavailable), 1.0);
+
+    cta::BoardGeometry low_confidence;
+    low_confidence.bw = 800;
+    low_confidence.bh = 800;
+    low_confidence.sq_w = 100.0;
+    low_confidence.sq_h = 100.0;
+    low_confidence.geometry_confidence = 0.25;
+    EXPECT_DOUBLE_EQ(cta::geometry_uncertainty(low_confidence), 0.75);
+
+    cta::BoardGeometry high_confidence = low_confidence;
+    high_confidence.geometry_confidence = 0.90;
+    EXPECT_DOUBLE_EQ(cta::geometry_uncertainty(high_confidence), 0.10);
+
+    high_confidence.geometry_confidence = 1.5;
+    EXPECT_DOUBLE_EQ(cta::geometry_uncertainty(high_confidence), 0.0);
+}
+
+TEST(BoardGeometryTest, StabilitySeparatesJitterFromEvidenceDrift) {
+    cta::BoardGeometry anchor;
+    anchor.bw = 800;
+    anchor.bh = 800;
+    anchor.sq_w = 100.0;
+    anchor.sq_h = 100.0;
+    anchor.geometry_confidence = 0.9;
+
+    cta::BoardGeometry jitter = anchor;
+    jitter.bx = 8;
+    jitter.by = -7;
+    auto result = cta::assess_geometry_stability(anchor, jitter);
+    EXPECT_TRUE(result.stable);
+    EXPECT_FALSE(result.anchor_drift_exceeded);
+
+    cta::BoardGeometry drift = anchor;
+    drift.bx = 25;
+    result = cta::assess_geometry_stability(anchor, drift);
+    EXPECT_FALSE(result.stable);
+    EXPECT_TRUE(result.anchor_drift_exceeded);
+
+    cta::BoardGeometry previous = anchor;
+    previous.bx = 1;
+    cta::BoardGeometry jump = anchor;
+    jump.bx = 18;
+    result = cta::assess_geometry_stability(anchor, jump, &previous);
+    EXPECT_FALSE(result.stable);
+    EXPECT_TRUE(result.step_drift_exceeded);
+}
+
+TEST(ClockRoiTest, UsesBoardRelativeBoundsWithinFrame) {
+    cta::BoardGeometry geometry;
+    geometry.bx = 100;
+    geometry.by = 120;
+    geometry.bw = 800;
+    geometry.bh = 800;
+    geometry.sq_w = 100.0;
+    geometry.sq_h = 100.0;
+
+    const auto bounds = cta::clock_roi_bounds(geometry, 1200, 1200);
+    EXPECT_TRUE(bounds.valid());
+    EXPECT_EQ(bounds.x1, 660);
+    EXPECT_EQ(bounds.x2, 900);
+    EXPECT_EQ(bounds.top_y1, 65);
+    EXPECT_EQ(bounds.top_y2, 112);
+    EXPECT_EQ(bounds.bottom_y1, 938);
+    EXPECT_EQ(bounds.bottom_y2, 978);
+
+    const auto clipped = cta::clock_roi_bounds(geometry, 850, 960);
+    EXPECT_TRUE(clipped.valid());
+    EXPECT_EQ(clipped.x2, 850);
+    EXPECT_EQ(clipped.bottom_y2, 960);
+}
+
+TEST(ClockValidationTest, VetoRequiresCalibratedTemporalAgreement) {
+    cta::validation::ClockVetoEvidence evidence;
+    evidence.direct_reading_plausible = true;
+    evidence.temporal_checked = true;
+    evidence.temporal_sample_count = 1;
+    evidence.temporal_observed_count = 1;
+    evidence.temporal_agreement_count = 1;
+    EXPECT_FALSE(cta::validation::passes_clock_veto_reliability_gate(evidence));
+
+    evidence.temporal_sample_count = cta::validation::kClockVetoMinimumTemporalSamples;
+    evidence.temporal_observed_count = cta::validation::kClockVetoMinimumObservedReadings;
+    evidence.temporal_agreement_count = cta::validation::kClockVetoMinimumAgreements;
+    EXPECT_TRUE(cta::validation::passes_clock_veto_reliability_gate(evidence));
+
+    evidence.direct_reading_plausible = false;
+    EXPECT_FALSE(cta::validation::passes_clock_veto_reliability_gate(evidence));
+}
 
 TEST_F(DetectorsTest, YellowSquares) {
     const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_yellow_squares").string();
@@ -1442,6 +1709,695 @@ TEST_F(DetectorsTest, YellowSquareCalibrationLabels) {
         EXPECT_EQ(labeled, 9) << component;
     }
     EXPECT_EQ(metrics.size(), 3u);
+}
+
+struct YellowCalibrationVariant {
+    const char* name;
+    const char* condition;
+    double geometry_offset_fraction;
+    double corner_fraction;
+};
+
+static cv::Mat make_yellow_calibration_variant(
+    const cv::Mat& image, const YellowCalibrationVariant& variant) {
+    if (std::string(variant.name) == "native" ||
+        std::string(variant.name) == "geometry_shifted" ||
+        std::string(variant.name) == "corner_tight" ||
+        std::string(variant.name) == "corner_wide" ||
+        std::string(variant.name) == "corner_extra_tight" ||
+        std::string(variant.name) == "corner_mid" ||
+        std::string(variant.name) == "corner_extra_wide") {
+        return image.clone();
+    }
+    if (std::string(variant.name) == "scaled_75") {
+        cv::Mat scaled;
+        cv::resize(image, scaled, cv::Size(), 0.75, 0.75, cv::INTER_AREA);
+        return scaled;
+    }
+    if (std::string(variant.name) == "brightness_reduced") {
+        cv::Mat reduced;
+        image.convertTo(reduced, image.type(), 0.75, 0.0);
+        return reduced;
+    }
+    cv::Mat blurred;
+    cv::GaussianBlur(image, blurred, cv::Size(3, 3), 0.0);
+    return blurred;
+}
+
+static std::string yellow_calibration_square_name(int square) {
+    const int row = square / 8;
+    const int col = square % 8;
+    std::string name;
+    name += static_cast<char>('a' + col);
+    name += static_cast<char>('8' - row);
+    return name;
+}
+
+static std::array<double, 64> yellow_calibration_raw_scores(
+    const cv::Mat& board_bgr, const BoardGeometry& geometry,
+    double corner_fraction) {
+    std::array<double, 64> scores{};
+    for (int square = 0; square < 64; ++square) {
+        const std::string name = yellow_calibration_square_name(square);
+        const auto measurement = cta::validation::measure_yellowness(
+            board_bgr, geometry, name.c_str(), false, corner_fraction);
+        scores[static_cast<size_t>(square)] = measurement.score;
+    }
+    return scores;
+}
+
+static std::vector<std::pair<double, int>> rank_yellow_calibration_scores(
+    const std::array<double, 64>& raw_scores) {
+    std::vector<std::pair<double, int>> scores;
+    scores.reserve(raw_scores.size());
+    for (int square = 0; square < 64; ++square) {
+        scores.emplace_back(raw_scores[static_cast<size_t>(square)], square);
+    }
+    std::sort(scores.begin(), scores.end(), std::greater<>());
+    return scores;
+}
+
+static double yellow_calibration_median(std::vector<double> values) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const size_t middle = values.size() / 2;
+    if (values.size() % 2 == 0) {
+        return (values[middle - 1] + values[middle]) / 2.0;
+    }
+    return values[middle];
+}
+
+static double yellow_local_calibration_baseline(
+    const std::array<double, 64>& raw_scores, int square) {
+    const int row = square / 8;
+    const int col = square % 8;
+    std::vector<double> neighbors;
+    for (int neighbor_row = std::max(0, row - 1);
+         neighbor_row <= std::min(7, row + 1); ++neighbor_row) {
+        for (int neighbor_col = std::max(0, col - 1);
+             neighbor_col <= std::min(7, col + 1); ++neighbor_col) {
+            const int neighbor = neighbor_row * 8 + neighbor_col;
+            if (neighbor != square) {
+                neighbors.push_back(raw_scores[static_cast<size_t>(neighbor)]);
+            }
+        }
+    }
+    return yellow_calibration_median(std::move(neighbors));
+}
+
+static int yellow_calibration_square_index(const std::string& square) {
+    if (square.size() != 2 || square[0] < 'a' || square[0] > 'h' ||
+        square[1] < '1' || square[1] > '8') {
+        return -1;
+    }
+    return (8 - (square[1] - '0')) * 8 + (square[0] - 'a');
+}
+
+static std::vector<int> yellow_calibration_adjacent_squares(
+    int first_square, int second_square) {
+    std::set<int> neighbors;
+    for (const int endpoint : {first_square, second_square}) {
+        if (endpoint < 0 || endpoint >= 64) continue;
+        const int row = endpoint / 8;
+        const int col = endpoint % 8;
+        for (int neighbor_row = std::max(0, row - 1);
+             neighbor_row <= std::min(7, row + 1); ++neighbor_row) {
+            for (int neighbor_col = std::max(0, col - 1);
+                 neighbor_col <= std::min(7, col + 1); ++neighbor_col) {
+                const int neighbor = neighbor_row * 8 + neighbor_col;
+                if (neighbor != first_square && neighbor != second_square) {
+                    neighbors.insert(neighbor);
+                }
+            }
+        }
+    }
+    return {neighbors.begin(), neighbors.end()};
+}
+
+struct YellowCategoryCalibrationCase {
+    const char* name;
+    const char* origin;
+    const char* destination;
+    const char* expected_move;
+    const char* pre_move_destination_occupancy;
+    std::array<std::pair<const char*, char>, 3> pieces;
+};
+
+static cv::Mat make_yellow_category_calibration_board(
+    const cv::Mat& board_template,
+    const std::filesystem::path& assets_dir,
+    const YellowCategoryCalibrationCase& calibration_case,
+    bool& pieces_loaded) {
+    pieces_loaded = true;
+    if (board_template.empty() || board_template.cols < 8 || board_template.rows < 8) {
+        pieces_loaded = false;
+        return {};
+    }
+
+    cv::Mat board = board_template.clone();
+    const int square_width = board.cols / 8;
+    const int square_height = board.rows / 8;
+    const auto square_rect = [&](const char* square) {
+        const int index = yellow_calibration_square_index(square);
+        if (index < 0) return cv::Rect();
+        return cv::Rect(
+            (index % 8) * square_width, (index / 8) * square_height,
+            square_width, square_height);
+    };
+
+    // Use the same board-relative highlight geometry as the screenshot set:
+    // a translucent warm overlay plus a narrow square outline.  This is a
+    // test-only visual probe; production extraction never branches on these
+    // category names or generated images.
+    for (const char* square : {calibration_case.origin, calibration_case.destination}) {
+        const cv::Rect rect = square_rect(square);
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        cv::Mat tint(rect.size(), board.type(), cv::Scalar(0, 150, 255));
+        cv::Mat blended;
+        cv::addWeighted(board(rect), 0.63, tint, 0.37, 0.0, blended);
+        blended.copyTo(board(rect));
+        cv::rectangle(
+            board, rect, cv::Scalar(0, 165, 255),
+            std::max(3, std::min(square_width, square_height) / 32));
+    }
+
+    const std::map<char, std::string> piece_names{
+        {'b', "bishop"}, {'k', "king"}, {'n', "knight"},
+        {'p', "pawn"}, {'q', "queen"}, {'r', "rook"},
+    };
+    for (const auto& [square, piece] : calibration_case.pieces) {
+        const char lower_piece = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(piece)));
+        const auto piece_name = piece_names.find(lower_piece);
+        const cv::Rect square_area = square_rect(square);
+        if (piece_name == piece_names.end() || square_area.width <= 0 ||
+            square_area.height <= 0) {
+            pieces_loaded = false;
+            continue;
+        }
+        const std::string colour = std::isupper(static_cast<unsigned char>(piece))
+            ? "white" : "black";
+        const auto piece_path = assets_dir / "pieces" / colour /
+            (colour + "_" + piece_name->second + ".png");
+        cv::Mat source = cv::imread(piece_path.string(), cv::IMREAD_UNCHANGED);
+        if (source.empty() || source.channels() != 4) {
+            pieces_loaded = false;
+            continue;
+        }
+        cv::Mat resized;
+        cv::resize(source, resized, cv::Size(
+            static_cast<int>(std::lround(square_width * 0.75)),
+            static_cast<int>(std::lround(square_height * 0.75))),
+            0.0, 0.0, cv::INTER_AREA);
+        const int left = square_area.x + (square_area.width - resized.cols) / 2;
+        const int top = square_area.y + (square_area.height - resized.rows) / 2;
+        for (int row = 0; row < resized.rows; ++row) {
+            for (int col = 0; col < resized.cols; ++col) {
+                const cv::Vec4b pixel = resized.at<cv::Vec4b>(row, col);
+                const double alpha = pixel[3] / 255.0;
+                if (alpha <= 0.0) continue;
+                cv::Vec3b& target = board.at<cv::Vec3b>(top + row, left + col);
+                for (int channel = 0; channel < 3; ++channel) {
+                    target[channel] = static_cast<unsigned char>(std::lround(
+                        target[channel] * (1.0 - alpha) + pixel[channel] * alpha));
+                }
+            }
+        }
+    }
+    return board;
+}
+
+TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_yellow_squares";
+    const auto labels_path = dataset_dir / "labels.jsonl";
+    std::ifstream labels(labels_path);
+    if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
+
+    std::vector<nlohmann::json> expected_labels;
+    std::string line;
+    while (std::getline(labels, line)) {
+        if (!line.empty()) expected_labels.push_back(nlohmann::json::parse(line));
+    }
+
+    std::ofstream calibration_output;
+    if (const char* output_path = std::getenv("CTA_YELLOW_CALIBRATION_FILE");
+        output_path != nullptr && *output_path != '\0') {
+        calibration_output.open(output_path, std::ios::out | std::ios::trunc);
+        ASSERT_TRUE(calibration_output.is_open())
+            << "Could not write yellow calibration output: " << output_path;
+    }
+
+    const std::array<YellowCalibrationVariant, 10> variants{{
+        {"native", "clean", 0.0, 0.12},
+        {"scaled_75", "scaling", 0.0, 0.12},
+        {"brightness_reduced", "brightness", 0.0, 0.12},
+        {"blurred", "compression_like_blur", 0.0, 0.12},
+        {"geometry_shifted", "geometry_error", 0.02, 0.12},
+        {"corner_extra_tight", "square_boundary_margin", 0.0, 0.05},
+        {"corner_tight", "square_boundary_margin", 0.0, 0.08},
+        {"corner_mid", "square_boundary_margin", 0.0, 0.10},
+        {"corner_wide", "square_boundary_margin", 0.0, 0.16},
+        {"corner_extra_wide", "square_boundary_margin", 0.0, 0.20},
+    }};
+
+    std::size_t observation_count = 0;
+    for (const auto& variant : variants) {
+        for (const auto& expected : expected_labels) {
+            const std::string image_name = expected.at("image").get<std::string>();
+            const cv::Mat image = cv::imread((dataset_dir / image_name).string());
+            ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
+            const cv::Mat variant_image = make_yellow_calibration_variant(image, variant);
+            BoardGeometry located = locate_board(variant_image, board_);
+            const bool localized = located.bw > 0 && located.bh > 0;
+            if (!localized) {
+                for (const std::string& component : {"origin", "destination", "paired"}) {
+                    ++observation_count;
+                    if (!calibration_output.is_open()) continue;
+                    calibration_output << nlohmann::json{
+                        {"schema_version", 1}, {"detector", "yellow"},
+                        {"image", image_name}, {"component", component},
+                        {"truth", expected.value("truth", std::string("uncertain"))},
+                        {"prediction", "negative"}, {"regime", variant.name},
+                        {"condition", variant.condition},
+                        {"preprocessing_variant", variant.name},
+                        {"geometry_available", false},
+                        {"corner_fraction", variant.corner_fraction},
+                        {"case", expected.value("case", std::string("unspecified"))},
+                    }.dump() << '\n';
+                }
+                continue;
+            }
+
+            const int geometry_dx = static_cast<int>(
+                std::lround(located.sq_w * variant.geometry_offset_fraction));
+            const int geometry_dy = static_cast<int>(
+                std::lround(located.sq_h * variant.geometry_offset_fraction));
+            located.bx += geometry_dx;
+            located.by += geometry_dy;
+            const cv::Rect board_rect(
+                std::max(0, located.bx), std::max(0, located.by),
+                std::min(located.bw, variant_image.cols - std::max(0, located.bx)),
+                std::min(located.bh, variant_image.rows - std::max(0, located.by)));
+            if (board_rect.width <= 0 || board_rect.height <= 0) continue;
+
+            cv::Mat board_bgr = variant_image(board_rect);
+            BoardGeometry local_geometry = located;
+            local_geometry.bx = 0;
+            local_geometry.by = 0;
+            local_geometry.bw = board_rect.width;
+            local_geometry.bh = board_rect.height;
+            local_geometry.sq_w = static_cast<double>(board_rect.width) / 8.0;
+            local_geometry.sq_h = static_cast<double>(board_rect.height) / 8.0;
+            const auto raw_scores = yellow_calibration_raw_scores(
+                board_bgr, local_geometry, variant.corner_fraction);
+            const auto scores = rank_yellow_calibration_scores(raw_scores);
+            const double top_score = scores[0].first;
+            const double second_score = scores[1].first;
+            const std::string top_square = yellow_calibration_square_name(scores[0].second);
+            const std::string second_square = yellow_calibration_square_name(scores[1].second);
+            std::vector<double> all_scores(raw_scores.begin(), raw_scores.end());
+            const double board_background_median = yellow_calibration_median(
+                std::move(all_scores));
+
+            const std::string expected_case = expected.value(
+                "case", std::string("unspecified"));
+            const std::string expected_origin = expected.value(
+                "origin", std::string());
+            const std::string expected_destination = expected.value(
+                "destination", std::string());
+            const int expected_origin_index = yellow_calibration_square_index(expected_origin);
+            const int expected_destination_index = yellow_calibration_square_index(expected_destination);
+            const auto adjacent_indices = yellow_calibration_adjacent_squares(
+                expected_origin_index, expected_destination_index);
+            nlohmann::json adjacent_scores = nlohmann::json::array();
+            std::vector<double> adjacent_score_values;
+            for (const int adjacent_index : adjacent_indices) {
+                const double score = raw_scores[static_cast<size_t>(adjacent_index)];
+                adjacent_score_values.push_back(score);
+                adjacent_scores.push_back({
+                    {"square", yellow_calibration_square_name(adjacent_index)},
+                    {"score", score},
+                });
+            }
+            const double adjacent_score_max = adjacent_score_values.empty()
+                ? 0.0
+                : *std::max_element(adjacent_score_values.begin(), adjacent_score_values.end());
+            const double adjacent_score_mean = adjacent_score_values.empty()
+                ? 0.0
+                : std::accumulate(adjacent_score_values.begin(), adjacent_score_values.end(), 0.0) /
+                    static_cast<double>(adjacent_score_values.size());
+            const bool positive_case = expected.value("truth", std::string("uncertain")) == "positive";
+            const std::string post_move_origin_occupancy = positive_case ? "empty" : "unknown";
+            const std::string post_move_destination_occupancy = positive_case ? "occupied" : "unknown";
+            const std::string pre_move_destination_occupancy = expected_case == "capture"
+                ? "occupied"
+                : expected_case == "quiet" || expected_case == "double_pawn"
+                    ? "empty" : "unknown";
+
+            std::string observed_move;
+            if (located.bw > 0 && located.bh > 0) {
+                observed_move = extract_move_from_yellow_squares(
+                    variant_image, board_, located);
+            }
+            for (const std::string& component : {"origin", "destination", "paired"}) {
+                const std::string origin = expected.value("origin", std::string());
+                const std::string destination = expected.value("destination", std::string());
+                double origin_score = 0.0;
+                double destination_score = 0.0;
+                double origin_board_relative_score = 0.0;
+                double destination_board_relative_score = 0.0;
+                double origin_local_score = 0.0;
+                double destination_local_score = 0.0;
+                double origin_edge_density = 0.0;
+                double destination_edge_density = 0.0;
+                int origin_index = -1;
+                int destination_index = -1;
+                if (origin.size() == 2 && destination.size() == 2) {
+                    origin_index = yellow_calibration_square_index(origin);
+                    destination_index = yellow_calibration_square_index(destination);
+                    const auto origin_measurement = cta::validation::measure_yellowness(
+                        board_bgr, local_geometry, origin.c_str(), true,
+                        variant.corner_fraction);
+                    const auto destination_measurement = cta::validation::measure_yellowness(
+                        board_bgr, local_geometry, destination.c_str(), true,
+                        variant.corner_fraction);
+                    origin_score = origin_measurement.score;
+                    destination_score = destination_measurement.score;
+                    origin_edge_density = std::accumulate(
+                        origin_measurement.corner_edge_density.begin(),
+                        origin_measurement.corner_edge_density.end(), 0.0) / 4.0;
+                    destination_edge_density = std::accumulate(
+                        destination_measurement.corner_edge_density.begin(),
+                        destination_measurement.corner_edge_density.end(), 0.0) / 4.0;
+                } else {
+                    origin_index = scores[0].second;
+                    destination_index = scores[1].second;
+                    origin_score = top_score;
+                    destination_score = second_score;
+                }
+                const auto normalized_score = [&](double score, int square,
+                                                  bool board_relative) {
+                    if (square < 0 || square >= 64) return 0.0;
+                    if (board_relative) return score - board_background_median;
+                    return score - yellow_local_calibration_baseline(raw_scores, square);
+                };
+                origin_board_relative_score = normalized_score(
+                    origin_score, origin_index, true);
+                destination_board_relative_score = normalized_score(
+                    destination_score, destination_index, true);
+                origin_local_score = normalized_score(origin_score, origin_index, false);
+                destination_local_score = normalized_score(
+                    destination_score, destination_index, false);
+                const double pair_score = origin_score + destination_score;
+                const double board_relative_pair_score =
+                    origin_board_relative_score + destination_board_relative_score;
+                const double local_pair_score = origin_local_score + destination_local_score;
+                const bool origin_passed = origin_score >= cta::validation::kYellowEndpointThreshold;
+                const bool destination_passed = destination_score >= cta::validation::kYellowEndpointThreshold;
+                const bool paired_passed = origin_passed && destination_passed &&
+                    pair_score >= cta::validation::kYellowPairThreshold;
+                const bool predicted = component == "origin" ? origin_passed
+                    : component == "destination" ? destination_passed : paired_passed;
+                ++observation_count;
+                if (!calibration_output.is_open()) continue;
+                calibration_output << nlohmann::json{
+                    {"schema_version", 1}, {"detector", "yellow"},
+                    {"image", image_name}, {"component", component},
+                    {"truth", expected.value("truth", std::string("uncertain"))},
+                    {"prediction", predicted ? "positive" : "negative"},
+                    {"regime", variant.name}, {"condition", variant.condition},
+                    {"preprocessing_variant", variant.name},
+                    {"case", expected_case},
+                    {"post_move_origin_occupancy", post_move_origin_occupancy},
+                    {"post_move_destination_occupancy", post_move_destination_occupancy},
+                    {"pre_move_destination_occupancy", pre_move_destination_occupancy},
+                    {"adjacent_highlight_scores", adjacent_scores},
+                    {"adjacent_highlight_max", adjacent_score_max},
+                    {"adjacent_highlight_mean", adjacent_score_mean},
+                    {"expected_move", expected.value("expected_move", std::string())},
+                    {"observed_move", observed_move},
+                    {"top_square", top_square}, {"second_square", second_square},
+                    {"origin_score", origin_score},
+                    {"destination_score", destination_score},
+                    {"origin_edge_density", origin_edge_density},
+                    {"destination_edge_density", destination_edge_density},
+                    {"pair_score", pair_score}, {"score", component == "origin"
+                        ? origin_score : component == "destination"
+                            ? destination_score : pair_score},
+                    {"board_background_median", board_background_median},
+                    {"board_relative_score", component == "origin"
+                        ? origin_board_relative_score : component == "destination"
+                            ? destination_board_relative_score : board_relative_pair_score},
+                    {"local_normalized_score", component == "origin"
+                        ? origin_local_score : component == "destination"
+                            ? destination_local_score : local_pair_score},
+                    {"origin_local_baseline", origin_index >= 0
+                        ? yellow_local_calibration_baseline(raw_scores, origin_index) : 0.0},
+                    {"destination_local_baseline", destination_index >= 0
+                        ? yellow_local_calibration_baseline(raw_scores, destination_index) : 0.0},
+                    {"yellow_endpoint_threshold", cta::validation::kYellowEndpointThreshold},
+                    {"yellow_pair_threshold", cta::validation::kYellowPairThreshold},
+                    {"geometry_available", true},
+                    {"geometry_offset_x", geometry_dx},
+                    {"geometry_offset_y", geometry_dy},
+                    {"corner_fraction", variant.corner_fraction},
+                }.dump() << '\n';
+            }
+        }
+    }
+
+    // Exercise categories absent from the screenshot manifest with legal
+    // board states assembled from the checked-in board and piece assets. These
+    // rows measure the same endpoint, occupancy, and adjacency fields as real
+    // screenshots while remaining explicitly synthetic calibration evidence.
+    const std::array<YellowCategoryCalibrationCase, 2> category_cases{{
+        {
+            "check", "c4", "b5", "c4b5", "empty",
+            {{{"e1", 'K'}, {"c4", 'B'}, {"e8", 'k'}}},
+        },
+        {
+            "promotion", "e7", "e8", "e7e8q", "empty",
+            {{{"e1", 'K'}, {"e7", 'P'}, {"h8", 'k'}}},
+        },
+    }};
+    const BoardGeometry category_geometry{
+        0, 0, board_.cols, board_.rows,
+        static_cast<double>(board_.cols) / 8.0,
+        static_cast<double>(board_.rows) / 8.0,
+        1.0, 0.0, 0.0};
+    int category_failures = 0;
+    int category_observation_count = 0;
+    for (const auto& calibration_case : category_cases) {
+        bool pieces_loaded = false;
+        const cv::Mat category_board = make_yellow_category_calibration_board(
+            board_, std::filesystem::path(assets_dir_), calibration_case, pieces_loaded);
+        ASSERT_FALSE(category_board.empty());
+        ASSERT_TRUE(pieces_loaded) << "Missing piece asset for " << calibration_case.name;
+        const auto raw_scores = yellow_calibration_raw_scores(
+            category_board, category_geometry, 0.12);
+        const auto ranked_scores = rank_yellow_calibration_scores(raw_scores);
+        const double board_background_median = yellow_calibration_median(
+            std::vector<double>(raw_scores.begin(), raw_scores.end()));
+        const int origin_index = yellow_calibration_square_index(calibration_case.origin);
+        const int destination_index = yellow_calibration_square_index(calibration_case.destination);
+        const auto adjacent_indices = yellow_calibration_adjacent_squares(
+            origin_index, destination_index);
+        nlohmann::json adjacent_scores = nlohmann::json::array();
+        std::vector<double> adjacent_score_values;
+        for (const int adjacent_index : adjacent_indices) {
+            const double score = raw_scores[static_cast<size_t>(adjacent_index)];
+            adjacent_score_values.push_back(score);
+            adjacent_scores.push_back({
+                {"square", yellow_calibration_square_name(adjacent_index)},
+                {"score", score},
+            });
+        }
+        const double adjacent_highlight_max = adjacent_score_values.empty()
+            ? 0.0 : *std::max_element(adjacent_score_values.begin(), adjacent_score_values.end());
+        const double adjacent_highlight_mean = adjacent_score_values.empty()
+            ? 0.0 : std::accumulate(adjacent_score_values.begin(), adjacent_score_values.end(), 0.0) /
+                static_cast<double>(adjacent_score_values.size());
+        const auto origin_measurement = cta::validation::measure_yellowness(
+            category_board, category_geometry, calibration_case.origin, true, 0.12);
+        const auto destination_measurement = cta::validation::measure_yellowness(
+            category_board, category_geometry, calibration_case.destination, true, 0.12);
+        const double origin_score = origin_measurement.score;
+        const double destination_score = destination_measurement.score;
+        const double pair_score = origin_score + destination_score;
+        const bool origin_passed = origin_score >= cta::validation::kYellowEndpointThreshold;
+        const bool destination_passed = destination_score >= cta::validation::kYellowEndpointThreshold;
+        const bool paired_passed = origin_passed && destination_passed &&
+            pair_score >= cta::validation::kYellowPairThreshold;
+        if (!paired_passed) ++category_failures;
+        const double origin_edge_density = std::accumulate(
+            origin_measurement.corner_edge_density.begin(),
+            origin_measurement.corner_edge_density.end(), 0.0) / 4.0;
+        const double destination_edge_density = std::accumulate(
+            destination_measurement.corner_edge_density.begin(),
+            destination_measurement.corner_edge_density.end(), 0.0) / 4.0;
+        const double origin_board_relative_score = origin_score - board_background_median;
+        const double destination_board_relative_score = destination_score - board_background_median;
+        const double origin_local_score = origin_score - yellow_local_calibration_baseline(
+            raw_scores, origin_index);
+        const double destination_local_score = destination_score - yellow_local_calibration_baseline(
+            raw_scores, destination_index);
+        const std::string observed_move = extract_move_from_yellow_squares(
+            category_board, board_, category_geometry);
+        for (const std::string& component : {"origin", "destination", "paired"}) {
+            const bool predicted = component == "origin" ? origin_passed
+                : component == "destination" ? destination_passed : paired_passed;
+            ++category_observation_count;
+            if (calibration_output.is_open()) {
+                calibration_output << nlohmann::json{
+                    {"schema_version", 1}, {"detector", "yellow"},
+                    {"image", std::string("synthetic/") + calibration_case.name},
+                    {"component", component}, {"truth", "positive"},
+                    {"prediction", predicted ? "positive" : "negative"},
+                    {"regime", "synthetic_category"},
+                    {"condition", "legal_occupancy_category"},
+                    {"preprocessing_variant", "synthetic_board_assets"},
+                    {"category_source", "legal_synthetic_position"},
+                    {"case", calibration_case.name},
+                    {"post_move_origin_occupancy", "empty"},
+                    {"post_move_destination_occupancy", "occupied"},
+                    {"pre_move_destination_occupancy",
+                        calibration_case.pre_move_destination_occupancy},
+                    {"adjacent_highlight_scores", adjacent_scores},
+                    {"adjacent_highlight_max", adjacent_highlight_max},
+                    {"adjacent_highlight_mean", adjacent_highlight_mean},
+                    {"expected_move", calibration_case.expected_move},
+                    {"observed_move", observed_move},
+                    {"top_square", yellow_calibration_square_name(ranked_scores[0].second)},
+                    {"second_square", yellow_calibration_square_name(ranked_scores[1].second)},
+                    {"origin_score", origin_score}, {"destination_score", destination_score},
+                    {"origin_edge_density", origin_edge_density},
+                    {"destination_edge_density", destination_edge_density},
+                    {"pair_score", pair_score},
+                    {"score", component == "origin" ? origin_score
+                        : component == "destination" ? destination_score : pair_score},
+                    {"board_background_median", board_background_median},
+                    {"board_relative_score", component == "origin"
+                        ? origin_board_relative_score : component == "destination"
+                            ? destination_board_relative_score
+                            : origin_board_relative_score + destination_board_relative_score},
+                    {"local_normalized_score", component == "origin" ? origin_local_score
+                        : component == "destination" ? destination_local_score
+                            : origin_local_score + destination_local_score},
+                    {"yellow_endpoint_threshold", cta::validation::kYellowEndpointThreshold},
+                    {"yellow_pair_threshold", cta::validation::kYellowPairThreshold},
+                    {"geometry_available", true}, {"geometry_offset_x", 0},
+                    {"geometry_offset_y", 0}, {"corner_fraction", 0.12},
+                }.dump() << '\n';
+            }
+        }
+    }
+
+    // Calibrate the reducer's repeated-highlight fallback with explicit
+    // persistence and transient sequences. The negative frames are neutral
+    // synthetic boards so this test isolates temporal aggregation from the
+    // known static-board yellowness baseline.
+    const nlohmann::json* temporal_label = nullptr;
+    for (const auto& expected : expected_labels) {
+        if (expected.value("truth", std::string("uncertain")) == "positive" &&
+            expected.value("origin", std::string()).size() == 2 &&
+            expected.value("destination", std::string()).size() == 2) {
+            temporal_label = &expected;
+            break;
+        }
+    }
+    ASSERT_NE(temporal_label, nullptr);
+    const cv::Mat temporal_image = cv::imread(
+        (dataset_dir / temporal_label->at("image").get<std::string>()).string());
+    ASSERT_FALSE(temporal_image.empty());
+    const BoardGeometry temporal_located = locate_board(temporal_image, board_);
+    ASSERT_GT(temporal_located.bw, 0);
+    const cv::Rect temporal_rect(
+        temporal_located.bx, temporal_located.by,
+        temporal_located.bw, temporal_located.bh);
+    const cv::Mat temporal_positive = temporal_image(temporal_rect);
+    const cv::Mat temporal_negative = cv::Mat::zeros(
+        temporal_positive.size(), temporal_positive.type());
+    BoardGeometry temporal_geometry = temporal_located;
+    temporal_geometry.bx = 0;
+    temporal_geometry.by = 0;
+    temporal_geometry.sq_w = static_cast<double>(temporal_positive.cols) / 8.0;
+    temporal_geometry.sq_h = static_cast<double>(temporal_positive.rows) / 8.0;
+
+    const auto temporal_evidence_for = [&](const cv::Mat& board_frame) {
+        const std::string origin = temporal_label->at("origin").get<std::string>();
+        const std::string destination = temporal_label->at("destination").get<std::string>();
+        const double from_score = cta::validation::measure_yellowness(
+            board_frame, temporal_geometry, origin.c_str()).score;
+        const double to_score = cta::validation::measure_yellowness(
+            board_frame, temporal_geometry, destination.c_str()).score;
+        cta::validation::YellowTemporalEvidence evidence;
+        ++evidence.sample_count;
+        evidence.max_from = from_score;
+        evidence.max_to = to_score;
+        evidence.max_pair = from_score + to_score;
+        if (from_score >= cta::validation::kYellowEndpointThreshold &&
+            to_score >= cta::validation::kYellowEndpointThreshold &&
+            from_score + to_score >= cta::validation::kYellowPairThreshold) {
+            ++evidence.pair_pass_count;
+        }
+        return evidence;
+    };
+
+    struct TemporalCalibrationCase {
+        const char* name;
+        std::vector<bool> highlighted_samples;
+        bool expected_pass;
+    };
+    const std::array<TemporalCalibrationCase, 4> temporal_cases{{
+        {"persistent_two_samples", {true, true}, true},
+        {"persistent_three_samples", {true, true, true}, true},
+        {"single_frame_flash", {true}, false},
+        {"transient_flash", {true, false, false}, false},
+    }};
+    int temporal_failures = 0;
+    for (const auto& temporal_case : temporal_cases) {
+        cta::validation::YellowTemporalEvidence combined;
+        for (const bool highlighted : temporal_case.highlighted_samples) {
+            const auto sample = temporal_evidence_for(
+                highlighted ? temporal_positive : temporal_negative);
+            ++combined.sample_count;
+            combined.pair_pass_count += sample.pair_pass_count;
+            combined.max_from = std::max(combined.max_from, sample.max_from);
+            combined.max_to = std::max(combined.max_to, sample.max_to);
+            combined.max_pair = std::max(combined.max_pair, sample.max_pair);
+        }
+        const bool predicted = cta::validation::passes_temporal_yellow_check(combined);
+        if (predicted != temporal_case.expected_pass) ++temporal_failures;
+        if (calibration_output.is_open()) {
+            calibration_output << nlohmann::json{
+                {"schema_version", 1}, {"detector", "yellow"},
+                {"image", temporal_label->at("image")},
+                {"component", "temporal_pair"},
+                {"truth", temporal_case.expected_pass ? "positive" : "negative"},
+                {"prediction", predicted ? "positive" : "negative"},
+                {"regime", temporal_case.name},
+                {"condition", "temporal_persistence"},
+                {"temporal_window_seconds", cta::validation::kYellowTemporalWindowSeconds},
+                {"temporal_sample_count", combined.sample_count},
+                {"temporal_pair_pass_count", combined.pair_pass_count},
+                {"temporal_max_from", combined.max_from},
+                {"temporal_max_to", combined.max_to},
+                {"temporal_max_pair", combined.max_pair},
+            }.dump() << '\n';
+        }
+        std::cout << "  Yellow temporal " << temporal_case.name
+                  << ": predicted=" << (predicted ? "pass" : "reject")
+                  << " samples=" << combined.sample_count
+                  << " pair_passes=" << combined.pair_pass_count << '\n';
+    }
+
+    EXPECT_EQ(observation_count,
+              expected_labels.size() * variants.size() * 3u);
+    EXPECT_EQ(category_observation_count, category_cases.size() * 3u);
+    EXPECT_EQ(category_failures, 0);
+    EXPECT_EQ(temporal_failures, 0);
+    std::cout << "  Yellow calibration observations: " << observation_count
+              << " across " << variants.size() << " visual/geometry regimes\n";
 }
 
 #endif // TEST_YELLOW_SQUARES
@@ -1571,6 +2527,60 @@ TEST_F(DetectorsTest, YellowArrows) {
 // ─── MISALIGNED PIECE (HOVER BOX) ────────────────────────────────────────────
 #if TEST_MISALIGNED_PIECE
 
+struct HoverCalibrationVariant {
+    const char* name;
+    const char* condition;
+    bool expected_hover;
+    int visible_edges;
+    int thickness;
+};
+
+struct HoverTransitionCalibration {
+    const char* name;
+    int hover_samples;
+    int visible_edges;
+    int thickness;
+};
+
+static cv::Mat make_hover_calibration_frame(
+    const cv::Mat& board, const HoverCalibrationVariant& variant) {
+    cv::Mat frame = board.clone();
+    const int square_width = frame.cols / 8;
+    const int square_height = frame.rows / 8;
+    const int left = 4 * square_width;
+    const int top = 4 * square_height;
+    const int right = 5 * square_width - 4;
+    const int bottom = 5 * square_height - 4;
+    const cv::Scalar white(255, 255, 255);
+
+    if (variant.visible_edges >= 0) {
+        const int edge_mask = variant.visible_edges;
+        if (edge_mask & 1) {
+            cv::line(frame, {left, top}, {right, top}, white,
+                     variant.thickness, cv::LINE_8);
+        }
+        if (edge_mask & 2) {
+            cv::line(frame, {right, top}, {right, bottom}, white,
+                     variant.thickness, cv::LINE_8);
+        }
+        if (edge_mask & 4) {
+            cv::line(frame, {right, bottom}, {left, bottom}, white,
+                     variant.thickness, cv::LINE_8);
+        }
+        if (edge_mask & 8) {
+            cv::line(frame, {left, bottom}, {left, top}, white,
+                     variant.thickness, cv::LINE_8);
+        }
+    } else {
+        // A short cursor-like mark must not become a connected hover outline.
+        cv::line(frame,
+                 {left + square_width / 2, top + square_height / 2},
+                 {left + square_width / 2 + 12, top + square_height / 2 + 8},
+                 white, 1, cv::LINE_8);
+    }
+    return frame;
+}
+
 TEST_F(DetectorsTest, MisalignedPiece) {
     const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_misaligned_piece").string();
     auto files = list_files(images_dir, {".png", ".jpg"});
@@ -1596,10 +2606,390 @@ TEST_F(DetectorsTest, MisalignedPiece) {
     std::cout << "PASS: Accurately detected misaligned pieces in all " << files.size() << " images.\n";
 }
 
+TEST_F(DetectorsTest, HoverCalibrationRegimes) {
+    if (board_.empty()) GTEST_SKIP() << "Board template unavailable";
+
+    std::ofstream calibration_output;
+    if (const char* output_path = std::getenv("CTA_HOVER_CALIBRATION_FILE");
+        output_path != nullptr && *output_path != '\0') {
+        calibration_output.open(output_path, std::ios::out | std::ios::trunc);
+        ASSERT_TRUE(calibration_output.is_open())
+            << "Could not write hover calibration output: " << output_path;
+    }
+
+    BoardGeometry geometry;
+    geometry.bw = board_.cols;
+    geometry.bh = board_.rows;
+    geometry.sq_w = static_cast<double>(board_.cols) / 8.0;
+    geometry.sq_h = static_cast<double>(board_.rows) / 8.0;
+    geometry.geometry_confidence = 1.0;
+
+    const std::array<HoverCalibrationVariant, 6> variants{{
+        {"settled_board", "settled_board", false, 0, 0},
+        {"cursor_overlay", "cursor_overlay", false, -1, 1},
+        {"fast_animation", "fast_animation", true, 15, 8},
+        {"slow_animation", "slow_animation", true, 15, 3},
+        {"partial_movement", "partial_movement", true, 3, 8},
+        {"partial_movement_thin", "partial_movement", true, 3, 3},
+    }};
+
+    int false_rejections = 0;
+    int settled_false_positives = 0;
+    int true_mid_drag_detections = 0;
+    for (const auto& variant : variants) {
+        const cv::Mat frame = make_hover_calibration_frame(board_, variant);
+        const std::string actual = find_misaligned_piece(frame, board_, geometry);
+        cv::Mat white_mask;
+        cv::Mat reduced;
+        const auto measurement = validation::measure_hover_box(
+            frame, geometry, white_mask, reduced, "e4");
+        const bool predicted = !actual.empty();
+        if (predicted != variant.expected_hover) ++false_rejections;
+        if (std::string(variant.condition) == "settled_board" && predicted) {
+            ++settled_false_positives;
+        }
+        if (variant.expected_hover && predicted) ++true_mid_drag_detections;
+
+        if (calibration_output.is_open()) {
+            calibration_output << nlohmann::json{
+                {"schema_version", 1},
+                {"detector", "hover"},
+                {"component", "hover_box"},
+                {"regime", variant.name},
+                {"condition", variant.condition},
+                {"truth", variant.expected_hover ? "positive" : "negative"},
+                {"prediction", predicted ? "positive" : "negative"},
+                {"selected_square", actual},
+                {"visible_edges", measurement.visible_edges},
+                {"strongest_edge", measurement.strongest_edge},
+                {"geometry_uncertainty", measurement.geometry_uncertainty},
+            }.dump() << '\n';
+        }
+
+        std::cout << "  Hover regime " << variant.name
+                  << ": predicted=" << (predicted ? "hover" : "clear")
+                  << " selected=" << (actual.empty() ? "none" : actual)
+                  << " visible_edges=" << measurement.visible_edges << '\n';
+    }
+
+    const std::array<HoverTransitionCalibration, 3> transitions{{
+        {"fast_transition", 2, 15, 8},
+        {"slow_transition", 4, 15, 3},
+        {"partial_transition", 3, 3, 8},
+    }};
+    int transition_failures = 0;
+    for (const auto& transition : transitions) {
+        const double sample_step = cta::kMapperFineScanStepSeconds;
+        const int total_samples = transition.hover_samples + 6;
+        double quiet_seconds = 0.0;
+        double first_clear_timestamp = -1.0;
+        double settled_tail_timestamp = -1.0;
+        double last_hover_timestamp = -1.0;
+        bool candidate_ready = false;
+        bool premature = false;
+        for (int sample = 0; sample < total_samples; ++sample) {
+            const bool expected_hover = sample < transition.hover_samples;
+            const HoverCalibrationVariant frame_variant{
+                transition.name, "transition_level", expected_hover,
+                expected_hover ? transition.visible_edges : 0,
+                expected_hover ? transition.thickness : 0};
+            const cv::Mat frame = make_hover_calibration_frame(board_, frame_variant);
+            const bool detected = !find_misaligned_piece(frame, board_, geometry).empty();
+            const double timestamp = sample * sample_step;
+            if (detected) {
+                last_hover_timestamp = timestamp;
+                quiet_seconds = 0.0;
+                if (candidate_ready) premature = true;
+                continue;
+            }
+            if (first_clear_timestamp < 0.0) first_clear_timestamp = timestamp;
+            quiet_seconds += sample_step;
+            if (!candidate_ready &&
+                quiet_seconds >= cta::kMapperSettleConfirmationSeconds) {
+                candidate_ready = true;
+                settled_tail_timestamp = timestamp;
+            }
+        }
+
+        const bool valid_transition = candidate_ready && !premature &&
+            first_clear_timestamp >= 0.0 && last_hover_timestamp >= 0.0;
+        if (!valid_transition) ++transition_failures;
+        if (calibration_output.is_open()) {
+            calibration_output << nlohmann::json{
+                {"schema_version", 1},
+                {"detector", "hover"},
+                {"component", "settle_window"},
+                {"regime", transition.name},
+                {"condition", "transition_level"},
+                {"truth", "positive"},
+                {"prediction", valid_transition ? "positive" : "negative"},
+                {"settle_window_seconds", cta::kMapperSettleConfirmationSeconds},
+                {"sample_step_seconds", sample_step},
+                {"hover_samples", transition.hover_samples},
+                {"first_clear_timestamp", first_clear_timestamp},
+                {"last_hover_timestamp", last_hover_timestamp},
+                {"settled_tail_timestamp", settled_tail_timestamp},
+                {"settle_delay_seconds", settled_tail_timestamp - last_hover_timestamp},
+                {"premature_settle", premature},
+            }.dump() << '\n';
+        }
+        std::cout << "  Hover transition " << transition.name
+                  << ": settle_delay="
+                  << (settled_tail_timestamp - last_hover_timestamp)
+                  << "s premature=" << (premature ? "yes" : "no") << '\n';
+    }
+
+    EXPECT_EQ(settled_false_positives, 0);
+    EXPECT_EQ(true_mid_drag_detections, 4);
+    EXPECT_EQ(false_rejections, 0);
+    EXPECT_EQ(transition_failures, 0);
+}
+
 #endif // TEST_MISALIGNED_PIECE
 
 // ─── GAME CLOCKS ─────────────────────────────────────────────────────────────
 #if TEST_GAME_CLOCKS
+
+struct ClockCalibrationVariant {
+    const char* name;
+    const char* condition;
+};
+
+struct ClockRoiCalibrationVariant {
+    const char* name;
+    const char* condition;
+    double geometry_offset_x_squares;
+    double geometry_offset_y_squares;
+    double left_edge_ratio;
+};
+
+static cv::Mat make_clock_calibration_variant(
+    const cv::Mat& image, const ClockCalibrationVariant& variant) {
+    if (std::string(variant.name) == "native") {
+        return image.clone();
+    }
+    if (std::string(variant.name) == "scaled_75") {
+        cv::Mat scaled;
+        cv::resize(image, scaled, cv::Size(), 0.75, 0.75, cv::INTER_AREA);
+        return scaled;
+    }
+    if (std::string(variant.name) == "font_small") {
+        cv::Mat scaled;
+        cv::resize(image, scaled, cv::Size(), 0.50, 0.50, cv::INTER_AREA);
+        return scaled;
+    }
+    if (std::string(variant.name) == "font_large") {
+        cv::Mat scaled;
+        cv::resize(image, scaled, cv::Size(), 1.25, 1.25, cv::INTER_CUBIC);
+        return scaled;
+    }
+    if (std::string(variant.name) == "antialiased") {
+        cv::Mat reduced;
+        cv::Mat restored;
+        cv::resize(image, reduced, cv::Size(), 0.60, 0.60, cv::INTER_AREA);
+        cv::resize(reduced, restored, image.size(), 0.0, 0.0, cv::INTER_LINEAR);
+        return restored;
+    }
+    if (std::string(variant.name) == "jpeg_compressed") {
+        std::vector<uchar> encoded;
+        if (cv::imencode(".jpg", image, encoded,
+                         {cv::IMWRITE_JPEG_QUALITY, 35})) {
+            const cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_COLOR);
+            if (!decoded.empty()) return decoded;
+        }
+        return image.clone();
+    }
+    if (std::string(variant.name) == "brightness_reduced") {
+        cv::Mat reduced;
+        image.convertTo(reduced, image.type(), 0.75, 0.0);
+        return reduced;
+    }
+    if (std::string(variant.name) == "brightness_increased") {
+        cv::Mat increased;
+        image.convertTo(increased, image.type(), 1.15, 8.0);
+        return increased;
+    }
+    if (std::string(variant.name) == "low_time_format" ||
+        std::string(variant.name) == "separator_removed" ||
+        std::string(variant.name) == "partial_change") {
+        return image.clone();
+    }
+    cv::Mat blurred;
+    cv::GaussianBlur(image, blurred, cv::Size(3, 3), 0.0);
+    return blurred;
+}
+
+static void apply_clock_stress_variant(
+    cv::Mat& image, const BoardGeometry& geometry,
+    const ClockCalibrationVariant& variant) {
+    const std::string name = variant.name;
+    if (name != "low_time_format" && name != "separator_removed" &&
+        name != "partial_change") {
+        return;
+    }
+
+    const int x1 = std::max(0, static_cast<int>(geometry.bx + geometry.bw * 0.70));
+    const int x2 = std::min(image.cols, static_cast<int>(geometry.bx + geometry.bw));
+    const int top_y1 = std::max(0, static_cast<int>(geometry.by - geometry.sq_h * 0.55));
+    const int top_y2 = std::min(image.rows, static_cast<int>(geometry.by - geometry.sq_h * 0.08));
+    const int bottom_y1 = std::max(0, static_cast<int>(geometry.by + geometry.bh + geometry.sq_h * 0.18));
+    const int bottom_y2 = std::min(image.rows, static_cast<int>(geometry.by + geometry.bh + geometry.sq_h * 0.58));
+    if (x2 <= x1 || top_y2 <= top_y1 || bottom_y2 <= bottom_y1) return;
+
+    const auto erase_region = [&](int y1, int y2, double left, double right) {
+        const int rx1 = std::max(x1, static_cast<int>(x1 + (x2 - x1) * left));
+        const int rx2 = std::min(x2, static_cast<int>(x1 + (x2 - x1) * right));
+        const int ry1 = std::max(y1, y1 + (y2 - y1) / 5);
+        const int ry2 = std::min(y2, y2 - (y2 - y1) / 5);
+        if (rx2 <= rx1 || ry2 <= ry1) return;
+        const cv::Scalar fill = cv::mean(image(cv::Rect(x1, y1, x2 - x1, y2 - y1)));
+        cv::rectangle(image, cv::Rect(rx1, ry1, rx2 - rx1, ry2 - ry1), fill, cv::FILLED);
+    };
+
+    if (name == "low_time_format") {
+        // Remove the leading hour field to emulate a mm:ss clock.
+        erase_region(top_y1, top_y2, 0.00, 0.22);
+        erase_region(bottom_y1, bottom_y2, 0.00, 0.22);
+    } else if (name == "separator_removed") {
+        // Remove both separator bands while preserving surrounding glyphs.
+        erase_region(top_y1, top_y2, 0.34, 0.40);
+        erase_region(top_y1, top_y2, 0.64, 0.70);
+        erase_region(bottom_y1, bottom_y2, 0.34, 0.40);
+        erase_region(bottom_y1, bottom_y2, 0.64, 0.70);
+    } else {
+        // A transition can expose one partially updated digit; damage one
+        // clock only so activity and OCR remain separately measurable.
+        erase_region(bottom_y1, bottom_y2, 0.50, 0.60);
+    }
+}
+
+static std::string clock_reading_for_component(
+    const ClockState& state, const std::string& component) {
+    if (component == "active_side") return state.active_player;
+    if (component == "white_ocr") return state.white_time;
+    return state.black_time;
+}
+
+static cv::Mat clock_roi_for_calibration(const cv::Mat& image,
+                                         const BoardGeometry& geometry,
+                                         bool white_clock) {
+    const int x1 = std::max(0, static_cast<int>(geometry.bx + geometry.bw * 0.70));
+    const int x2 = std::min(image.cols, static_cast<int>(geometry.bx + geometry.bw));
+    const int y1 = white_clock
+        ? std::min(image.rows - 1, static_cast<int>(geometry.by + geometry.bh + geometry.sq_h * 0.18))
+        : std::max(0, static_cast<int>(geometry.by - geometry.sq_h * 0.55));
+    const int y2 = white_clock
+        ? std::min(image.rows, static_cast<int>(geometry.by + geometry.bh + geometry.sq_h * 0.58))
+        : std::max(y1 + 1, static_cast<int>(geometry.by - geometry.sq_h * 0.08));
+    if (x2 <= x1 || y2 <= y1) return {};
+    return image(cv::Rect(x1, y1, x2 - x1, y2 - y1));
+}
+
+static bool clock_rois_for_calibration(
+    const cv::Mat& image,
+    const BoardGeometry& geometry,
+    const ClockRoiCalibrationVariant& variant,
+    cv::Mat& top_roi,
+    cv::Mat& bottom_roi) {
+    const double offset_x = geometry.sq_w * variant.geometry_offset_x_squares;
+    const double offset_y = geometry.sq_h * variant.geometry_offset_y_squares;
+    const int shifted_bx = static_cast<int>(std::lround(geometry.bx + offset_x));
+    const int shifted_by = static_cast<int>(std::lround(geometry.by + offset_y));
+    const int roi_x1 = std::max(
+        0, static_cast<int>(shifted_bx + geometry.bw * variant.left_edge_ratio));
+    const int roi_x2 = std::min(
+        image.cols, static_cast<int>(shifted_bx + geometry.bw));
+    const int top_y1 = std::max(
+        0, static_cast<int>(shifted_by - geometry.sq_h * 0.55));
+    const int top_y2 = std::max(
+        top_y1 + 1, static_cast<int>(shifted_by - geometry.sq_h * 0.08));
+    const int bottom_y1 = std::min(
+        image.rows - 1,
+        static_cast<int>(shifted_by + geometry.bh + geometry.sq_h * 0.18));
+    const int bottom_y2 = std::min(
+        image.rows,
+        static_cast<int>(shifted_by + geometry.bh + geometry.sq_h * 0.58));
+    if (roi_x2 <= roi_x1 || top_y2 <= top_y1 ||
+        bottom_y2 <= bottom_y1) {
+        return false;
+    }
+    top_roi = image(cv::Rect(roi_x1, top_y1, roi_x2 - roi_x1, top_y2 - top_y1));
+    bottom_roi = image(cv::Rect(
+        roi_x1, bottom_y1, roi_x2 - roi_x1, bottom_y2 - bottom_y1));
+    return true;
+}
+
+static void write_clock_calibration_observation(
+    std::ofstream& output,
+    const std::string& image_name,
+    const std::string& component,
+    bool truth,
+    bool predicted,
+    const std::string& regime,
+    const std::string& condition,
+    const std::string& preprocessing_variant,
+    const ClockState& state,
+    const nlohmann::json& expected,
+    const ClockOcrDiagnostics* ocr_diagnostics = nullptr,
+    const std::string& roi_variant = "production_roi",
+    double roi_offset_x_squares = 0.0,
+    double roi_offset_y_squares = 0.0,
+    double roi_left_edge_ratio = 0.70) {
+    if (!output.is_open()) return;
+
+    const bool complete_ocr = state.white_time ==
+            expected.value("expected_white", std::string()) &&
+        state.black_time == expected.value("expected_black", std::string());
+    const std::string reading_quality = complete_ocr
+        ? "valid"
+        : (state.white_time.empty() || state.black_time.empty() ? "missing" : "misread");
+    nlohmann::json segmented_digits = nlohmann::json::array();
+    if (ocr_diagnostics != nullptr) {
+        for (const auto& segment : ocr_diagnostics->segments) {
+            segmented_digits.push_back({
+                {"x", segment.x}, {"y", segment.y},
+                {"width", segment.width}, {"height", segment.height},
+                {"symbol", std::string(1, segment.symbol)},
+            });
+        }
+    }
+    output << nlohmann::json{
+        {"schema_version", 1},
+        {"detector", "clock"},
+        {"image", image_name},
+        {"component", component},
+        {"truth", truth ? "positive" : "negative"},
+        {"prediction", predicted ? "positive" : "negative"},
+        {"case", expected.value("case", std::string("unspecified"))},
+        {"regime", regime},
+        {"condition", condition},
+        {"preprocessing_variant", preprocessing_variant},
+        {"roi_variant", roi_variant},
+        {"roi_geometry_offset_x_squares", roi_offset_x_squares},
+        {"roi_geometry_offset_y_squares", roi_offset_y_squares},
+        {"roi_left_edge_ratio", roi_left_edge_ratio},
+        {"thresholding_mode", ocr_diagnostics != nullptr
+            ? ocr_diagnostics->thresholding_mode
+            : "component_first_adaptive_fallback"},
+        {"active_player", state.active_player},
+        {"white_time", state.white_time},
+        {"black_time", state.black_time},
+        {"selected_reading", ocr_diagnostics != nullptr &&
+                !ocr_diagnostics->selected_reading.empty()
+            ? ocr_diagnostics->selected_reading
+            : clock_reading_for_component(state, component)},
+        {"reading_quality", reading_quality},
+        {"ocr_skipped", state.ocr_skipped},
+        {"ocr_preprocessing_variant", ocr_diagnostics != nullptr
+            ? ocr_diagnostics->preprocessing_variant : ""},
+        {"segmented_digits", segmented_digits},
+        {"candidate_readings", ocr_diagnostics != nullptr
+            ? ocr_diagnostics->candidates : std::vector<std::string>{}},
+        {"expected_active", expected.value("expected_active", std::string())},
+        {"expected_white", expected.value("expected_white", std::string())},
+        {"expected_black", expected.value("expected_black", std::string())},
+    }.dump() << '\n';
+}
 
 TEST_F(DetectorsTest, GameClocks) {
     const std::string images_dir = (std::filesystem::path(assets_dir_) / "sample_clock_changes").string();
@@ -1690,7 +3080,19 @@ TEST_F(DetectorsTest, GameClockCalibrationLabels) {
     struct Counts { int true_positive = 0; int true_negative = 0;
                     int false_positive = 0; int false_negative = 0; };
     std::map<std::string, Counts> metrics;
-    std::map<std::string, ClockState> state_cache;
+    struct CalibrationState {
+        ClockState state;
+        ClockOcrDiagnostics white_ocr;
+        ClockOcrDiagnostics black_ocr;
+    };
+    std::map<std::string, CalibrationState> state_cache;
+    std::ofstream calibration_output;
+    if (const char* output_path = std::getenv("CTA_CLOCK_CALIBRATION_FILE");
+        output_path != nullptr && *output_path != '\0') {
+        calibration_output.open(output_path, std::ios::out | std::ios::trunc);
+        ASSERT_TRUE(calibration_output.is_open())
+            << "Could not write clock calibration output: " << output_path;
+    }
     std::string line;
     while (std::getline(labels, line)) {
         if (line.empty()) continue;
@@ -1701,10 +3103,19 @@ TEST_F(DetectorsTest, GameClockCalibrationLabels) {
             const auto image = cv::imread(image_path.string());
             ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_path.string();
             const auto geometry = locate_board(image, board_);
-            state_it = state_cache.emplace(
-                image_path.string(), extract_clocks(image, board_, geometry)).first;
+            CalibrationState calibration_state;
+            calibration_state.state = extract_clocks(image, board_, geometry);
+            calibration_state.white_ocr = diagnose_clock_time_from_roi(
+                clock_roi_for_calibration(image, geometry, true),
+                calibration_state.state.active_player == "white");
+            calibration_state.black_ocr = diagnose_clock_time_from_roi(
+                clock_roi_for_calibration(image, geometry, false),
+                calibration_state.state.active_player == "black");
+            state_it = state_cache.emplace(image_path.string(),
+                                           std::move(calibration_state)).first;
         }
-        const auto& state = state_it->second;
+        const auto& calibration_state = state_it->second;
+        const auto& state = calibration_state.state;
         const auto component = label.at("component").get<std::string>();
         const bool truth = label.value("truth", std::string("uncertain")) == "positive";
         const bool predicted = component == "active_side"
@@ -1712,6 +3123,15 @@ TEST_F(DetectorsTest, GameClockCalibrationLabels) {
             : component == "white_ocr"
                 ? state.white_time == label.at("expected_white").get<std::string>()
                 : state.black_time == label.at("expected_black").get<std::string>();
+
+        write_clock_calibration_observation(
+            calibration_output, label.at("image").get<std::string>(), component,
+            truth, predicted, label.value("regime", std::string("seed")),
+            label.value("condition", std::string("clean")),
+            "production_clock_roi", state, label,
+            component == "white_ocr" ? &calibration_state.white_ocr
+                                      : component == "black_ocr" ? &calibration_state.black_ocr
+                                                                  : nullptr);
         auto& count = metrics[component];
         if (truth && predicted) ++count.true_positive;
         else if (!truth && !predicted) ++count.true_negative;
@@ -1730,6 +3150,204 @@ TEST_F(DetectorsTest, GameClockCalibrationLabels) {
                   << " FN=" << count.false_negative << " accuracy=" << accuracy << "\n";
     }
     EXPECT_EQ(metrics.size(), 3u);
+}
+
+TEST_F(DetectorsTest, GameClockCalibrationRegimes) {
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_clock_changes";
+    const auto labels_path = dataset_dir / "labels.jsonl";
+    std::ifstream labels(labels_path);
+    if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
+
+    std::ofstream calibration_output;
+    if (const char* output_path = std::getenv("CTA_CLOCK_CALIBRATION_FILE");
+        output_path != nullptr && *output_path != '\0') {
+        calibration_output.open(output_path, std::ios::out | std::ios::app);
+        ASSERT_TRUE(calibration_output.is_open())
+            << "Could not append clock calibration output: " << output_path;
+    }
+
+    std::map<std::string, nlohmann::json> expected_by_image;
+    std::string line;
+    while (std::getline(labels, line)) {
+        if (line.empty()) continue;
+        const auto label = nlohmann::json::parse(line);
+        expected_by_image.emplace(label.at("image").get<std::string>(), label);
+    }
+
+    const std::array<ClockCalibrationVariant, 12> variants{{
+        {"native", "clean"},
+        {"scaled_75", "scaling"},
+        {"font_small", "font_size"},
+        {"font_large", "font_size"},
+        {"antialiased", "anti_aliasing"},
+        {"jpeg_compressed", "compression"},
+        {"brightness_reduced", "brightness"},
+        {"brightness_increased", "brightness"},
+        {"blurred", "compression_like_blur"},
+        {"low_time_format", "low_time_formatting"},
+        {"separator_removed", "separators"},
+        {"partial_change", "partial_changes"},
+    }};
+
+    for (const auto& variant : variants) {
+        int activity_correct = 0;
+        int complete_correct = 0;
+        int valid_count = 0;
+        int missing_count = 0;
+        int misread_count = 0;
+        int observed_count = 0;
+
+        for (const auto& [image_name, expected] : expected_by_image) {
+            const cv::Mat image = cv::imread((dataset_dir / image_name).string());
+            ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
+            cv::Mat variant_image = make_clock_calibration_variant(image, variant);
+            const BoardGeometry geometry = locate_board(variant_image, board_);
+            if (geometry.bw <= 0 || geometry.bh <= 0) {
+                ++missing_count;
+                continue;
+            }
+
+            apply_clock_stress_variant(variant_image, geometry, variant);
+
+            const ClockState state = extract_clocks(variant_image, board_, geometry);
+            ++observed_count;
+            const bool activity_ok = state.active_player ==
+                expected.at("expected_active").get<std::string>();
+            const bool white_ok = state.white_time ==
+                expected.at("expected_white").get<std::string>();
+            const bool black_ok = state.black_time ==
+                expected.at("expected_black").get<std::string>();
+            activity_correct += activity_ok ? 1 : 0;
+            complete_correct += (white_ok && black_ok) ? 1 : 0;
+
+            if (white_ok && black_ok) {
+                ++valid_count;
+            } else if (state.white_time.empty() || state.black_time.empty()) {
+                ++missing_count;
+            } else {
+                ++misread_count;
+            }
+
+            const auto white_ocr = diagnose_clock_time_from_roi(
+                clock_roi_for_calibration(variant_image, geometry, true),
+                state.active_player == "white");
+            const auto black_ocr = diagnose_clock_time_from_roi(
+                clock_roi_for_calibration(variant_image, geometry, false),
+                state.active_player == "black");
+
+            write_clock_calibration_observation(
+                calibration_output, image_name, "active_side", true, activity_ok,
+                variant.name, variant.condition, variant.name, state, expected);
+            write_clock_calibration_observation(
+                calibration_output, image_name, "white_ocr", true, white_ok,
+                variant.name, variant.condition, variant.name, state, expected,
+                &white_ocr);
+            write_clock_calibration_observation(
+                calibration_output, image_name, "black_ocr", true, black_ok,
+                variant.name, variant.condition, variant.name, state, expected,
+                &black_ocr);
+        }
+
+        std::cout << "  Clock regime " << variant.name
+                  << ": activity=" << activity_correct << "/" << observed_count
+                  << " complete_ocr=" << complete_correct << "/" << observed_count
+                  << " valid=" << valid_count
+                  << " missing=" << missing_count
+                  << " misread=" << misread_count << "\n";
+        EXPECT_EQ(observed_count, static_cast<int>(expected_by_image.size()))
+            << "Board localization unavailable in " << variant.name;
+    }
+}
+
+TEST_F(DetectorsTest, GameClockCalibrationRoiRegimes) {
+    const auto dataset_dir = std::filesystem::path(assets_dir_) / "sample_clock_changes";
+    const auto labels_path = dataset_dir / "labels.jsonl";
+    std::ifstream labels(labels_path);
+    if (!labels.is_open()) GTEST_SKIP() << "Labels not found: " << labels_path.string();
+
+    std::ofstream calibration_output;
+    if (const char* output_path = std::getenv("CTA_CLOCK_CALIBRATION_FILE");
+        output_path != nullptr && *output_path != '\0') {
+        calibration_output.open(output_path, std::ios::out | std::ios::app);
+        ASSERT_TRUE(calibration_output.is_open())
+            << "Could not append clock calibration output: " << output_path;
+    }
+
+    std::map<std::string, nlohmann::json> expected_by_image;
+    std::string line;
+    while (std::getline(labels, line)) {
+        if (line.empty()) continue;
+        const auto label = nlohmann::json::parse(line);
+        expected_by_image.emplace(label.at("image").get<std::string>(), label);
+    }
+
+    const std::array<ClockRoiCalibrationVariant, 7> variants{{
+        {"roi_native", "roi_geometry", 0.00, 0.00, 0.70},
+        {"roi_shift_left", "localization_error", -0.08, 0.00, 0.70},
+        {"roi_shift_right", "localization_error", 0.08, 0.00, 0.70},
+        {"roi_shift_up", "localization_error", 0.00, -0.08, 0.70},
+        {"roi_shift_down", "localization_error", 0.00, 0.08, 0.70},
+        {"roi_expanded_left", "roi_margin", 0.00, 0.00, 0.62},
+        {"roi_narrow_left", "roi_margin", 0.00, 0.00, 0.78},
+    }};
+
+    std::size_t observation_count = 0;
+    for (const auto& variant : variants) {
+        int activity_correct = 0;
+        int complete_correct = 0;
+        int observed_count = 0;
+        for (const auto& [image_name, expected] : expected_by_image) {
+            const cv::Mat image = cv::imread((dataset_dir / image_name).string());
+            ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
+            const BoardGeometry geometry = locate_board(image, board_);
+            cv::Mat top_roi;
+            cv::Mat bottom_roi;
+            if (!clock_rois_for_calibration(
+                    image, geometry, variant, top_roi, bottom_roi)) {
+                continue;
+            }
+
+            const ClockState state = extract_clocks_from_rois(top_roi, bottom_roi);
+            ++observed_count;
+            const bool activity_ok = state.active_player ==
+                expected.at("expected_active").get<std::string>();
+            const bool white_ok = state.white_time ==
+                expected.at("expected_white").get<std::string>();
+            const bool black_ok = state.black_time ==
+                expected.at("expected_black").get<std::string>();
+            activity_correct += activity_ok ? 1 : 0;
+            complete_correct += (white_ok && black_ok) ? 1 : 0;
+
+            const auto white_ocr = diagnose_clock_time_from_roi(
+                bottom_roi, state.active_player == "white");
+            const auto black_ocr = diagnose_clock_time_from_roi(
+                top_roi, state.active_player == "black");
+            write_clock_calibration_observation(
+                calibration_output, image_name, "active_side", true, activity_ok,
+                variant.name, variant.condition, "native", state, expected,
+                nullptr, variant.name, variant.geometry_offset_x_squares,
+                variant.geometry_offset_y_squares, variant.left_edge_ratio);
+            write_clock_calibration_observation(
+                calibration_output, image_name, "white_ocr", true, white_ok,
+                variant.name, variant.condition, "native", state, expected,
+                &white_ocr, variant.name, variant.geometry_offset_x_squares,
+                variant.geometry_offset_y_squares, variant.left_edge_ratio);
+            write_clock_calibration_observation(
+                calibration_output, image_name, "black_ocr", true, black_ok,
+                variant.name, variant.condition, "native", state, expected,
+                &black_ocr, variant.name, variant.geometry_offset_x_squares,
+                variant.geometry_offset_y_squares, variant.left_edge_ratio);
+            observation_count += 3;
+        }
+
+        std::cout << "  Clock ROI regime " << variant.name
+                  << ": activity=" << activity_correct << "/" << observed_count
+                  << " complete_ocr=" << complete_correct << "/" << observed_count
+                  << "\n";
+        EXPECT_EQ(observed_count, static_cast<int>(expected_by_image.size()))
+            << "ROI unavailable in " << variant.name;
+    }
+    EXPECT_EQ(observation_count, expected_by_image.size() * variants.size() * 3u);
 }
 
 #endif // TEST_GAME_CLOCKS
@@ -1927,6 +3545,7 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
+    induce_expected_failure_for_diagnostics(expected_moves);
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
 

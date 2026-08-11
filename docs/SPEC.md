@@ -18,6 +18,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | BL-4 | Early passes may downscale frames for speed; the final pass must resolve full-resolution board coordinates. |
 | BL-5 | Output must include top-left board coordinates, board dimensions, and per-square dimensions. |
 | BL-6 | Localization must expose the final correlation, selected scale, and normalized geometry confidence for diagnostics; geometry confidence is observational until calibrated. |
+| BL-7 | Periodic full-frame probes must compare anchored and recent geometry; large position/size drift must reject the candidate before square evidence is evaluated. |
 
 ### 1.2 Visual Scan And Reduction
 
@@ -46,6 +47,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | GC-2 | Active player detection must use clock brightness as a cheap turn gate before OCR. |
 | GC-3 | Clock OCR must use the built-in component-shape and Hu Moments digit recognizers. Tesseract is not required. |
 | GC-4 | Clock OCR must cache unchanged clock ROIs and OCR only the side that changed for accepted moves when possible. |
+| GC-5 | Uncertain clock readings must preserve provenance and may be repaired only by repeated plausible settled readings; disagreement remains missing or rejected. |
 
 ### 1.4 Legal Move Verification
 
@@ -59,6 +61,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | VM-6 | Promotion moves must preserve five-character UCI strings and classify the promoted piece when possible, with queen as the default fallback. |
 | VM-7 | Clock records must distinguish a directly observed moved clock from a missing or inherited value; replayed analysis branches must not fabricate new OCR observations. |
 | VM-8 | Stable analysis branches must be validated from their root FEN and legal transitions, with visual confidence retained for later replay/rebase decisions. |
+| VM-9 | Clock evidence may veto a move only after a plausible direct reading and at least two sampled, observed, agreeing temporal readings. |
 
 ### 1.5 History Reverts
 
@@ -91,7 +94,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | NF-5 | NPP operations may accelerate compatible grayscale `absdiff` or device resize paths, but CPU move scoring remains the deterministic reference. |
 | NF-6 | The extraction pipeline must use the map-reduce chunking model; the old `FramePrefetcher` model is removed. |
 | NF-7 | Per-frame allocations should be minimized with scratch buffers, reusable Mats, and GPU buffers where applicable. |
-| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, structured JSONL/TSV output, failure bundles, mapper comparison, detector calibration, and replay-trace comparison. |
+| NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, structured JSONL/TSV output, failure bundles, mapper/source/replay comparison, intentional failure probes, detector calibration, and replay-trace comparison. |
 | NF-9 | Integration tests should derive expected UCI moves from sample PGN files instead of separate golden JSON files. |
 | NF-10 | Production extraction must not branch on fixture names, expected moves, expected clocks, or asset paths; the test runner must reject such overrides. |
 
@@ -159,12 +162,12 @@ Important environment toggles:
 | `CTA_REVERT_EXHAUSTIVE_FALLBACK` | Enable the slower reference revert lookup |
 | `CTA_DIAGNOSTIC_FILE` | Write structured reducer observations as JSONL |
 | `CTA_DIAGNOSTIC_FRAME_DIR`, `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS` | Save sampled diagnostic frame, board, and clock-ROI artifacts |
-| `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set diagnostic geometry recheck cadence, clamped to 1-30 seconds |
+| `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set extraction geometry probe cadence, clamped to 1-30 seconds |
 | `CTA_REPLAY_OBSERVATIONS` | Use a saved compact observation trace and artifacts instead of decoding source video |
 | `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
 | `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
 
-Detector calibration is deliberately separate from production extraction. Labeled JSONL rows may include `detector`, `component`, `truth`, `prediction`, `confidence`, `transition_id`, `regime`, `condition`, and `case`. The report provides frame/transition confusion metrics, confidence bins, threshold sweeps, representative errors, and advisory operating points. The repository manifests are seed data, not acceptance thresholds.
+Detector calibration is deliberately separate from production extraction. Labeled JSONL rows may include `detector`, `component`, `truth`, `prediction`, `confidence`, `transition_id`, `regime`, `condition`, and `case`. The report provides frame/transition confusion metrics, confidence bins, threshold sweeps, representative errors, geometry uncertainty, clock OCR/provenance, temporal metrics, and advisory operating points. Test-side outputs are available through `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`; the repository manifests are seed data, not acceptance thresholds.
 
 ## 7. Accuracy Contract
 
@@ -174,5 +177,6 @@ The analyzer only emits moves that survive all required validation layers:
 2. The visual diff supports the legal move.
 3. Yellow highlights confirm the origin and destination when required.
 4. Hover-box checks do not indicate a mid-drag frame, unless the move is already strongly registered.
-5. Clock turn state matches the expected side to move when available.
-6. Revert checks can roll the game state back before new analysis-line moves are accepted.
+5. Clock turn state matches the expected side to move when available; clock vetoes require calibrated temporal reliability.
+6. Geometry probes do not mark the candidate as `relocalize_required`.
+7. Revert checks can roll the game state back before new analysis-line moves are accepted.

@@ -47,11 +47,11 @@ python tests\run_tests.py --no-build ^
 
 On Windows `cmd.exe`, use `^` for line continuation instead of `\`.
 
-For a failed integration test, inspect the automatically generated diagnostic bundle under the selected build directory's `diagnostics` folder. In addition to JSONL and TSV data, the bundle can contain SVG detector overlays and an HTML contact sheet. Use `--replay-bundle` to rerun the reducer from `observations.jsonl`, or `--compare-replay-traces` to compare source and replay semantics without opening the original video.
+For a failed integration test, inspect the automatically generated diagnostic bundle under the selected build directory's `diagnostics` folder. In addition to JSONL and TSV data, the bundle can contain SVG detector overlays and an HTML contact sheet. A `relocalize_required` geometry decision means the frame was rejected because the anchored board geometry drifted beyond the stability guard. Use `--replay-bundle` to rerun the reducer from `observations.jsonl`, or `--compare-replay-traces` to compare source and replay semantics without opening the original video.
 
 ## Clocks are missing or implausible
 
-Clock OCR is intentionally conservative. The active-clock brightness gate runs before digit recognition, unchanged ROIs use the OCR cache, and replayed variations can inherit a branch-point clock without creating a false new observation.
+Clock OCR is intentionally conservative. The active-clock brightness gate runs before digit recognition, unchanged ROIs use the OCR cache, and replayed variations can inherit a branch-point clock without creating a false new observation. Temporal repair requires repeated plausible settled readings; inspect `clock_provenance`, `clock_temporal_*`, and `clock_decision` before treating a reading as direct evidence.
 
 Enable clock diagnostics for a focused test:
 
@@ -76,7 +76,19 @@ If an integration test fails, the test runner automatically creates a sibling `*
 python tests\run_tests.py --replay-bundle build_tests\diagnostics\first_divergence_bundle
 ```
 
-Use `--compare-replay-traces source.jsonl replay.jsonl` to compare observation IDs, mapper provenance, board hashes, and reducer events between a source run and an observation replay.
+Use `--compare-replay-traces source.jsonl replay.jsonl` to compare observation IDs, mapper provenance, board hashes, and reducer events between a source run and an observation replay. Use `--compare-source-runs source_a.jsonl source_b.jsonl` to compare repeated source-video runs; it ignores only run-specific diagnostic artifact paths.
+
+To validate the first-divergence reporting path intentionally, run the focused
+integration test with `--induce-failure`. The command returns success only if
+the test-only probe creates a failure bundle; it does not alter production
+extraction behavior.
+
+To compare repeated source-video diagnostics, ignoring only run-local artifact
+paths, use:
+
+```cmd
+python tests\run_tests.py --compare-source-runs source_a.jsonl source_b.jsonl
+```
 
 To inspect detector quality independently of move extraction, run:
 

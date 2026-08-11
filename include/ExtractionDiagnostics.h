@@ -72,6 +72,7 @@ struct YellowMeasurement {
     std::array<std::array<double, 3>, 4> corner_bgr{};
     std::array<double, 4> corner_edge_density{};
     double score = 0.0;
+    double geometry_uncertainty = 1.0;
 };
 
 // Common detector-result envelope. Confidence remains -1 until that detector
@@ -94,6 +95,7 @@ struct HoverMeasurement {
     double strongest_edge = 0.0;
     std::size_t visible_edges = 0;
     bool detected = false;
+    double geometry_uncertainty = 1.0;
 };
 
 struct Evidence {
@@ -121,6 +123,7 @@ struct Evidence {
     double localization_score = 0.0;
     double localization_scale = 0.0;
     double localization_confidence = 0.0;
+    double geometry_uncertainty = 1.0;
     std::vector<double> board_hash;
     bool geometry_checked = false;
     bool geometry_anomaly = false;
@@ -175,6 +178,14 @@ struct Evidence {
     double clock_bottom_bright_ratio = 0.0;
     double clock_bright_ratio_delta = 0.0;
     std::string clock_decision;
+    bool clock_temporal_checked = false;
+    std::size_t clock_temporal_sample_count = 0;
+    std::size_t clock_temporal_observed_count = 0;
+    std::size_t clock_temporal_agreement_count = 0;
+    std::string clock_temporal_decision;
+    std::string clock_provenance;
+    std::size_t clock_temporal_plausible_count = 0;
+    bool clock_temporal_reconciled = false;
     std::string settle_decision;
     std::string active_clock_player;
     std::string moved_clock;

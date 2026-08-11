@@ -52,6 +52,12 @@ def parse_args():
         help="Compare source-run and observation-replay diagnostic JSONL files.",
     )
     parser.add_argument(
+        "--compare-source-runs",
+        nargs=2,
+        metavar=("SOURCE_JSONL", "REPEAT_JSONL"),
+        help="Compare two repeated source-run diagnostic JSONL files.",
+    )
+    parser.add_argument(
         "--compare-mapper-runs",
         nargs=2,
         metavar=("SEQUENTIAL_JSONL", "PARALLEL_JSONL"),
@@ -65,6 +71,23 @@ def parse_args():
     parser.add_argument(
         "--calibration-debug-dir",
         help="Copy representative labeled-error images into this directory.",
+    )
+    parser.add_argument(
+        "--induce-failure",
+        action="store_true",
+        help="Use the test-only failure probe and require a first-divergence bundle.",
+    )
+    parser.add_argument(
+        "--clock-calibration-output",
+        help="Write test-side clock calibration observations to JSONL.",
+    )
+    parser.add_argument(
+        "--yellow-calibration-output",
+        help="Write test-side yellow-square calibration observations to JSONL.",
+    )
+    parser.add_argument(
+        "--hover-calibration-output",
+        help="Write test-side hover/animation calibration observations to JSONL.",
     )
     parser.add_argument("--trace-start", type=float, help="First timestamp to trace.")
     parser.add_argument("--trace-end", type=float, help="Last timestamp to trace.")
@@ -379,6 +402,559 @@ def _transition_labels(labels):
     return collapsed
 
 
+def _clock_digits(value):
+    """Keep only displayed digits so 1:30:07 and OCR punctuation are comparable."""
+    return "".join(character for character in str(value or "")
+                   if character.isdigit())
+
+
+def _clock_ocr_metrics(labels):
+    """Measure per-digit and complete-reading OCR accuracy with provenance."""
+    candidate_rows = [label for label in labels
+                      if str(label.get("component", "")) in {"white_ocr", "black_ocr"}]
+    # A label-only manifest has expected values but no selected reading. Keep
+    # those rows visible as unmeasured instead of counting a missing field as
+    # an OCR failure.
+    rows = [label for label in candidate_rows if "selected_reading" in label]
+    digit_correct = 0
+    digit_total = 0
+    complete_correct = 0
+    segmented_count = 0
+    rows_with_segments = 0
+    rows_with_selected_reading = 0
+    roi_rows = [label for label in candidate_rows if "roi_variant" in label]
+    roi_variant_counts = Counter(
+        str(label.get("roi_variant", "unspecified")) for label in roi_rows
+    )
+    roi_offsets = {
+        field: [
+            float(label[field])
+            for label in roi_rows
+            if isinstance(label.get(field), (int, float))
+        ]
+        for field in (
+            "roi_geometry_offset_x_squares",
+            "roi_geometry_offset_y_squares",
+            "roi_left_edge_ratio",
+        )
+    }
+    for label in rows:
+        component = str(label.get("component"))
+        expected = label.get("expected_white" if component == "white_ocr"
+                            else "expected_black", "")
+        selected = label.get("selected_reading", "")
+        expected_digits = _clock_digits(expected)
+        selected_digits = _clock_digits(selected)
+        if selected:
+            rows_with_selected_reading += 1
+        if selected == expected:
+            complete_correct += 1
+        digit_total += max(len(expected_digits), len(selected_digits))
+        digit_correct += sum(left == right for left, right in zip(
+            expected_digits, selected_digits))
+        segments = label.get("segmented_digits", [])
+        if isinstance(segments, list):
+            segmented_count += len(segments)
+            if segments:
+                rows_with_segments += 1
+
+    rate = lambda numerator, denominator: numerator / denominator if denominator else None
+    return {
+        "rows": len(rows),
+        "unmeasured_rows": len(candidate_rows) - len(rows),
+        "digit_correct": digit_correct,
+        "digit_total": digit_total,
+        "digit_accuracy": rate(digit_correct, digit_total),
+        "complete_correct": complete_correct,
+        "complete_total": len(rows),
+        "complete_string_accuracy": rate(complete_correct, len(rows)),
+        "rows_with_selected_reading": rows_with_selected_reading,
+        "rows_with_segments": rows_with_segments,
+        "segmented_digit_count": segmented_count,
+        "roi_geometry": {
+            "rows": len(roi_rows),
+            "variant_counts": dict(sorted(roi_variant_counts.items())),
+            "offset_x_squares": _numeric_summary(roi_offsets[
+                "roi_geometry_offset_x_squares"]),
+            "offset_y_squares": _numeric_summary(roi_offsets[
+                "roi_geometry_offset_y_squares"]),
+            "left_edge_ratio": _numeric_summary(roi_offsets[
+                "roi_left_edge_ratio"]),
+        },
+    }
+
+
+def _clock_roi_calibration_metrics(labels):
+    """Summarize production ROI and controlled geometry perturbations separately."""
+    roi_labels = [label for label in labels
+                  if str(label.get("component", "")) in {"white_ocr", "black_ocr"}
+                  and str(label.get("condition", "")) in {
+                      "roi_geometry", "localization_error", "roi_margin"}
+                  and label.get("roi_variant")]
+    variants = {}
+    conditions = {}
+    for label in roi_labels:
+        variants.setdefault(str(label["roi_variant"]), []).append(label)
+        conditions.setdefault(str(label.get("condition")), []).append(label)
+
+    def complete_accuracy(metrics):
+        value = metrics["complete_string_accuracy"]
+        return -1.0 if value is None else value
+
+    variant_metrics = {
+        variant: _clock_ocr_metrics(variant_labels)
+        for variant, variant_labels in sorted(variants.items())
+    }
+    condition_metrics = {
+        condition: _clock_ocr_metrics(condition_labels)
+        for condition, condition_labels in sorted(conditions.items())
+    }
+    baseline_variant = "roi_native" if "roi_native" in variant_metrics else None
+    baseline = variant_metrics.get(baseline_variant) if baseline_variant else None
+    required_conditions = {"roi_geometry", "localization_error", "roi_margin"}
+    observed_conditions = set(condition_metrics)
+    return {
+        "rows": len(roi_labels),
+        "variants": variant_metrics,
+        "conditions": condition_metrics,
+        "baseline_variant": baseline_variant,
+        "baseline_complete_string_accuracy": None
+        if baseline is None else baseline["complete_string_accuracy"],
+        "reliability_target": {
+            "minimum_complete_string_accuracy": 0.95,
+            "minimum_rows": 6,
+        },
+        "status": "pass" if baseline is not None and
+        baseline["complete_total"] >= 6 and complete_accuracy(baseline) >= 0.95
+        else "insufficient_data" if baseline is None or
+        baseline["complete_total"] < 6 else "advisory",
+        "condition_coverage": {
+            "required": sorted(required_conditions),
+            "observed": sorted(observed_conditions),
+            "missing": sorted(required_conditions - observed_conditions),
+            "status": "complete" if required_conditions <= observed_conditions
+            else "insufficient_data",
+        },
+    }
+
+
+def _clock_quality_metrics(labels):
+    """Keep clock quality targets separate by their downstream role."""
+    active_rows = [label for label in labels
+                   if str(label.get("component", "")) == "active_side"]
+    ocr_rows = [label for label in labels
+                if str(label.get("component", "")) in {"white_ocr", "black_ocr"}]
+
+    active_metrics = _calibration_metrics(active_rows)
+    complete_rows = []
+    for label in ocr_rows:
+        if "selected_reading" not in label:
+            continue
+        component = str(label.get("component", ""))
+        expected = label.get(
+            "expected_white" if component == "white_ocr" else "expected_black", "")
+        selected = label.get("selected_reading", "")
+        complete_rows.append({
+            **label,
+            "prediction": "positive" if selected == expected and selected else "negative",
+        })
+    complete_metrics = _calibration_metrics(complete_rows)
+
+    grouped = {}
+    for label in labels:
+        component = str(label.get("component", ""))
+        if component not in {"active_side", "white_ocr", "black_ocr"}:
+            continue
+        group_key = (
+            str(label.get("image", "")),
+            str(label.get("regime", "unspecified")),
+            str(label.get("condition", label.get("conditions", ""))),
+            str(label.get("preprocessing_variant", "")),
+            str(label.get("roi_variant", "")),
+        )
+        grouped.setdefault(group_key, {})[component] = label
+
+    usable_rows = []
+    for components in grouped.values():
+        active = components.get("active_side")
+        white = components.get("white_ocr")
+        black = components.get("black_ocr")
+        if not active or not white or not black:
+            continue
+        if any("selected_reading" not in row for row in (white, black)):
+            continue
+
+        truth_values = [_calibration_label(row.get("truth"))
+                        for row in (active, white, black)]
+        truth = "positive" if all(value == "positive" for value in truth_values) \
+            else "negative" if all(value in {"positive", "negative"} for value in truth_values) \
+            and "negative" in truth_values else "uncertain"
+        active_ok = _calibration_label(active.get("prediction")) == "positive"
+        white_ok = white.get("selected_reading", "") == white.get("expected_white", "")
+        black_ok = black.get("selected_reading", "") == black.get("expected_black", "")
+        usable_rows.append({
+            "truth": truth,
+            "prediction": "positive" if active_ok and white_ok and black_ok else "negative",
+        })
+
+    usable_metrics = _calibration_metrics(usable_rows)
+    target_specs = {
+        "active_side": {
+            "metrics": active_metrics,
+            "target": {
+                "minimum_labeled": 30,
+                "precision_min": 0.98,
+                "recall_min": 0.98,
+                "false_positive_rate_max": 0.01,
+            },
+        },
+        "complete_ocr": {
+            "metrics": complete_metrics,
+            "target": {
+                "minimum_labeled": 60,
+                "precision_min": 0.95,
+                "recall_min": 0.95,
+                "false_positive_rate_max": 0.02,
+            },
+        },
+        "usable_clock": {
+            "metrics": usable_metrics,
+            "target": {
+                "minimum_labeled": 30,
+                "precision_min": 0.98,
+                "recall_min": 0.95,
+                "false_positive_rate_max": 0.02,
+            },
+        },
+    }
+    return {
+        name: {
+            "metrics": spec["metrics"],
+            "evaluation": _target_evaluation(spec["metrics"], spec["target"]),
+        }
+        for name, spec in target_specs.items()
+    }
+
+
+def _yellow_measurement_metrics(labels):
+    """Summarize endpoint scores and perturbation metadata for yellow labels."""
+    yellow_labels = [label for label in labels if label.get("detector") == "yellow"]
+    def numeric_values(field, rows=yellow_labels):
+        values = []
+        for row in rows:
+            try:
+                values.append(float(row[field]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return values
+
+    regimes = {}
+    for label in yellow_labels:
+        regimes.setdefault(str(label.get("regime", "unspecified")), []).append(label)
+    regime_measurements = {}
+    for regime, regime_labels in sorted(regimes.items()):
+        regime_measurements[regime] = {
+            "rows": len(regime_labels),
+            "geometry_unavailable": sum(
+                label.get("geometry_available") is False for label in regime_labels),
+            "corner_fraction": numeric_values("corner_fraction", regime_labels),
+            "geometry_offset_x": numeric_values("geometry_offset_x", regime_labels),
+            "geometry_offset_y": numeric_values("geometry_offset_y", regime_labels),
+            "origin_score": numeric_values("origin_score", regime_labels),
+            "destination_score": numeric_values("destination_score", regime_labels),
+            "pair_score": numeric_values("pair_score", regime_labels),
+        }
+    endpoint_metrics = {
+        component: _calibration_metrics([
+            label for label in yellow_labels
+            if str(label.get("component", "")) == component
+        ])
+        for component in ("origin", "destination", "paired")
+    }
+    required_categories = {
+        "capture", "check", "promotion", "quiet", "double_pawn"
+    }
+    observed_categories = {
+        str(label.get("case", "unspecified"))
+        for label in yellow_labels
+        if str(label.get("case", "unspecified")) != "unspecified"
+    }
+    category_sources = Counter(
+        str(label.get("category_source", "labeled_frame"))
+        for label in yellow_labels
+        if str(label.get("case", "unspecified")) != "unspecified"
+    )
+    occupancy_fields = {
+        field: Counter(
+            str(label.get(field)) for label in yellow_labels
+            if label.get(field) not in (None, "", "unknown")
+        )
+        for field in (
+            "pre_move_destination_occupancy",
+            "post_move_origin_occupancy",
+            "post_move_destination_occupancy",
+        )
+    }
+    adjacent_scores = [
+        float(adjacent.get("score"))
+        for label in yellow_labels
+        for adjacent in (label.get("adjacent_highlight_scores", []) or [])
+        if isinstance(adjacent, dict) and
+        isinstance(adjacent.get("score"), (int, float))
+    ]
+    edge_density = {
+        field: [float(label[field]) for label in yellow_labels
+                if isinstance(label.get(field), (int, float))]
+        for field in ("origin_edge_density", "destination_edge_density")
+    }
+    paired_labels = [label for label in yellow_labels
+                     if str(label.get("component", "")) == "paired"]
+    temporal_labels = [label for label in yellow_labels
+                       if str(label.get("component", "")) == "temporal_pair"]
+    baseline_comparison = {}
+    for method, field in (
+        ("fixed", "score"),
+        ("board_relative", "board_relative_score"),
+        ("local_normalized", "local_normalized_score"),
+    ):
+        measured = []
+        for label in paired_labels:
+            try:
+                score = float(label[field])
+            except (KeyError, TypeError, ValueError):
+                continue
+            measured.append({**label, "score": score})
+        baseline_comparison[method] = {
+            "field": field,
+            "rows": len(measured),
+            "threshold_sweep": _threshold_sweep(measured),
+            "robust_operating_point": _robust_operating_point(
+                measured, DETECTOR_ACCEPTANCE_TARGETS["yellow"]),
+        }
+
+    threshold_grid = []
+    endpoint_values = list(range(15, 66, 5))
+    pair_values = list(range(40, 121, 5))
+    for endpoint_threshold in endpoint_values:
+        for pair_threshold in pair_values:
+            threshold_labels = []
+            for label in paired_labels:
+                try:
+                    origin_score = float(label["origin_score"])
+                    destination_score = float(label["destination_score"])
+                    pair_score = float(label["pair_score"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                accepted = origin_score >= endpoint_threshold and \
+                    destination_score >= endpoint_threshold and \
+                    pair_score >= pair_threshold
+                threshold_labels.append({
+                    **label,
+                    "prediction": "positive" if accepted else "negative",
+                })
+            metrics = _calibration_metrics(threshold_labels)
+            target = DETECTOR_ACCEPTANCE_TARGETS["yellow"]
+            threshold_grid.append({
+                "endpoint_threshold": endpoint_threshold,
+                "pair_threshold": pair_threshold,
+                "metrics": metrics,
+                "meets_target": metrics["labeled"] >= target["minimum_labeled"] and
+                metrics["precision"] is not None and metrics["precision"] >= target["precision_min"] and
+                metrics["recall"] is not None and metrics["recall"] >= target["recall_min"] and
+                metrics["false_positive_rate"] is not None and
+                metrics["false_positive_rate"] <= target["false_positive_rate_max"],
+            })
+
+    def threshold_rank(candidate):
+        metrics = candidate["metrics"]
+        recall = metrics["recall"] if metrics["recall"] is not None else -1.0
+        false_positive_rate = metrics["false_positive_rate"]
+        false_positive_rate = false_positive_rate if false_positive_rate is not None else 1.0
+        precision = metrics["precision"] if metrics["precision"] is not None else -1.0
+        return (
+            1 if candidate["meets_target"] else 0,
+            recall - false_positive_rate,
+            precision,
+            recall,
+            -candidate["endpoint_threshold"],
+            -candidate["pair_threshold"],
+        )
+
+    threshold_selection = max(threshold_grid, key=threshold_rank) if threshold_grid else None
+
+    # Edge density is recorded at the same corners as yellowness.  Evaluate
+    # it as an explicit minimum pair-edge term so future threshold changes can
+    # distinguish useful piece/outline evidence from color-only evidence.
+    edge_density_grid = []
+    edge_density_values = [round(index * 0.005, 3) for index in range(0, 41)]
+    for minimum_pair_edge_density in edge_density_values:
+        edge_labels = []
+        for label in paired_labels:
+            try:
+                pair_edge_density = float(label["origin_edge_density"]) + \
+                    float(label["destination_edge_density"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            edge_labels.append({
+                **label,
+                "prediction": "positive"
+                if pair_edge_density >= minimum_pair_edge_density else "negative",
+            })
+        metrics = _calibration_metrics(edge_labels)
+        target = DETECTOR_ACCEPTANCE_TARGETS["yellow"]
+        edge_density_grid.append({
+            "minimum_pair_edge_density": minimum_pair_edge_density,
+            "metrics": metrics,
+            "meets_target": metrics["labeled"] >= target["minimum_labeled"] and
+            metrics["precision"] is not None and metrics["precision"] >= target["precision_min"] and
+            metrics["recall"] is not None and metrics["recall"] >= target["recall_min"] and
+            metrics["false_positive_rate"] is not None and
+            metrics["false_positive_rate"] <= target["false_positive_rate_max"],
+        })
+
+    def edge_density_rank(candidate):
+        metrics = candidate["metrics"]
+        return (
+            1 if candidate["meets_target"] else 0,
+            metrics["recall"] if metrics["recall"] is not None else -1.0,
+            metrics["precision"] if metrics["precision"] is not None else -1.0,
+            -(metrics["false_positive_rate"]
+              if metrics["false_positive_rate"] is not None else 1.0),
+            -candidate["minimum_pair_edge_density"],
+        )
+
+    edge_density_selection = max(
+        edge_density_grid, key=edge_density_rank) if edge_density_grid else None
+    corner_fractions = sorted({
+        float(label["corner_fraction"])
+        for label in yellow_labels
+        if isinstance(label.get("corner_fraction"), (int, float))
+    })
+    return {
+        "rows": len(yellow_labels),
+        "regimes": regime_measurements,
+        "corner_sampling": {
+            "fractions": corner_fractions,
+            "count": len(corner_fractions),
+            "status": "measured" if len(corner_fractions) >= 5
+            else "insufficient_data",
+        },
+        "endpoint_metrics": endpoint_metrics,
+        "baseline_comparison": baseline_comparison,
+        "paired_endpoint_target": _target_evaluation(
+            endpoint_metrics["paired"],
+            DETECTOR_ACCEPTANCE_TARGETS["yellow"],
+        ),
+        "category_coverage": {
+            "required": sorted(required_categories),
+            "observed": sorted(observed_categories),
+            "missing": sorted(required_categories - observed_categories),
+            "sources": dict(sorted(category_sources.items())),
+            "status": "complete" if required_categories <= observed_categories
+            else "insufficient_data",
+        },
+        "occupancy": {
+            field: dict(sorted(counts.items()))
+            for field, counts in occupancy_fields.items()
+        },
+        "adjacent_highlights": {
+            "score_count": len(adjacent_scores),
+            "score_summary": _numeric_summary(adjacent_scores),
+        },
+        "edge_density": {
+            field: _numeric_summary(values)
+            for field, values in edge_density.items()
+        },
+        "threshold_grid": {
+            "endpoint_values": endpoint_values,
+            "pair_values": pair_values,
+            "candidate_count": len(threshold_grid),
+            "selected": threshold_selection,
+            "status": "pass" if threshold_selection and
+            threshold_selection["meets_target"] else "advisory",
+        },
+        "edge_density_grid": {
+            "minimum_pair_edge_density_values": edge_density_values,
+            "candidate_count": len(edge_density_grid),
+            "selected": edge_density_selection,
+            # The selected point is deliberately advisory while category and
+            # independent-negative coverage are incomplete.
+            "status": "advisory" if edge_density_selection else "insufficient_data",
+        },
+        "temporal_calibration": {
+            "rows": len(temporal_labels),
+            "metrics": _calibration_metrics(temporal_labels),
+            "window_seconds": _numeric_summary([
+                float(label["temporal_window_seconds"])
+                for label in temporal_labels
+                if isinstance(label.get("temporal_window_seconds"), (int, float))
+            ]),
+            "sample_count": _numeric_summary([
+                float(label["temporal_sample_count"])
+                for label in temporal_labels
+                if isinstance(label.get("temporal_sample_count"), (int, float))
+            ]),
+            "pair_pass_count": _numeric_summary([
+                float(label["temporal_pair_pass_count"])
+                for label in temporal_labels
+                if isinstance(label.get("temporal_pair_pass_count"), (int, float))
+            ]),
+            "status": "pass" if temporal_labels and all(
+                _calibration_label(label.get("prediction")) ==
+                _calibration_label(label.get("truth"))
+                for label in temporal_labels
+            ) else "insufficient_data",
+        },
+    }
+
+
+def _hover_measurement_metrics(labels):
+    """Separate settled-board false positives from mid-drag detections."""
+    hover_labels = [label for label in labels if label.get("detector") == "hover"]
+    settled_labels = [label for label in hover_labels
+                      if str(label.get("condition", "")) in {"settled_board", "cursor_overlay"}]
+    mid_drag_labels = [label for label in hover_labels
+                       if str(label.get("condition", "")) in {
+                           "fast_animation", "slow_animation", "partial_movement"}]
+    transition_labels = [label for label in hover_labels
+                         if str(label.get("condition", "")) == "transition_level"]
+    settle_delays = [float(label["settle_delay_seconds"])
+                     for label in transition_labels
+                     if isinstance(label.get("settle_delay_seconds"), (int, float))]
+    return {
+        "rows": len(hover_labels),
+        "settled_board": _calibration_metrics(settled_labels),
+        "mid_drag": _calibration_metrics(mid_drag_labels),
+        "transition_level": {
+            "rows": len(transition_labels),
+            "metrics": _calibration_metrics(transition_labels),
+            "settle_window_seconds": _numeric_summary([
+                float(label["settle_window_seconds"])
+                for label in transition_labels
+                if isinstance(label.get("settle_window_seconds"), (int, float))
+            ]),
+            "settle_delay_seconds": _numeric_summary(settle_delays),
+            "premature_settle_count": sum(
+                bool(label.get("premature_settle")) for label in transition_labels
+            ),
+            "status": "pass" if transition_labels and
+            all(_calibration_label(label.get("prediction")) == "positive"
+                and not label.get("premature_settle")
+                for label in transition_labels) else "insufficient_data",
+        },
+        "settled_board_false_rejection_count": sum(
+            _calibration_label(label.get("truth")) == "negative" and
+            _calibration_label(label.get("prediction")) == "positive"
+            for label in settled_labels
+        ),
+        "true_mid_drag_rejection_count": sum(
+            _calibration_label(label.get("truth")) == "positive" and
+            _calibration_label(label.get("prediction")) == "positive"
+            for label in mid_drag_labels
+        ),
+    }
+
+
 CALIBRATION_PARAMETERS = {
     "version": 2,
     "confidence_bins": 10,
@@ -406,6 +982,16 @@ DETECTOR_ACCEPTANCE_TARGETS = {
               "recall_min": 0.95, "false_positive_rate_max": 0.03},
     "geometry": {"minimum_labeled": 30, "precision_min": 0.98,
                  "recall_min": 0.98, "false_positive_rate_max": 0.01},
+}
+
+CLOCK_STRESS_CONDITIONS = {
+    "font_size",
+    "anti_aliasing",
+    "compression",
+    "brightness",
+    "low_time_formatting",
+    "separators",
+    "partial_changes",
 }
 
 
@@ -651,6 +1237,7 @@ def detector_calibration(records, source_dir=None, debug_dir=None):
         conditions = {}
         components = {}
         cases = {}
+        preprocessing_variants = {}
         for label in labels:
             regimes.setdefault(str(label.get("regime", "unspecified")), []).append(label)
             for condition in _label_conditions(label):
@@ -659,6 +1246,10 @@ def detector_calibration(records, source_dir=None, debug_dir=None):
             components.setdefault(component, []).append(label)
             case = str(label.get("case", "unspecified")).strip().lower() or "unspecified"
             cases.setdefault(case, []).append(label)
+            if detector == "clock":
+                variant = str(label.get("preprocessing_variant", "")).strip()
+                if variant:
+                    preprocessing_variants.setdefault(variant, []).append(label)
         frame_metrics = _calibration_metrics(labels)
         target = DETECTOR_ACCEPTANCE_TARGETS.get(
             detector,
@@ -667,6 +1258,23 @@ def detector_calibration(records, source_dir=None, debug_dir=None):
         )
         result["detectors"][detector] = {
             "frame": frame_metrics,
+            "ocr": _clock_ocr_metrics(labels) if detector == "clock" else None,
+            "roi_calibration": _clock_roi_calibration_metrics(labels)
+            if detector == "clock" else None,
+            "condition_coverage": {
+                "required": sorted(CLOCK_STRESS_CONDITIONS),
+                "observed": sorted(conditions),
+                "missing": sorted(CLOCK_STRESS_CONDITIONS - set(conditions)),
+                "status": "complete"
+                if CLOCK_STRESS_CONDITIONS <= set(conditions)
+                else "insufficient_data",
+            } if detector == "clock" else None,
+            "quality_targets": _clock_quality_metrics(labels)
+            if detector == "clock" else None,
+            "yellow_measurements": _yellow_measurement_metrics(labels)
+            if detector == "yellow" else None,
+            "hover_measurements": _hover_measurement_metrics(labels)
+            if detector == "hover" else None,
             "transition": _calibration_metrics(_transition_labels(labels)),
             "regimes": {
                 regime: _calibration_metrics(regime_labels)
@@ -687,6 +1295,10 @@ def detector_calibration(records, source_dir=None, debug_dir=None):
             "acceptance_target": _target_evaluation(frame_metrics, target),
             "threshold_sweep": _threshold_sweep(labels),
             "robust_operating_point": _robust_operating_point(labels, target),
+            "preprocessing_variants": {
+                variant: _clock_ocr_metrics(variant_labels)
+                for variant, variant_labels in sorted(preprocessing_variants.items())
+            },
             "representative_errors": _representative_errors(
                 labels, source_dir=source_dir, debug_dir=debug_dir),
         }
@@ -1020,6 +1632,111 @@ def compare_replay_trace_files(source_path, replay_path):
     return 0 if result["status"] == "match" else 1
 
 
+_SOURCE_RUN_IGNORED_KEYS = {
+    # Artifact locations intentionally differ between repeated runs. The
+    # image contents and detector evidence remain part of the comparison.
+    "diagnostic_frame_path",
+    "diagnostic_board_path",
+    "diagnostic_clock_top_path",
+    "diagnostic_clock_bottom_path",
+}
+
+
+def _canonical_source_record(value):
+    """Remove only run-local artifact paths before exact source comparison."""
+    if isinstance(value, dict):
+        return {
+            key: _canonical_source_record(item)
+            for key, item in value.items()
+            if key not in _SOURCE_RUN_IGNORED_KEYS
+        }
+    if isinstance(value, list):
+        return [_canonical_source_record(item) for item in value]
+    return value
+
+
+def _first_value_difference(source, repeat, path="$"):
+    """Return a stable path and values for the first JSON-like difference."""
+    if type(source) is not type(repeat):
+        return path, source, repeat
+    if isinstance(source, dict):
+        keys = sorted(set(source) | set(repeat))
+        for key in keys:
+            child_path = f"{path}.{key}"
+            if key not in source or key not in repeat:
+                return child_path, source.get(key), repeat.get(key)
+            difference = _first_value_difference(source[key], repeat[key], child_path)
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(source, list):
+        for index in range(max(len(source), len(repeat))):
+            child_path = f"{path}[{index}]"
+            if index >= len(source) or index >= len(repeat):
+                return child_path, source[index] if index < len(source) else None, \
+                    repeat[index] if index < len(repeat) else None
+            difference = _first_value_difference(source[index], repeat[index], child_path)
+            if difference is not None:
+                return difference
+        return None
+    return (path, source, repeat) if source != repeat else None
+
+
+def compare_source_runs(source_path, repeat_path):
+    """Compare repeated source runs while ignoring only diagnostic file paths."""
+    if isinstance(source_path, (str, Path)):
+        source_records, source_errors = read_diagnostic_records(source_path)
+        source_label = str(Path(source_path).resolve())
+    else:
+        source_records, source_errors = source_path, []
+        source_label = "<records>"
+    if isinstance(repeat_path, (str, Path)):
+        repeat_records, repeat_errors = read_diagnostic_records(repeat_path)
+        repeat_label = str(Path(repeat_path).resolve())
+    else:
+        repeat_records, repeat_errors = repeat_path, []
+        repeat_label = "<records>"
+
+    source_canonical = [_canonical_source_record(record) for record in source_records]
+    repeat_canonical = [_canonical_source_record(record) for record in repeat_records]
+    difference = _first_value_difference(source_canonical, repeat_canonical)
+    result = {
+        "status": "match",
+        "source": source_label,
+        "repeat": repeat_label,
+        "source_record_count": len(source_records),
+        "repeat_record_count": len(repeat_records),
+        "malformed_source_lines": source_errors,
+        "malformed_repeat_lines": repeat_errors,
+        "ignored_keys": sorted(_SOURCE_RUN_IGNORED_KEYS),
+        "first_divergence": None,
+    }
+    if source_errors or repeat_errors:
+        result["status"] = "invalid_trace"
+        result["first_divergence"] = {
+            "layer": "trace_contract",
+            "source_errors": source_errors,
+            "repeat_errors": repeat_errors,
+        }
+    elif difference is not None:
+        path, source_value, repeat_value = difference
+        result["status"] = "diverged"
+        result["first_divergence"] = {
+            "layer": "source_run_determinism",
+            "path": path,
+            "source": source_value,
+            "repeat": repeat_value,
+        }
+    return result
+
+
+def compare_source_run_files(source_path, repeat_path):
+    """Print a machine-readable repeated-source comparison summary."""
+    result = compare_source_runs(source_path, repeat_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["status"] == "match" else 1
+
+
 def compare_mapper_runs(sequential_path, parallel_path):
     """Compare mapper-only output while preserving the earliest pipeline layer.
 
@@ -1326,6 +2043,8 @@ def _record_evidence_strength(record):
         highlights = "missing"
     elif yellow_decision in {"passed", "accepted", "strong"}:
         highlights = "strong"
+    elif yellow_decision == "passed_temporal":
+        highlights = "weak"
     else:
         highlights = "weak"
 
@@ -1656,6 +2375,7 @@ def summarize_detector_quality(records):
         confidence for confidence in localization_confidences
         if 0.0 <= confidence <= 1.0
     ]
+    geometry_uncertainties = _numeric_evidence_values(records, "geometry_uncertainty")
     changed_square_counts = _numeric_evidence_values(records, "changed_square_count")
     yellow_records = [
         record for record in records
@@ -1669,6 +2389,10 @@ def summarize_detector_quality(records):
     clock_measurement_records = [
         record for record in records
         if (record.get("evidence", {}) or {}).get("clock_top_width", 0) > 0
+    ]
+    clock_temporal_records = [
+        record for record in records
+        if (record.get("evidence", {}) or {}).get("clock_temporal_checked")
     ]
     clock_top_bright_ratios = _numeric_evidence_values(
         clock_measurement_records, "clock_top_bright_ratio"
@@ -1796,6 +2520,19 @@ def summarize_detector_quality(records):
                 len((record.get("evidence", {}) or {}).get("clock_candidates", []) or [])
                 for record in records
             ),
+            "provenance_counts": _decision_counts(records, "clock_provenance"),
+            "temporal_checked_count": len(clock_temporal_records),
+            "temporal_decision_counts": _decision_counts(
+                records, "clock_temporal_decision"),
+            "temporal_sample_count": _numeric_summary(
+                _numeric_evidence_values(clock_temporal_records, "clock_temporal_sample_count")
+            ),
+            "temporal_observed_count": _numeric_summary(
+                _numeric_evidence_values(clock_temporal_records, "clock_temporal_observed_count")
+            ),
+            "temporal_agreement_count": _numeric_summary(
+                _numeric_evidence_values(clock_temporal_records, "clock_temporal_agreement_count")
+            ),
             "records_with_roi_measurements": len(clock_measurement_records),
             "top_bright_ratio": _numeric_summary(clock_top_bright_ratios),
             "bottom_bright_ratio": _numeric_summary(clock_bottom_bright_ratios),
@@ -1826,6 +2563,7 @@ def summarize_detector_quality(records):
         "localization": {
             "score_summary": _numeric_summary(measured_localization_scores),
             "confidence_summary": _numeric_summary(measured_localization_confidences),
+            "uncertainty_summary": _numeric_summary(geometry_uncertainties),
             "unavailable_count": unavailable_localization_count,
             "scale_summary": _numeric_summary(measured_localization_scales),
         },
@@ -2356,6 +3094,8 @@ def main():
         sys.exit(replay_bundle(args.replay_bundle))
     if args.compare_replay_traces:
         sys.exit(compare_replay_trace_files(*args.compare_replay_traces))
+    if args.compare_source_runs:
+        sys.exit(compare_source_run_files(*args.compare_source_runs))
     if args.compare_mapper_runs:
         sys.exit(compare_mapper_run_files(*args.compare_mapper_runs))
     if args.detector_calibration:
@@ -2385,6 +3125,22 @@ def main():
         sys.exit(1)
     build_env["CTA_FAILURE_REPORT_FILE"] = os.path.abspath(failure_report)
     build_env["CTA_INVARIANT_REPORT_FILE"] = os.path.abspath(invariant_report)
+    if args.induce_failure:
+        # This switch is consumed only by the integration-test probe. It is
+        # deliberately not an extraction or reducer setting.
+        build_env["CTA_TEST_INDUCE_FAILURE"] = "1"
+    if args.clock_calibration_output:
+        clock_calibration_path = os.path.abspath(args.clock_calibration_output)
+        os.makedirs(os.path.dirname(clock_calibration_path), exist_ok=True)
+        build_env["CTA_CLOCK_CALIBRATION_FILE"] = clock_calibration_path
+    if args.yellow_calibration_output:
+        yellow_calibration_path = os.path.abspath(args.yellow_calibration_output)
+        os.makedirs(os.path.dirname(yellow_calibration_path), exist_ok=True)
+        build_env["CTA_YELLOW_CALIBRATION_FILE"] = yellow_calibration_path
+    if args.hover_calibration_output:
+        hover_calibration_path = os.path.abspath(args.hover_calibration_output)
+        os.makedirs(os.path.dirname(hover_calibration_path), exist_ok=True)
+        build_env["CTA_HOVER_CALIBRATION_FILE"] = hover_calibration_path
     if args.stop_after is not None:
         build_env["CTA_STOP_AFTER_SECONDS"] = str(args.stop_after)
     if args.trace_file:
@@ -2476,6 +3232,9 @@ def main():
         sys.exit(1)
 
     if return_code == 0:
+        if args.induce_failure:
+            print("Failure probe did not induce a test failure.")
+            sys.exit(1)
         sys.exit(0)
 
     print(f"\nTest run finished with exit code {return_code}.")
@@ -2535,6 +3294,7 @@ def main():
     )
     print(f"Diagnostic JSONL: {os.path.abspath(bounded_diagnostic)}")
     print(f"First-divergence report: {os.path.abspath(failure_report)}")
+    bundle_created = False
     if os.path.exists(bounded_diagnostic):
         diagnostic_records, malformed_lines = read_diagnostic_records(bounded_diagnostic)
         classification = classify_diagnostics(report, diagnostic_records, malformed_lines)
@@ -2547,6 +3307,7 @@ def main():
                 report,
                 classification,
             )
+            bundle_created = True
             print(f"Likely failure stage: {classification['likely_stage']} "
                   f"({classification['confidence']} confidence)")
             for reason in classification["evidence"]:
@@ -2577,6 +3338,12 @@ def main():
             print(f"Could not assemble diagnostic bundle: {error}")
     if bounded_return_code != 0:
         print("Bounded replay ended with the expected test mismatch after its cutoff.")
+    if args.induce_failure:
+        if not bundle_created:
+            print("Failure probe produced no diagnostic bundle.")
+            sys.exit(1)
+        print("Intentional failure workflow verified: first-divergence bundle created.")
+        sys.exit(0)
     sys.exit(return_code)
 
 if __name__ == "__main__":

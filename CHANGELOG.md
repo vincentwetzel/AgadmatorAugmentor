@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Replay Semantic Contracts:** Source/replay comparison now checks accepted moves, clock provenance, recovery/revert state, and variation state in addition to event and observation alignment.
 - **Fixture-Independence Guard:** The test runner now scans production sources for fixture-specific detector overrides before building or running tests.
 - **Clock Provenance:** Added explicit observed/missing clock state so replayed analysis branches can retain continuity without fabricating OCR readings.
+- **Temporal Clock Reconciliation:** Added repeated-reading reconciliation and explicit `initial`, `direct`, `contextual`, `temporal`, `inherited`, `missing`, and `rejected` clock provenance; weak OCR no longer becomes a fabricated observation.
+- **Geometry Stability Guard:** Added periodic anchor/recent-probe geometry checks that reject candidates after large board drift and propagate geometry uncertainty into detector diagnostics.
+- **Source-Run Determinism Comparison:** Added `--compare-source-runs` plus an intentional `--induce-failure` test workflow for validating first-divergence bundle generation.
+- **Calibration Regime Outputs:** Added test-side JSONL output for clock, yellow-square, and hover/animation calibration regimes, including temporal, OCR, ROI, and geometry metrics.
 - **State-Based Variation Reconciliation:** Variations are validated from root FEN transitions, preserve visual confidence, and prune only proven replays or superseded tails.
 
 ### Performance

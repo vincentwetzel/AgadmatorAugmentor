@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opencv2/core/mat.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -9,6 +10,32 @@
 namespace cta {
 
 struct BoardGeometry;
+
+inline constexpr double kClockRoiLeftEdgeRatio = 0.70;
+inline constexpr double kClockRoiTopMarginSquares = 0.55;
+inline constexpr double kClockRoiTopInsetSquares = 0.08;
+inline constexpr double kClockRoiBottomInsetSquares = 0.18;
+inline constexpr double kClockRoiBottomMarginSquares = 0.58;
+
+struct ClockRoiBounds {
+    int x1 = 0;
+    int x2 = 0;
+    int top_y1 = 0;
+    int top_y2 = 0;
+    int bottom_y1 = 0;
+    int bottom_y2 = 0;
+
+    bool valid() const {
+        return x2 > x1 && top_y2 > top_y1 && bottom_y2 > bottom_y1;
+    }
+};
+
+/// Computes the shared board-relative clock crop used by the mapper and the
+/// full-frame fallback. Keeping this contract in one place makes ROI
+/// calibration results comparable to production extraction.
+ClockRoiBounds clock_roi_bounds(const BoardGeometry& geo,
+                                int frame_width,
+                                int frame_height);
 
 /// Result of clock extraction.
 struct ClockState {
@@ -29,6 +56,31 @@ struct ClockCache {
     std::unordered_map<std::uint64_t, std::string> top_ocr_cache;
     std::unordered_map<std::uint64_t, std::string> bot_ocr_cache;
     bool valid = false;
+};
+
+struct ClockOcrDiagnostics {
+    std::string preprocessing_variant;
+    std::string thresholding_mode;
+    std::string selected_reading;
+    struct Segment {
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        char symbol = '?';
+    };
+    std::vector<Segment> segments;
+    std::vector<std::string> candidates;
+};
+
+/// Reconciles repeated OCR observations without converting disagreement into
+/// an arbitrary guess. A reading is temporally plausible only when it repeats.
+struct ClockTemporalReconciliation {
+    std::string selected_reading;
+    std::string provenance; // direct, temporally_plausible, missing, inherited, rejected
+    std::size_t sample_count = 0;
+    std::size_t observed_count = 0;
+    std::size_t agreement_count = 0;
 };
 
 // ── Clock extraction ─────────────────────────────────────────────────────────
@@ -63,6 +115,15 @@ ClockState extract_clocks_for_moved_player_from_rois(const cv::Mat& top_bgr,
 /// nearby game-state evidence.
 std::vector<std::string> recognize_clock_time_candidates_from_roi(const cv::Mat& bgr,
                                                                   bool active_first);
+
+/// Returns calibration provenance for the production candidate search over a
+/// single clock ROI. This does not change the selected OCR reading.
+ClockOcrDiagnostics diagnose_clock_time_from_roi(const cv::Mat& bgr,
+                                                 bool active_first);
+
+ClockTemporalReconciliation reconcile_clock_readings(
+    const std::vector<std::string>& readings,
+    const std::string& inherited_reading = "");
 
 /// Cheap active-clock detection from cropped clock pill ROIs. This performs no OCR.
 std::string detect_active_clock_from_rois(const cv::Mat& top_bgr,

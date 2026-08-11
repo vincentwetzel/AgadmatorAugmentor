@@ -1,143 +1,64 @@
 # ChessTube Analyzer TODO
 
-This file intentionally lists only outstanding work. Completed diagnostic,
-replay, invariant, and test-runner foundations are implemented in the files
-referenced by `agents.md` and `docs/DEVELOPMENT.md`.
+This file tracks active follow-ups for detector quality and diagnostic
+validation. Product milestones and longer-term architecture belong in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-The priority is to make future failures explainable without immediately adding
-another full-video fixture. Detector quality remains a correctness requirement:
-yellow-square, clock, localization, and hover evidence must be measured and
-calibrated before it is treated as strong reducer evidence.
+## Active backlog
 
-The current diagnostic path already writes structured JSONL observations, compact
-replay traces, sampled frame/board/clock artifacts, invariant reports, and
-first-divergence bundles. Remaining replay work is to prove equivalence across
-accepted moves, clocks, reverts, and variations rather than to add another
-fixture-specific pathway.
+### Detector calibration
 
-Seed calibration manifests now exist at
+The seed manifests at
 `assets/sample_yellow_squares/labels.jsonl` and
-`assets/sample_clock_changes/labels.jsonl`. They exercise the report format and
-basic detector paths, but are not large enough to establish production gates;
-the remaining detector tasks below require broader visual regimes and labeled
-failure cases.
+`assets/sample_clock_changes/labels.jsonl` verify the report format and basic
+detector paths, but they are not large or varied enough to establish production
+gates.
 
-## Current implementation order
+- [ ] Expand the yellow-square corpus with real check and promotion positions,
+  varied highlight themes, adjacent highlights, captures, empty origins,
+  localization error, scaling, compression, and occlusion.
+- [ ] Expand the clock corpus with real UI regimes, low-time formatting,
+  partial updates, separators, missing readings, and representative OCR
+  failures.
+- [ ] Expand hover and geometry cases with real settled boards, mid-drag
+  frames, cursor/overlay interference, camera movement, and animation speeds.
+- [ ] Re-run calibration reports on the expanded corpus and document supported
+  visual regimes and acceptance targets.
+- [ ] Promote only evidence that meets the measured targets to strong reducer
+  validation; keep weak, missing, and advisory evidence distinguishable.
 
-1. Separate mapper/detector failures from scorer/reducer failures during replay.
-2. Compare sequential and controlled parallel mapper runs.
-3. Build threshold-sweep and calibration reports for foundational detectors.
-4. Use only calibrated evidence in validation decisions.
+### Diagnostic validation
 
-## Stage 2: Deterministic mapper behavior
+- [ ] Run the full diagnostic validation from a clean build directory and
+  record the reproducible command and result in the development documentation.
+- [ ] Keep repeated-source comparisons and intentional-failure probes in the
+  regression suite as diagnostic contracts evolve.
 
-- [x] Verify that mapper concurrency does not change diagnostic ordering or reducer results.
-- [x] Compare sequential and controlled parallel mapper runs with a machine-readable diff.
-- [x] Report whether a difference begins at mapper emission, detector evidence, scoring, or reducer state.
-
-## Stage 3: Explicit reducer outcomes
-
-- [x] Record explicit candidate outcomes for accepted, rejected, held-for-settling, and ambiguous states.
-- [x] Preserve the distinction between detector uncertainty and reducer deferral in JSONL diagnostics.
-
-## Stage 4: Detector quality and calibration
-
-### Shared detector-quality framework
-
-- [x] Distinguish true positive, false positive, false negative, and uncertain outcomes.
-- [x] Report precision, recall, false-positive rate, false-negative rate, and confidence calibration for each detector.
-- [x] Separate per-frame accuracy from per-transition accuracy.
-- [x] Define detector-specific acceptance targets.
-- [x] Add threshold-sensitivity reports across relevant parameter ranges.
-- [x] Record conditions that reduce confidence: compression, scaling, theme, brightness, occlusion, animation, geometry error, or UI overlap.
-- [x] Calibrate confidence scores against observed success rates by visual regime.
-
-### Yellow-square detection
-
-- [ ] Create a labeled evaluation set from existing yellow-square samples and representative project frames.
-- [x] Measure origin, destination, and paired-move detection separately.
-- [ ] Measure occupied destinations, empty origins, captures, checks, promotions, and adjacent highlight colors.
-- [ ] Test sensitivity to board-localization errors and square-boundary margins.
-- [ ] Tune yellowness thresholds, corner sampling, edge-density terms, and endpoint thresholds systematically.
-- [ ] Compare fixed thresholds against board-relative and locally normalized color baselines.
-- [ ] Use calibrated temporal highlight aggregation in validation decisions.
-- [ ] Establish measured paired-endpoint recall and false-positive targets.
-
-### Clock activity and OCR
-
-- [ ] Build a labeled clock table covering active-side detection, unchanged/changed clocks, valid/missing/misread OCR.
-- [ ] Measure activity detection separately from digit recognition.
-- [ ] Record preprocessing variant, thresholding mode, segmented digits, and selected reading.
-- [ ] Measure individual digit and complete time-string accuracy.
-- [ ] Test font size, anti-aliasing, compression, brightness, low-time formatting, separators, and partial changes.
-- [ ] Tune ROI geometry and verify tolerance to localization error.
-- [ ] Compare preprocessing variants using the same labeled observations.
-- [ ] Add temporal OCR reconciliation without silently converting uncertainty into a guess.
-- [ ] Distinguish directly observed, temporally plausible, inherited, missing, and rejected clock values.
-- [ ] Define separate targets for active-side, complete OCR, and usable-clock accuracy.
-- [ ] Do not hard-veto on clock evidence below its calibrated reliability threshold.
-
-### Board localization and geometry
-
-- [ ] Measure localization error against known board bounds.
-- [ ] Test geometry stability across scaling, camera/UI movement, and overlays.
-- [x] Add a geometry-confidence result consumable by downstream detectors.
-- [ ] Propagate geometry uncertainty into square-color, piece-edge, hover, and clock measurements.
-- [ ] Reject or re-localize when geometry drift makes square evidence unreliable.
-
-### Hover and animation
-
-- [ ] Measure false rejection of settled boards versus true mid-drag rejection.
-- [ ] Test fast/slow animation, partial movement, and cursor/overlay interference.
-- [ ] Tune settle-window duration using transition-level metrics.
-
-### Calibration workflow
-
-- [x] Add a repeatable calibration command for labeled images or bounded video intervals.
-- [x] Produce confusion matrices, confidence histograms, threshold sweeps, and representative errors.
-- [x] Save debug images for worst-confidence correct and highest-confidence incorrect cases.
-- [x] Record calibration parameters centrally and version them with source code.
-- [x] Add regression checks for cross-detector metric damage after threshold changes.
-- [x] Prefer robust operating points across visual regimes.
-- [x] Document strong, weak, and advisory detector outputs.
-
-## Stage 6: Diagnostic artifacts
-
-- [x] Generate detector overlays showing board differences, highlights, selected moves, alternatives, and reducer state.
-- [x] Generate contact sheets for bounded failure windows.
-
-## Stage 7: Replay analysis
-
-- [x] Verify replay equivalence on traces containing accepted moves, clocks, reverts, and variations.
-
-## Stage 9: Uncertainty handling
-
-- [x] Distinguish `ACCEPT`, `WAIT_FOR_SETTLE`, `REJECT`, `AMBIGUOUS`, and `RECOVERING` outcomes.
-- [x] Prevent weak evidence from automatically advancing the chess position.
-- [x] Track evidence strength separately for board differences, highlights, clocks, temporal stability, and hover state.
-- [x] Record missing and conflicting evidence rather than collapsing it into one confidence number.
-- [x] Ensure uncertainty recovery cannot silently skip or invent a move.
-
-## Stage 11: Existing-suite validation
-
-- [ ] Run the current full-game test and verify first-divergence reporting on an intentionally induced failure.
-- [x] Confirm normal extraction performance remains acceptable with diagnostics disabled.
-- [ ] Confirm diagnostic output is deterministic across repeated source runs.
-
-## Future video workflow
+## Failure-investigation workflow
 
 1. Run the normal integration test.
-2. Read the first-divergence summary.
-3. Inspect the generated artifact bundle.
-4. Identify the responsible stage and evidence conflict.
-5. Reproduce the issue through observation replay when possible.
-6. Fix reusable production logic, never the individual fixture.
-7. Run the focused replay and existing regression suite.
-8. Add the full video only when it represents a genuinely new visual regime.
+2. Read the first-divergence summary and inspect its artifact bundle.
+3. Identify the responsible stage and conflicting evidence.
+4. Reproduce the issue through observation replay when possible.
+5. Fix reusable production logic and run the focused replay plus regression
+   suite.
+6. Add a full video only when it represents a genuinely new visual regime.
 
-## Guardrails
+## Scope guardrails
 
-- Do not add a new asynchronous agent/event-bus architecture for diagnostics yet.
-- Do not introduce machine-learning move selection before deterministic evidence and replay are complete.
-- Do not add fixture-specific production behavior to make a test pass.
-- Do not expand the full-video corpus until the diagnostic workflow can explain failures efficiently.
+- Keep production extraction fixture-independent.
+- Do not introduce machine-learning move selection before deterministic
+  evidence and replay are complete.
+- Do not add a new asynchronous agent/event-bus architecture for diagnostics
+  yet.
+- Do not expand the full-video corpus merely to paper over an unexplained
+  failure.
+
+## Completed foundation
+
+The diagnostic path now supports structured JSONL observations, compact replay
+traces, sampled frame/board/clock artifacts, invariant reports,
+first-divergence bundles, mapper/source/replay comparison, geometry stability
+evidence, temporal clock provenance, detector calibration outputs, and
+test-runner failure probes. These capabilities are implemented in the modules
+referenced by `agents.md` and `docs/DEVELOPMENT.md`.

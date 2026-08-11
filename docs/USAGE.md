@@ -112,10 +112,10 @@ The default map-reduce extraction settings are chosen for normal local storage. 
 - `CTA_REVERT_EXHAUSTIVE_FALLBACK`: enable the slower exhaustive revert lookup for comparison/debugging.
 - `CTA_DIAGNOSTIC_FILE`: write structured reducer observations as JSONL.
 - `CTA_DIAGNOSTIC_FRAME_DIR` and `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS`: retain sampled full-frame, board, and clock-ROI artifacts for a diagnostic JSONL run.
-- `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS`: control periodic geometry rechecks during diagnostics (clamped to 1-30 seconds).
+- `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS`: control periodic geometry probes during extraction (clamped to 1-30 seconds). Large anchor or recent-probe drift marks a candidate `relocalize_required` and rejects it before square evidence is used.
 - `CTA_REPLAY_OBSERVATIONS`: replace source-video decoding and board initialization with a saved compact `observations.jsonl` trace and its artifacts.
 
-Diagnostic output is not a normal export. A failure bundle may contain `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, sampled images, SVG overlays, and an HTML contact sheet. Keep these files in a build or temporary directory.
+Diagnostic output is not a normal export. A failure bundle may contain `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, sampled images, SVG overlays, and an HTML contact sheet. Keep these files in a build or temporary directory. Detector records retain `geometry_uncertainty` so geometry weakness can be separated from detector weakness.
 
 The reducer also applies a bounded settle window, recent-square conflict checks, indexed revert lookup, hover-box rejection, and clock-turn validation before accepting a move. These checks are intentionally conservative so PGN output remains legal even when the video contains analysis reverts or dragging artifacts.
 
@@ -157,4 +157,6 @@ Compare a source diagnostic trace with an observation-replay trace:
 python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
 ```
 
-The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output and `--detector-calibration` for labeled detector quality reports. The seed manifests are `assets\sample_yellow_squares\labels.jsonl` and `assets\sample_clock_changes\labels.jsonl`; their results are advisory until the corpus is expanded.
+The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output, `--compare-source-runs` for repeated source determinism, and `--detector-calibration` for labeled detector quality reports. Test-side calibration observations can be emitted with `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`. Use `--induce-failure` to verify that the first-divergence bundle path is operational. The seed manifests are `assets\sample_yellow_squares\labels.jsonl` and `assets\sample_clock_changes\labels.jsonl`; their results are advisory until the corpus is expanded.
+
+Clock records preserve `initial`, `direct`, `contextual`, `temporal`, `inherited`, `missing`, or `rejected` provenance. A temporal repair requires repeated plausible settled readings; a single or conflicting OCR result remains uncertain and cannot by itself veto a visually legal move.

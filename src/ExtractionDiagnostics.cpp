@@ -246,6 +246,7 @@ void write_json_line(std::ostream& output, const Record& record) {
             {"localization_score", record.evidence.localization_score},
             {"localization_scale", record.evidence.localization_scale},
             {"localization_confidence", record.evidence.localization_confidence},
+            {"geometry_uncertainty", record.evidence.geometry_uncertainty},
             {"board_hash", record.evidence.board_hash},
             {"geometry_checked", record.evidence.geometry_checked},
             {"geometry_anomaly", record.evidence.geometry_anomaly},
@@ -303,6 +304,7 @@ void write_json_line(std::ostream& output, const Record& record) {
                         {"corner_bgr", measurement.corner_bgr},
                         {"corner_edge_density", measurement.corner_edge_density},
                         {"score", measurement.score},
+                        {"geometry_uncertainty", measurement.geometry_uncertainty},
                     });
                 }
                 return measurements;
@@ -333,6 +335,7 @@ void write_json_line(std::ostream& output, const Record& record) {
                         {"strongest_edge", measurement.strongest_edge},
                         {"visible_edges", measurement.visible_edges},
                         {"detected", measurement.detected},
+                        {"geometry_uncertainty", measurement.geometry_uncertainty},
                     });
                 }
                 return measurements;
@@ -347,6 +350,14 @@ void write_json_line(std::ostream& output, const Record& record) {
             {"clock_bottom_bright_ratio", record.evidence.clock_bottom_bright_ratio},
             {"clock_bright_ratio_delta", record.evidence.clock_bright_ratio_delta},
             {"clock_decision", record.evidence.clock_decision},
+            {"clock_temporal_checked", record.evidence.clock_temporal_checked},
+            {"clock_temporal_sample_count", record.evidence.clock_temporal_sample_count},
+            {"clock_temporal_observed_count", record.evidence.clock_temporal_observed_count},
+            {"clock_temporal_agreement_count", record.evidence.clock_temporal_agreement_count},
+            {"clock_temporal_decision", record.evidence.clock_temporal_decision},
+            {"clock_provenance", record.evidence.clock_provenance},
+            {"clock_temporal_plausible_count", record.evidence.clock_temporal_plausible_count},
+            {"clock_temporal_reconciled", record.evidence.clock_temporal_reconciled},
             {"settle_decision", record.evidence.settle_decision},
             {"active_clock_player", record.evidence.active_clock_player},
             {"moved_clock", record.evidence.moved_clock},

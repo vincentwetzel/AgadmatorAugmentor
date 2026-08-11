@@ -2,14 +2,14 @@
 
 The ChessTube Analyzer pipeline is conceptually divided into several autonomous "Agents" or modules. The current implementation is a C++20 linear pipeline designed for maximum performance.
 
-## 1. The Extraction Agent (Computer Vision) — ✅ Implemented
+## 1. The Extraction Agent (Computer Vision) - Implemented
 
 **Files:**
 - `BoardLocalizer.h/.cpp` — `locate_board()` (GSS board localization)
 - `BoardAnalysis.h/.cpp` - Square means, yellow squares, piece counting, red squares, promotion classification
 - `BoardHoverDetection.cpp` - hover boxes / mid-drag frame rejection
 - `ArrowDetector.h/.cpp` — `find_yellow_arrows()` (HSV masking + ray-casting)
-- `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` - `extract_clocks()` and Hu Moments digit OCR
+- `ClockRecognizer.h/.cpp`, `DigitRecognizer.h/.cpp` - `extract_clocks()`, active-clock gating, and component/Hu Moments digit OCR
 
 Responsible for observing the raw video feed and translating it into structured sensory data.
 
@@ -17,19 +17,19 @@ Responsible for observing the raw video feed and translating it into structured 
 
 | Sub-module | Method | File | Description |
 |------------|--------|------|-------------|
-| **Board Localizer** | `locate_board()` | `BoardLocalizer.cpp` | Golden Section Search template matching (39 vs 67 linear steps) |
+| **Board Localizer** | `locate_board()` | `BoardLocalizer.cpp` | Multi-pass Golden Section Search template matching with geometry confidence and stability checks |
 | **Yellow Square Detector** | `extract_move_from_yellow_squares()` | `BoardAnalysis.cpp` | Detects origin/destination highlights using mathematical yellowness `(R+G)/2 - B` |
 | **Red Square Detector** | `find_red_squares()` | `BoardAnalysis.cpp` | Finds streamer emphasis marks with dynamic thresholding |
 | **Yellow Arrow Detector** | `find_yellow_arrows()` | `ArrowDetector.cpp` | HSV masking + ray-casting to find drawn arrows |
 | **Hover Box Detector** | `find_misaligned_piece()` | `BoardHoverDetection.cpp` | 1D projection on white edges to reject mid-drag frames |
-| **Clock Extractor** | `extract_clocks()` | `ClockRecognizer.cpp` | Hu Moments digit recognizer (zero external dependencies) |
+| **Clock Extractor** | `extract_clocks()` | `ClockRecognizer.cpp` | Active-clock gating, cached board-relative ROIs, and zero-dependency OCR |
 | **Piece Counter** | `count_pieces_in_image()` | `BoardAnalysis.cpp` | Canny edge detection to count pieces on board |
 
 ### Role
 
 It does not know the rules of chess on its own; it reports *what* changed, *when*, and *where*. The UI elements it extracts (yellow highlights, hover boxes, clocks) serve as the ground-truth state machine signals.
 
-## 2. The Verification Agent (Chess Engine Logic) — ✅ Implemented
+## 2. The Verification Agent (Chess Engine Logic) - Implemented
 
 **Integrated in:** `ChessVideoExtractor.extract_moves_from_video()` (`ChessVideoExtractor_Extraction.cpp`)
 **Supporting Files:** `ChessVideoExtractor.cpp`, `ChessVideoExtractor_Internal.*`, `MoveValidations.h/.cpp`
@@ -46,9 +46,11 @@ Acts as the game logic authority and state machine filter.
   - **Yellow square check:** Both origin and destination must be highlighted.
   - **Hover box check:** Reject frames where a piece is mid-drag.
   - **Clock turn check:** Active player must match expected turn.
+  - **Geometry check:** Reject candidates measured against unstable board geometry.
 - Detects **analysis reverts** by using an O(1) perceptual hash filter followed by a full-image structural comparison against `board_image_history`, snapping back to the correct ply when the streamer undoes moves.
 - Retains stable reverted move sequences as PGN variations while pruning superseded nested branches and ignoring short-lived one-ply flashes that do not survive long enough to be meaningful analysis lines.
-- Validates variation roots from FEN transitions and preserves clock provenance, distinguishing directly observed moved clocks from missing or inherited replay clocks.
+- Validates variation roots from FEN transitions and preserves clock provenance, distinguishing direct, contextual, temporal, missing, rejected, and inherited replay clocks.
+- Preserves explicit clock provenance and requires repeated temporal readings before clock evidence can veto a visually legal move.
 - Applies narrow endpoint disambiguation after legal move scoring when the UI evidence is visually adjacent but the chess state is clear, including rook rank/file endpoint ambiguity and immediate queen recaptures of just-moved pawns.
 - Exposes generic timestamp-bounded reducer traces, structured observation diagnostics, clock/revert diagnostics, and replay comparison inputs for test investigation; these controls never select moves from fixture names or expected outputs.
 - Filters out sensory hallucinations and false positives, ensuring the output is 100% legal and accurate.
@@ -63,7 +65,7 @@ Acts as the game logic authority and state machine filter.
 
 Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN, optional SRT subtitles, and Analysis Video). The intermediate JSON file is no longer written to disk; JSONL is reserved for diagnostic/replay evidence.
 
-## 3. The Commentary Agent — 🔜 Future
+## 3. The Commentary Agent - Future
 
 Designed to contextualize the human element of the video.
 
@@ -84,7 +86,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - **NLP Correlation:** Pass the transcript alongside the timeline of UI events (red squares, arrows) to a lightweight local LLM (e.g., `llama.cpp`) to generate natural language commentary for the PGN.
 - **Sound Events:** A fast Fourier transform (FFT) or simple amplitude envelope pass will correlate piece capture/check sounds from `sample_sounds/` with the visual move frames to increase extraction confidence.
 
-## 4. The Stockfish Analysis Agent — ✅ Implemented
+## 4. The Stockfish Analysis Agent - Implemented
 
 **Integrated in:** `StockfishAnalyzer.h/.cpp`
 
@@ -97,7 +99,7 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Generates **move quality annotations** for optional PGN labels and analysis video text by comparing played moves against engine best lines and calculating centipawn loss.
 - Is required only when PGN labels or analysis-video overlays need engine data.
 
-## 5. The Opening Metadata Agent — ✅ Implemented
+## 5. The Opening Metadata Agent - Implemented
 
 **Integrated in:** `OpeningFetcher.h/.cpp`
 
@@ -111,17 +113,17 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Stops once a likely unique position is reached, avoiding unnecessary API calls after the opening is known.
 - Supplies ECO/opening names for PGN headers and optional analysis-video opening overlays.
 
-## 6. The Analysis Video Agent (Overlay & Composition) — ✅ Implemented
+## 6. The Analysis Video Agent (Overlay & Composition) - Implemented
 
 ### Responsibilities
 
 - Takes verified moves, timestamps, and Stockfish metadata.
 - Generates visual overlays statically per move (O(moves) instead of O(frames) for a 1000x speedup):
-  - ✅ **Analysis Board:** A synchronized board showing the current FEN position in the corner of the video.
-  - ✅ **Evaluation Bar:** A bar on the side of the video showing the Stockfish evaluation.
-  - ✅ **Move Arrows:** Arrows on the main board indicating the best engine moves. The arrows dynamically scale in thickness and color intensity based on the evaluation difference from the principal variation.
-  - ✅ **Principal Variation:** Text overlay showing the top engine line.
-  - ✅ **Opening Name:** Optional text overlay showing the detected ECO/opening name.
+  - **Analysis Board:** A synchronized board showing the current FEN position in the corner of the video.
+  - **Evaluation Bar:** A bar on the side of the video showing the Stockfish evaluation.
+  - **Move Arrows:** Arrows on the main board indicating the best engine moves. The arrows dynamically scale in thickness and color intensity based on the evaluation difference from the principal variation.
+  - **Principal Variation:** Text overlay showing the top engine line.
+  - **Opening Name:** Optional text overlay showing the detected ECO/opening name.
 - Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the final MP4.
 - Produces an annotated MP4 at the configured output path, preserving source audio when available; the GUI selects the path and the CLI defaults PGN output under `output/`.
 
@@ -262,12 +264,12 @@ All UI styling **MUST** go through the universal theme system. **NO** individual
 
 | File | Purpose |
 |------|---------|
-| `cpp/include/ThemeManager.h` | Theme mode enum (System/Light/Dark), color definitions, QSS generator |
-| `cpp/src/ThemeManager.cpp` | Theme implementation, color values, system dark mode detection |
-| `cpp/src/ThemeManager_StyleSheet.cpp` | Centralized global QSS template generated from theme colors |
-| `cpp/include/MainWindow.h` | Theme selector UI element (`themeComboBox_`) |
-| `cpp/src/MainWindow.cpp` | Theme application logic (`applyTheme()`, `onThemeChanged()`) |
-| `cpp/src/ToggleSwitch.cpp` | Example: Custom widget using theme colors |
+| `include/ThemeManager.h` | Theme mode enum (System/Light/Dark), color definitions, QSS generator |
+| `src/ThemeManager.cpp` | Theme implementation, color values, system dark mode detection |
+| `src/ThemeManager_StyleSheet.cpp` | Centralized global QSS template generated from theme colors |
+| `include/MainWindow.h` | Theme selector UI element (`themeComboBox_`) |
+| `src/MainWindow_UI.cpp` | Main-window UI creation and tooltip setup |
+| `src/ToggleSwitch.cpp` | Example: Custom widget using theme colors |
 
 ### Example: Proper Theme-Aware Custom Widget
 

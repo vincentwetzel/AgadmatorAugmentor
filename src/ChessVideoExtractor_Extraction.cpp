@@ -639,7 +639,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     if (!observation_replay_requested) {
         init_clocks = extract_clocks(first_frame, board_template_, *geo_, clock_cache_.get());
     }
-    data.clocks.push_back({init_clocks.active_player, init_clocks.white_time, init_clocks.black_time});
+    data.clocks.push_back({init_clocks.active_player, init_clocks.white_time,
+                           init_clocks.black_time, false, false, "initial"});
 
     // Board image history for revert detection
     std::vector<cv::Mat> board_image_history;
@@ -1323,7 +1324,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     VideoChunkMapper mapper(safe_video_path, extraction_duration, chunk_duration, total_chunks,
                             *geo_, margin_h_, margin_w_, static_cast<int>(debug_level_),
                             has_clocks, max_lookahead, num_threads, frame_width, frame_height,
-                            diagnostic_stream.is_open(), diagnostic_frame_interval_seconds,
+                            !board_template_.empty(), diagnostic_frame_interval_seconds,
                             diagnostic_frame_dir, trace_start, trace_end,
                             observation_replay_path);
     mapper.start(cancel_flag);
@@ -1390,6 +1391,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             diagnostic_evidence_context.localization_score = geo_->localization_score;
             diagnostic_evidence_context.localization_scale = geo_->localization_scale;
             diagnostic_evidence_context.localization_confidence = geo_->geometry_confidence;
+            diagnostic_evidence_context.geometry_uncertainty = geometry_uncertainty(*geo_);
             diagnostic_evidence_context.yellow_endpoint_threshold =
                 validation::kYellowEndpointThreshold;
             diagnostic_evidence_context.yellow_pair_threshold =
@@ -1435,6 +1437,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             item.corner_bgr = measured.corner_bgr;
             item.corner_edge_density = measured.corner_edge_density;
             item.score = measured.score;
+            item.geometry_uncertainty = measured.geometry_uncertainty;
             if (existing == diagnostic_evidence_context.yellow_measurements.end()) {
                 diagnostic_evidence_context.yellow_measurements.push_back(std::move(item));
             } else {
@@ -1442,10 +1445,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
         };
 
-        // Re-localization is intentionally diagnostic-only. The reducer keeps
-        // its anchored geometry for a run, while this periodic probe exposes
-        // camera/UI movement before it can be mistaken for square evidence.
-        if (diagnostic_stream.is_open() && t >= next_geometry_check_t) {
+        // The reducer keeps its anchored geometry for a run. When a full frame
+        // is available, this periodic probe can reject a frame whose square
+        // evidence would otherwise be measured against stale geometry.
+        if (t >= next_geometry_check_t &&
+            ((!full_bgr.empty() && !board_template_.empty()) ||
+             diagnostic_stream.is_open())) {
             diagnostic_evidence_context.geometry_checked = true;
             next_geometry_check_t = t + geometry_check_interval_seconds;
             if (!full_bgr.empty() && !board_template_.empty()) {
@@ -1470,29 +1475,15 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 }
 
                 // A cached/template match can move several pixels between
-                // otherwise identical frames. Treat that as calibration
-                // jitter; only a temporal step or a large persistent offset
-                // is an unexpected geometry jump.
-                constexpr double kGeometryPositionJumpPixels = 16.0;
-                constexpr double kGeometrySizeJumpPixels = 16.0;
-                constexpr double kGeometryPersistentOffsetPixels = 24.0;
-                diagnostic_evidence_context.geometry_anomaly =
-                    (have_previous_diagnostic_geometry &&
-                     (std::abs(diagnostic_evidence_context.geometry_step_drift_x) >
-                          kGeometryPositionJumpPixels ||
-                      std::abs(diagnostic_evidence_context.geometry_step_drift_y) >
-                          kGeometryPositionJumpPixels ||
-                      diagnostic_evidence_context.geometry_step_size_drift >
-                          kGeometrySizeJumpPixels)) ||
-                    (have_previous_diagnostic_geometry &&
-                     (std::abs(diagnostic_evidence_context.geometry_drift_x) >
-                          kGeometryPersistentOffsetPixels ||
-                      std::abs(diagnostic_evidence_context.geometry_drift_y) >
-                          kGeometryPersistentOffsetPixels ||
-                      diagnostic_evidence_context.geometry_size_drift >
-                          kGeometryPersistentOffsetPixels));
+                // otherwise identical frames. The shared stability result
+                // treats small jitter as safe but makes a large anchor or
+                // temporal jump actionable before square evidence is used.
+                const auto geometry_stability = assess_geometry_stability(
+                    *geo_, observed_geometry,
+                    have_previous_diagnostic_geometry ? &previous_diagnostic_geometry : nullptr);
+                diagnostic_evidence_context.geometry_anomaly = !geometry_stability.stable;
                 diagnostic_evidence_context.geometry_decision =
-                    diagnostic_evidence_context.geometry_anomaly ? "jump_detected" : "stable";
+                    diagnostic_evidence_context.geometry_anomaly ? "relocalize_required" : "stable";
                 diagnostic_evidence_context.geometry_assessment.state =
                     diagnostic_evidence_context.geometry_decision;
                 diagnostic_evidence_context.geometry_assessment.confidence =
@@ -1506,6 +1497,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     {"step_drift_x", diagnostic_evidence_context.geometry_step_drift_x},
                     {"step_drift_y", diagnostic_evidence_context.geometry_step_drift_y},
                     {"step_size_drift", diagnostic_evidence_context.geometry_step_size_drift},
+                    {"anchor_position_drift", geometry_stability.anchor_position_drift_pixels},
+                    {"anchor_size_drift", geometry_stability.anchor_size_drift_pixels},
+                    {"step_position_drift", geometry_stability.step_position_drift_pixels},
+                    {"step_size_drift_envelope", geometry_stability.step_size_drift_pixels},
                     {"match_score", diagnostic_evidence_context.geometry_relocalization_score},
                 };
                 diagnostic_evidence_context.geometry_assessment.uncertainty_reason =
@@ -1515,7 +1510,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 previous_diagnostic_geometry = observed_geometry;
                 have_previous_diagnostic_geometry = true;
 
-                if (!red_board_template_.empty()) {
+                if (diagnostic_stream.is_open() && !red_board_template_.empty()) {
                     diagnostic_evidence_context.red_squares_checked = true;
                     diagnostic_evidence_context.red_squares = find_red_squares(
                         full_bgr, board_template_, red_board_template_, *geo_);
@@ -1546,6 +1541,15 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         sq_means = compute_all_square_means(diff, *geo_, margin_h_, margin_w_);
         for (double sd : sq_means) {
             if (sd > max_sd) max_sd = sd;
+        }
+        if (diagnostic_evidence_context.geometry_anomaly) {
+            add_diagnostic_tag("geometry_unreliable");
+            trace_candidate(
+                "REJECTED_FRAME", t, data.moves.size(), pos_ptr_->get_fen(), "",
+                0.0, max_sd, 0.0, 0.0,
+                "reason=geometry_drift;decision=" +
+                    diagnostic_evidence_context.geometry_decision);
+            continue;
         }
         diagnostic_evidence_context.changed_square_count = static_cast<std::size_t>(std::count_if(
             sq_means.begin(), sq_means.end(), [](double value) { return value >= 15.0; }));
@@ -3656,11 +3660,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             const char target_piece_before_move = current_board_map[best.to_sq];
             const bool quiet_destination_before_move =
                 target_piece_before_move == ' ' || target_piece_before_move == '.';
+            double destination_piece_edges = 0.0;
             if (quiet_destination_before_move) {
                 if (!scratch_) scratch_ = std::make_unique<ScratchBuffers>();
                 const bool origin_still_hovered =
                     validation::check_hover_box(board_bgr, *geo_, scratch_->white_mask, scratch_->reduced, from_name);
-                const double destination_piece_edges = origin_still_hovered
+                destination_piece_edges = origin_still_hovered
                     ? extractor_detail::square_piece_edge_score(board_bgr, *geo_, to_name)
                     : 8.0;
                 if (origin_still_hovered && destination_piece_edges < 8.0) {
@@ -3699,23 +3704,27 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             const bool yellow_absent =
                 validation_y_from < validation::kYellowEndpointThreshold &&
                 validation_y_to < validation::kYellowEndpointThreshold;
-            if (diagnostic_stream.is_open()) {
-                constexpr double kYellowTemporalWindowSeconds = 0.75;
+            validation::YellowTemporalEvidence temporal_evidence;
+            if (diagnostic_stream.is_open() || !yellow_passed) {
                 diagnostic_evidence_context.yellow_temporal_checked = true;
                 diagnostic_evidence_context.yellow_temporal_window_seconds =
-                    kYellowTemporalWindowSeconds;
+                    validation::kYellowTemporalWindowSeconds;
                 for (size_t temporal_index = i;
                      temporal_index < candidates.size(); ++temporal_index) {
                     const auto& temporal_candidate = candidates[temporal_index];
                     const double temporal_delta = temporal_candidate.t - t;
                     if (temporal_delta < 0.0) continue;
-                    if (temporal_delta > kYellowTemporalWindowSeconds) break;
+                    if (temporal_delta > validation::kYellowTemporalWindowSeconds) break;
                     const double temporal_from = validation::check_yellowness(
                         temporal_candidate.board_bgr, *geo_, from_name);
                     const double temporal_to = validation::check_yellowness(
                         temporal_candidate.board_bgr, *geo_, to_name);
                     const double temporal_pair = temporal_from + temporal_to;
+                    ++temporal_evidence.sample_count;
                     ++diagnostic_evidence_context.yellow_temporal_sample_count;
+                    temporal_evidence.max_from = std::max(temporal_evidence.max_from, temporal_from);
+                    temporal_evidence.max_to = std::max(temporal_evidence.max_to, temporal_to);
+                    temporal_evidence.max_pair = std::max(temporal_evidence.max_pair, temporal_pair);
                     diagnostic_evidence_context.yellow_temporal_max_from = std::max(
                         diagnostic_evidence_context.yellow_temporal_max_from, temporal_from);
                     diagnostic_evidence_context.yellow_temporal_max_to = std::max(
@@ -3725,13 +3734,19 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     if (temporal_from >= validation::kYellowEndpointThreshold &&
                         temporal_to >= validation::kYellowEndpointThreshold &&
                         temporal_pair >= validation::kYellowPairThreshold) {
+                        ++temporal_evidence.pair_pass_count;
                         ++diagnostic_evidence_context.yellow_temporal_pair_pass_count;
                     }
                 }
             }
+            const bool yellow_passed_temporally =
+                !yellow_passed && validation::passes_temporal_yellow_check(temporal_evidence);
+            const bool yellow_passed_with_temporal = yellow_passed || yellow_passed_temporally;
             diagnostic_evidence_context.yellow_decision = accepted_strong_inverse
                 ? "bypassed_inverse"
-                : (yellow_passed ? "passed" : (yellow_absent ? "no_highlight" : "ambiguous"));
+                : (yellow_passed ? "passed" :
+                    (yellow_passed_temporally ? "passed_temporal" :
+                        (yellow_absent ? "no_highlight" : "ambiguous")));
             diagnostic_evidence_context.yellow_assessment.state =
                 diagnostic_evidence_context.yellow_decision;
             diagnostic_evidence_context.yellow_assessment.measurements = {
@@ -3741,20 +3756,25 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 {"temporal_max_from", diagnostic_evidence_context.yellow_temporal_max_from},
                 {"temporal_max_to", diagnostic_evidence_context.yellow_temporal_max_to},
                 {"temporal_max_pair", diagnostic_evidence_context.yellow_temporal_max_pair},
+                {"temporal_sample_count", static_cast<double>(temporal_evidence.sample_count)},
+                {"temporal_pair_pass_count", static_cast<double>(temporal_evidence.pair_pass_count)},
+                {"geometry_uncertainty", diagnostic_evidence_context.geometry_uncertainty},
             };
             diagnostic_evidence_context.yellow_assessment.uncertainty_reason =
-                yellow_passed || accepted_strong_inverse
+                yellow_passed_temporally
+                    ? "uncalibrated_temporal_detector_confidence"
+                    : (yellow_passed || accepted_strong_inverse
                     ? "uncalibrated_detector_confidence"
-                    : (yellow_absent ? "highlight_absent" : "highlight_ambiguous");
-            if (yellow_passed || accepted_strong_inverse) {
+                    : (yellow_absent ? "highlight_absent" : "highlight_ambiguous"));
+            if (yellow_passed || yellow_passed_temporally || accepted_strong_inverse) {
                 add_diagnostic_tag("highlight_pair");
+                if (yellow_passed_temporally) add_diagnostic_tag("highlight_pair_temporal");
             } else if (yellow_absent) {
                 add_diagnostic_tag("highlight_absent");
             } else {
                 add_diagnostic_tag("highlight_ambiguous");
             }
-            if (!accepted_strong_inverse &&
-                !extractor_detail::passes_yellowness_check(board_bgr, *geo_, from_name, to_name)) {
+            if (!accepted_strong_inverse && !yellow_passed_with_temporal) {
                 if (debug_level_ != DebugLevel::None) {
                     double y_from = validation::check_yellowness(board_bgr, *geo_, from_name);
                     double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
@@ -3783,11 +3803,11 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 {from_name, from_hover.top_edge, from_hover.bottom_edge,
                  from_hover.left_edge, from_hover.right_edge,
                  from_hover.strongest_edge, from_hover.visible_edges,
-                 from_hover.detected},
+                 from_hover.detected, from_hover.geometry_uncertainty},
                 {to_name, to_hover.top_edge, to_hover.bottom_edge,
                  to_hover.left_edge, to_hover.right_edge,
                  to_hover.strongest_edge, to_hover.visible_edges,
-                 to_hover.detected},
+                 to_hover.detected, to_hover.geometry_uncertainty},
             };
             diagnostic_evidence_context.hover_assessment.state =
                 diagnostic_evidence_context.hover_decision;
@@ -3798,6 +3818,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 {"to_strongest_edge", to_hover.strongest_edge},
                 {"from_visible_edges", static_cast<double>(from_hover.visible_edges)},
                 {"to_visible_edges", static_cast<double>(to_hover.visible_edges)},
+                {"destination_piece_edges", destination_piece_edges},
+                {"geometry_uncertainty", diagnostic_evidence_context.geometry_uncertainty},
             };
             diagnostic_evidence_context.hover_assessment.uncertainty_reason =
                 "uncalibrated_hover_confidence";
@@ -3922,6 +3944,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             std::string previous_moved_clock = last_moved_clock[moved_clock_idx];
             bool moved_time_observed = false;
             bool moved_time_missing = false;
+            bool moved_time_contextually_reconciled = false;
+            bool moved_time_temporally_reconciled = false;
             if (has_clocks && !cf.clock_top_bgr.empty() && !cf.clock_bot_bgr.empty()) {
                 clocks = extract_clocks_for_moved_player_from_rois(
                     cf.clock_top_bgr, cf.clock_bot_bgr, moved_player, clock_cache_.get(), active_clock_player);
@@ -3945,6 +3969,10 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     candidates_for_moved_clock,
                     (moved_player == "white") ? clocks.white_time : clocks.black_time,
                     previous_moved_clock);
+                moved_time_contextually_reconciled =
+                    !adjusted_clock.empty() &&
+                    adjusted_clock != direct_moved_clock &&
+                    plausible_clock_after_move(adjusted_clock, previous_moved_clock);
                 if (!adjusted_clock.empty()) {
                     if (moved_player == "white") {
                         clocks.white_time = adjusted_clock;
@@ -3957,15 +3985,24 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 diagnostic_evidence_context.moved_clock =
                     (moved_player == "white") ? clocks.white_time : clocks.black_time;
                 diagnostic_evidence_context.clock_ocr_skipped = clocks.ocr_skipped;
+                diagnostic_evidence_context.clock_provenance = moved_time_missing
+                    ? "missing"
+                    : (moved_time_contextually_reconciled ? "contextual"
+                        : (moved_time_observed ? "direct" : "rejected"));
                 diagnostic_evidence_context.clock_decision =
                     diagnostic_evidence_context.moved_clock.empty()
                         ? "ocr_missing"
-                        : (moved_time_observed ? "ocr_plausible" : "ocr_implausible");
+                        : (moved_time_contextually_reconciled
+                            ? "ocr_contextual_reconciled"
+                            : (moved_time_observed ? "ocr_plausible" : "ocr_implausible"));
                 diagnostic_evidence_context.clock_assessment.state =
                     diagnostic_evidence_context.clock_decision;
                 diagnostic_evidence_context.clock_assessment.measurements = {
                     {"candidate_count", static_cast<double>(candidates_for_moved_clock.size())},
                     {"bright_ratio_delta", diagnostic_evidence_context.clock_bright_ratio_delta},
+                    {"temporal_sample_count", 0.0},
+                    {"temporal_plausible_count", 0.0},
+                    {"geometry_uncertainty", diagnostic_evidence_context.geometry_uncertainty},
                 };
                 diagnostic_evidence_context.clock_assessment.uncertainty_reason =
                     diagnostic_evidence_context.moved_clock.empty()
@@ -4153,6 +4190,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     return (moved_player == "white") ? state.white_time : state.black_time;
                 };
                 auto assign_moved_clock = [&](const ClockState& settled) {
+                    const std::string before = moved_clock_from(clocks);
                     if (moved_player == "white") {
                         clocks.white_time = settled.white_time;
                     } else {
@@ -4160,6 +4198,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     }
                     if (!settled.active_player.empty()) {
                         clocks.active_player = settled.active_player;
+                    }
+                    const std::string after = moved_clock_from(clocks);
+                    if (!after.empty() && after != before &&
+                        plausible_clock_after_move(after, previous_moved_clock)) {
+                        moved_time_temporally_reconciled = true;
+                        diagnostic_evidence_context.clock_temporal_decision = "reconciled";
                     }
                 };
 
@@ -4173,6 +4217,9 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 constexpr double kMaxClockSettleWindowSeconds = 4.0;
 
                 if (should_wait_for_clock_settle) {
+                    std::vector<std::string> temporal_clock_readings;
+                    diagnostic_evidence_context.clock_temporal_checked = true;
+                    diagnostic_evidence_context.clock_temporal_decision = "pending";
                     for (size_t lookahead = i + 1; lookahead < candidates.size(); ++lookahead) {
                         const CandidateFrame& future_cf = candidates[lookahead];
                         if (future_cf.t - t > kMaxClockSettleWindowSeconds) {
@@ -4181,6 +4228,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         if (future_cf.clock_top_bgr.empty() || future_cf.clock_bot_bgr.empty()) {
                             continue;
                         }
+                        ++diagnostic_evidence_context.clock_temporal_sample_count;
 
                         std::vector<double> future_hash = future_cf.board_hash.empty()
                             ? compute_all_square_means(future_cf.board_gray, *geo_, margin_h_, margin_w_)
@@ -4203,17 +4251,46 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         ClockState settled = extract_clocks_for_moved_player_from_rois(
                             future_cf.clock_top_bgr, future_cf.clock_bot_bgr, moved_player, nullptr, future_active);
                         const std::string& settled_clock = moved_clock_from(settled);
+                        if (!settled_clock.empty() && parse_clock_seconds(settled_clock)) {
+                            ++diagnostic_evidence_context.clock_temporal_observed_count;
+                        }
                         if (settled_clock.empty() || settled_clock == previous_moved_clock ||
                             !plausible_clock_after_move(settled_clock, previous_moved_clock)) {
                             continue;
                         }
 
-                        assign_moved_clock(settled);
-                        break;
+                        temporal_clock_readings.push_back(settled_clock);
+                        ++diagnostic_evidence_context.clock_temporal_plausible_count;
+                    }
+
+                    const auto temporal_reconciliation = reconcile_clock_readings(
+                        temporal_clock_readings);
+                    diagnostic_evidence_context.clock_temporal_agreement_count =
+                        temporal_reconciliation.agreement_count;
+                    if (!temporal_reconciliation.selected_reading.empty()) {
+                        ClockState reconciled = clocks;
+                        if (moved_player == "white") {
+                            reconciled.white_time = temporal_reconciliation.selected_reading;
+                        } else {
+                            reconciled.black_time = temporal_reconciliation.selected_reading;
+                        }
+                        assign_moved_clock(reconciled);
+                        diagnostic_evidence_context.clock_temporal_reconciled =
+                            moved_time_temporally_reconciled;
+                        diagnostic_evidence_context.clock_temporal_decision =
+                            moved_time_temporally_reconciled ? "reconciled" : "unchanged";
+                    } else {
+                        diagnostic_evidence_context.clock_temporal_decision =
+                            temporal_reconciliation.provenance == "rejected"
+                                ? "rejected"
+                                : "observed_without_reconciliation";
                     }
                 } else if (i + 1 < candidates.size() && candidates[i + 1].t - t <= 2.0) {
                     const CandidateFrame& future_cf = candidates[i + 1];
                     if (!future_cf.clock_top_bgr.empty() && !future_cf.clock_bot_bgr.empty()) {
+                        diagnostic_evidence_context.clock_temporal_checked = true;
+                        diagnostic_evidence_context.clock_temporal_decision = "pending";
+                        ++diagnostic_evidence_context.clock_temporal_sample_count;
                         std::string future_active = detect_active_clock_from_rois(
                             future_cf.clock_top_bgr, future_cf.clock_bot_bgr);
                         ClockState settled = extract_clocks_for_moved_player_from_rois(
@@ -4221,10 +4298,20 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         const std::string& settled_clock = moved_clock_from(settled);
                         auto immediate_seconds = parse_clock_seconds(immediate_moved_clock);
                         auto settled_seconds = parse_clock_seconds(settled_clock);
+                        if (settled_seconds) {
+                            ++diagnostic_evidence_context.clock_temporal_observed_count;
+                        }
                         if (immediate_seconds && settled_seconds &&
                             std::abs(*settled_seconds - *immediate_seconds) <= 30 &&
                             plausible_clock_after_move(settled_clock, previous_moved_clock)) {
                             assign_moved_clock(settled);
+                            diagnostic_evidence_context.clock_temporal_plausible_count = 1;
+                            diagnostic_evidence_context.clock_temporal_agreement_count =
+                                settled_clock == immediate_moved_clock ? 1 : 0;
+                            diagnostic_evidence_context.clock_temporal_reconciled =
+                                moved_time_temporally_reconciled;
+                            diagnostic_evidence_context.clock_temporal_decision =
+                                moved_time_temporally_reconciled ? "reconciled" : "unchanged";
                         }
                     }
                 }
@@ -4255,13 +4342,21 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 auto previous_moved_seconds = parse_clock_seconds(previous_moved_clock);
                 const bool final_clock_missing_or_implausible =
                     final_moved_clock.empty() || final_clock_is_implausible;
+                const bool clock_veto_reliable =
+                    validation::passes_clock_veto_reliability_gate({
+                        moved_time_observed,
+                        diagnostic_evidence_context.clock_temporal_checked,
+                        diagnostic_evidence_context.clock_temporal_sample_count,
+                        diagnostic_evidence_context.clock_temporal_observed_count,
+                        diagnostic_evidence_context.clock_temporal_agreement_count,
+                    });
                 strong_visual_clock_veto_override =
                     !first_move_after_revert &&
                     previous_moved_seconds && *previous_moved_seconds < 10 * 60 &&
                     final_clock_missing_or_implausible && active_clock_still_on_mover &&
                     (strong_visual_landing_override || strong_visual_registration ||
                      strong_visual_move_registration);
-                if (final_clock_is_stale && !active_clock_confirms_move &&
+                if (clock_veto_reliable && final_clock_is_stale && !active_clock_confirms_move &&
                     !historical_handoff_clock_override) {
                     if (debug_level_ != DebugLevel::None) {
                         log_info("    " + utils::ts(elapsed()) + " [Debug] " + std::to_string(t) + "s: " + move_uci + " rejected (moved player's clock did not advance from analysis branch)");
@@ -4271,7 +4366,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     break;
                 }
                 bool future_clock_drop_seen = false;
-                if (final_clock_is_stale && active_clock_confirms_move &&
+                if (clock_veto_reliable && final_clock_is_stale && active_clock_confirms_move &&
                     previous_moved_seconds && *previous_moved_seconds <= 2 * 60) {
                     constexpr double kLowTimeClockDeferralWindowSeconds = 20.0;
                     for (size_t lookahead = i + 1; lookahead < candidates.size(); ++lookahead) {
@@ -4311,7 +4406,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     all_validations_passed = false;
                     break;
                 }
-                if (!first_move_after_revert &&
+                if (clock_veto_reliable && !first_move_after_revert &&
                     previous_moved_seconds && *previous_moved_seconds < 10 * 60 &&
                     final_clock_is_implausible && active_clock_still_on_mover &&
                     !strong_visual_clock_veto_override &&
@@ -4333,6 +4428,45 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     break;
                 }
             }
+            const std::string reconciled_moved_clock =
+                (moved_player == "white") ? clocks.white_time : clocks.black_time;
+            const std::string moved_time_provenance =
+                moved_time_temporally_reconciled ? "temporal" :
+                moved_time_contextually_reconciled ? "contextual" :
+                reconciled_moved_clock.empty() ? "missing" :
+                moved_time_observed ? "direct" :
+                moved_time_missing ? "inherited" : "rejected";
+            diagnostic_evidence_context.clock_provenance = moved_time_provenance;
+            const bool temporal_rejected =
+                diagnostic_evidence_context.clock_temporal_decision == "rejected";
+            diagnostic_evidence_context.clock_temporal_decision =
+                moved_time_temporally_reconciled ? "reconciled" :
+                temporal_rejected ? "rejected" :
+                diagnostic_evidence_context.clock_temporal_checked
+                    ? "observed_without_reconciliation" : "not_checked";
+            diagnostic_evidence_context.clock_decision =
+                moved_time_provenance == "temporal" ? "ocr_temporal_reconciled" :
+                moved_time_provenance == "contextual" ? "ocr_contextual_reconciled" :
+                moved_time_provenance == "direct" ? "ocr_plausible" :
+                moved_time_provenance == "inherited" ? "ocr_inherited" :
+                moved_time_provenance == "missing" ? "ocr_missing" : "ocr_implausible";
+            diagnostic_evidence_context.clock_assessment.state =
+                diagnostic_evidence_context.clock_decision;
+            diagnostic_evidence_context.clock_assessment.measurements.push_back({
+                "temporal_sample_count",
+                static_cast<double>(diagnostic_evidence_context.clock_temporal_sample_count)});
+            diagnostic_evidence_context.clock_assessment.measurements.push_back({
+                "temporal_observed_count",
+                static_cast<double>(diagnostic_evidence_context.clock_temporal_observed_count)});
+            diagnostic_evidence_context.clock_assessment.measurements.push_back({
+                "geometry_uncertainty",
+                diagnostic_evidence_context.geometry_uncertainty});
+            diagnostic_evidence_context.clock_assessment.uncertainty_reason =
+                moved_time_provenance == "temporal"
+                    ? "uncalibrated_temporal_ocr_confidence"
+                    : moved_time_provenance == "contextual"
+                        ? "uncalibrated_contextual_ocr_confidence"
+                        : moved_time_provenance;
             ++clock_ocr_calls;
             clock_ocr_us += std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - clock_start).count();
@@ -4597,7 +4731,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
             
             data.clocks.push_back({clocks.active_player, clocks.white_time, clocks.black_time,
-                                   moved_time_observed, moved_time_missing});
+                                   moved_time_observed, moved_time_missing,
+                                   moved_time_provenance});
             if (trace_stream.is_open()) {
                 trace_candidate("CLOCK_STATE", t, data.moves.size(), data.fens.back(), move_uci,
                                 best.score, max_sd, 0.0, 0.0,

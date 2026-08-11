@@ -24,6 +24,8 @@ The scan uses a 5 FPS baseline (`0.2s`) and adaptive cadence: quiet stretches ca
 
 The result contains the board origin, width and height, per-square dimensions, localization score/scale, and normalized `geometry_confidence` in `[0, 1]`. The confidence is diagnostic evidence only; it is not currently a move-selection veto. Geometry can be cached for a repeated video/template pair, but move verification still treats every visual measurement as noisy because of compression, antialiasing, highlights, pieces, and transient UI states.
 
+During extraction, periodic full-frame probes compare fresh localization with the anchored geometry and the preceding probe. A position or size jump above 16 pixels between probes, or a persistent anchor drift above 24 pixels, is marked `relocalize_required`; the candidate is rejected before square evidence is used. The probe interval defaults to five seconds and is controlled by `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` (clamped to 1-30 seconds). `geometry_uncertainty` is propagated to detector measurements as advisory evidence.
+
 ## 3. UI detectors
 
 ### Yellow move highlights
@@ -44,7 +46,7 @@ Red marks use `R - (G + B) / 2` and a dynamic baseline derived from the board co
 
 ### Clocks
 
-Clock regions are derived from board geometry. Brightness identifies the active clock before OCR. `ClockRecognizer` caches unchanged ROIs and recognizes only the changed side when possible. `DigitRecognizer` uses connected-component shape classification followed by Hu Moments templates; Tesseract is not required.
+Clock regions are derived from board geometry. Brightness identifies the active clock before OCR. `ClockRecognizer` caches unchanged ROIs and recognizes only the changed side when possible. `DigitRecognizer` uses connected-component shape classification followed by Hu Moments templates; Tesseract is not required. When a reading is uncertain, future settled samples are reconciled only when a plausible value repeats. Clock provenance is retained as `initial`, `direct`, `contextual`, `temporal`, `inherited`, `missing`, or `rejected`; a clock veto requires a plausible direct reading plus at least two sampled, observed, agreeing readings.
 
 ## 4. Move verification
 
@@ -56,8 +58,9 @@ Candidates must satisfy the relevant visual and state checks:
 2. Square differences support the legal transition.
 3. Yellow highlights support both endpoints when present.
 4. Hover-box evidence does not indicate a mid-drag frame.
-5. The active clock agrees with the expected side when usable.
-6. Recent inverse, immediate-touch, settle-window, and endpoint-retarget guards do not reject the candidate.
+5. The active clock agrees with the expected side when usable, and clock evidence is strong enough to veto the move.
+6. Geometry is stable enough for square evidence to be trusted.
+7. Recent inverse, immediate-touch, settle-window, and endpoint-retarget guards do not reject the candidate.
 
 Endpoint retargeting is deliberately narrow. Current reusable cases cover rook rank/file ambiguity and an immediate queen recapture of a just-moved pawn; no fixture names, expected moves, or expected clock values are consulted.
 
@@ -67,7 +70,7 @@ The reducer stores verified board images, FENs, timestamps, clocks, and a compac
 
 Superseded tails can become PGN variations when they are stable and legal. Each variation retains its root FEN, moves, timestamps, visual confidence scores, replay-observation state, and clock records. Variation validation follows legal FEN transitions rather than relying on a historical index or UCI text alone. Exact main-line replays are removed only when their timeline proves they are duplicates; nested branches are pruned when a later state-derived continuation supersedes them.
 
-Clock provenance is explicit. A moved clock can be directly observed, missing, or inherited at a replay branch point. Inherited branch clocks provide continuity but are never reported as a new OCR observation.
+Clock provenance is explicit. A moved clock can be `direct`, `contextual`, `temporal`, `missing`, `inherited`, or `rejected` (with `initial` used for the starting position). Inherited branch clocks provide continuity but are never reported as a new OCR observation.
 
 ## 6. GameData and exports
 
@@ -110,10 +113,10 @@ Diagnostic controls are generic and timestamp-bounded; they do not select a move
 | `CTA_REVERT_EXHAUSTIVE_FALLBACK` | Enable the slower reference revert lookup |
 | `CTA_DIAGNOSTIC_FILE` | Write structured reducer observations as JSONL |
 | `CTA_DIAGNOSTIC_FRAME_DIR`, `CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS` | Retain sampled full-frame, board, and clock-ROI artifacts |
-| `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set the interval for diagnostic geometry rechecks, clamped to 1-30 seconds |
+| `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` | Set the interval for extraction geometry probes, clamped to 1-30 seconds; unstable candidates are rejected |
 | `CTA_REPLAY_OBSERVATIONS` | Replay a compact `observations.jsonl` trace using saved board/clock artifacts instead of source-video decoding |
 
-`tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, diagnostic JSONL/TSV paths, automatic first-divergence bundles, SVG/contact-sheet artifacts, `--replay-bundle`, `--compare-replay-traces`, `--compare-mapper-runs`, and detector calibration reports. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
+`tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, diagnostic JSONL/TSV paths, automatic first-divergence bundles, SVG/contact-sheet artifacts, `--replay-bundle`, `--compare-replay-traces`, `--compare-source-runs`, `--compare-mapper-runs`, intentional failure probes, and detector calibration reports. Test-side calibration modes can emit clock, yellow-square, and hover/animation JSONL. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
 
 Replay comparison has two layers. The trace contract checks observation IDs, mapper provenance, board hashes, and event ordering; semantic contracts separately compare accepted moves, clock provenance, recovery/revert state, and variation state. A trace can therefore have matching event names while still failing because a branch, clock source, or accepted move changed. Diagnostic detector confidence is reported as raw evidence until calibration provides a supported probability model.
 
