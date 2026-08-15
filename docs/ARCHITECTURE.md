@@ -24,6 +24,12 @@ The scan uses a 5 FPS baseline (`0.2s`) and adaptive cadence: quiet stretches ca
 
 The result contains the board origin, width and height, per-square dimensions, localization score/scale, and normalized `geometry_confidence` in `[0, 1]`. The confidence is diagnostic evidence only; it is not currently a move-selection veto. Geometry can be cached for a repeated video/template pair, but move verification still treats every visual measurement as noisy because of compression, antialiasing, highlights, pieces, and transient UI states.
 
+Integration tests keep their small PGN baselines under `assets/fixtures/games/`.
+Large source videos are external test media under
+`chess-tube-analyzer-media/games/`; `CTA_MEDIA_ROOT` can override that location
+for local or CI test runs. This separation keeps runtime and detector assets in
+the repository without forcing full-length videos into every clone.
+
 During extraction, periodic full-frame probes compare fresh localization with the anchored geometry and the preceding probe. A position or size jump above 16 pixels between probes, or a persistent anchor drift above 24 pixels, is marked `relocalize_required`; the candidate is rejected before square evidence is used. The probe interval defaults to five seconds and is controlled by `CTA_GEOMETRY_CHECK_INTERVAL_SECONDS` (clamped to 1-30 seconds). `geometry_uncertainty` is propagated to detector measurements as advisory evidence.
 
 ## 3. UI detectors

@@ -76,6 +76,11 @@ python tests\run_tests.py --compare-source-runs build_diag\source_a.jsonl build_
 python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extraction --induce-failure
 ```
 
+The integration test videos are external media under the sibling
+`chess-tube-analyzer-media/games/` directory. Set `CTA_MEDIA_ROOT` when the
+media directory is elsewhere; the full-game fixture is
+`warmerdam-vs-dommaraju`.
+
 The GUI executable supports persisted settings and the GUI headless flags. The lower-level `extract_moves` target exposes extraction-oriented CLI options; use `--help` for its exact interface. Diagnostic cutoffs affect only the requested replay and never become fixture-specific production behavior.
 
 ## Conventions

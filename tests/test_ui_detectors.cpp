@@ -573,6 +573,41 @@ static std::string find_assets_dir() {
     return ""; // Not found
 }
 
+// Large integration videos live outside the repository. CTA_MEDIA_ROOT may
+// point at that media directory; otherwise use the sibling directory created
+// by the repository's documented local layout.
+static std::filesystem::path find_media_games_dir(const std::string& assets_dir) {
+    std::vector<std::filesystem::path> candidates;
+    if (const char* configured_root = std::getenv("CTA_MEDIA_ROOT");
+        configured_root != nullptr && configured_root[0] != '\0') {
+        candidates.emplace_back(configured_root);
+    }
+    const std::filesystem::path assets_path = assets_dir;
+    candidates.push_back(assets_path.parent_path().parent_path() / "chess-tube-analyzer-media");
+    candidates.push_back(std::filesystem::path("../chess-tube-analyzer-media"));
+    candidates.push_back(std::filesystem::path("../../chess-tube-analyzer-media"));
+    for (const auto& candidate : candidates) {
+        const auto games_dir = candidate / "games";
+        if (std::filesystem::exists(games_dir) && std::filesystem::is_directory(games_dir)) {
+            return games_dir;
+        }
+    }
+    return {};
+}
+
+static std::filesystem::path find_game_fixture_file(
+    const std::string& assets_dir,
+    const std::string& game_name,
+    const std::string& file_name) {
+    const auto external_path = find_media_games_dir(assets_dir) / game_name / file_name;
+    const auto bundled_path = std::filesystem::path(assets_dir) / "fixtures" / "games" /
+                              game_name / file_name;
+    if (std::filesystem::exists(external_path)) {
+        return external_path;
+    }
+    return bundled_path;
+}
+
 static std::string normalize_san_token(std::string san) {
     san.erase(std::remove(san.begin(), san.end(), '+'), san.end());
     san.erase(std::remove(san.begin(), san.end(), '#'), san.end());
@@ -3365,7 +3400,8 @@ TEST_F(DetectorsTest, ConstructorThrowsOnMissingAsset) {
 #if TEST_7_PLIES_EXTRACTION
 
 TEST_F(DetectorsTest, SevenPliesExtraction) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "short" / "seven-plies" / "video.mp4").string();
+    const std::string video_path = find_game_fixture_file(
+        assets_dir_, "short/seven-plies", "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3386,7 +3422,8 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
-    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "short" / "seven-plies" / "expected.pgn").string();
+    const std::string pgn_path = find_game_fixture_file(
+        assets_dir_, "short/seven-plies", "expected.pgn").string();
     ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
@@ -3444,8 +3481,10 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
 #if TEST_MEDIUM_GAME_REVERT
 
 TEST_F(DetectorsTest, MediumGameWithRevert) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "medium" / "analysis-line-and-revert" / "video.mp4").string();
-    const std::string pgn_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "medium" / "analysis-line-and-revert" / "expected.pgn").string();
+    const std::string video_path = find_game_fixture_file(
+        assets_dir_, "analysis-line-and-revert", "video.mp4").string();
+    const std::string pgn_path = find_game_fixture_file(
+        assets_dir_, "analysis-line-and-revert", "expected.pgn").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3515,16 +3554,14 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
 #if TEST_FULL_GAME_1_EXTRACTION
 
 TEST_F(DetectorsTest, FullGame1Extraction) {
-    const std::string dir_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "full" / "agadmator-game").string();
-    auto vid_files = list_files(dir_path, {".mp4", ".mkv", ".webm", ".avi"});
-    
-    if (vid_files.empty()) {
-        GTEST_SKIP() << "Video not found in: " << dir_path;
-    }
-    
-    const std::string video_path = vid_files[0];
-    const std::string pgn_path = (std::filesystem::path(dir_path) / "game.pgn").string();
+    const std::string video_path = find_game_fixture_file(
+        assets_dir_, "warmerdam-vs-dommaraju", "video.mp4").string();
+    const std::string pgn_path = find_game_fixture_file(
+        assets_dir_, "warmerdam-vs-dommaraju", "expected.pgn").string();
 
+    if (!std::filesystem::exists(video_path)) {
+        GTEST_SKIP() << "Video not found: " << video_path;
+    }
     if (!std::filesystem::exists(pgn_path)) {
         GTEST_SKIP() << "PGN not found: " << pgn_path;
     }
@@ -3645,19 +3682,16 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
 #if TEST_INTEGRATION_CLOCK_TIMES
 
 TEST_F(DetectorsTest, IntegrationClockTimes) {
-    const std::string dir_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "clock-times").string();
-    auto vid_files = list_files(dir_path, {".mp4", ".mkv", ".webm", ".avi"});
-    
-    if (vid_files.empty()) {
-        GTEST_SKIP() << "Video not found in: " << dir_path;
+    const std::string video_path = find_game_fixture_file(
+        assets_dir_, "clock-times", "video.mp4").string();
+    const std::string pgn_path = find_game_fixture_file(
+        assets_dir_, "clock-times", "expected.pgn").string();
+    if (!std::filesystem::exists(video_path)) {
+        GTEST_SKIP() << "Video not found: " << video_path;
     }
-    
-    const std::string video_path = vid_files[0];
-    auto pgn_files = list_files(dir_path, {".pgn"});
-    if (pgn_files.empty()) {
-        GTEST_SKIP() << "PGN not found in: " << dir_path;
+    if (!std::filesystem::exists(pgn_path)) {
+        GTEST_SKIP() << "PGN not found: " << pgn_path;
     }
-    const std::string pgn_path = pgn_files[0];
 
     std::cout << "\nRunning integration test on clock times...\n";
 
@@ -3717,7 +3751,8 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
 #if TEST_MEMORY_LIMIT
 
 TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "medium" / "analysis-line-and-revert" / "video.mp4").string();
+    const std::string video_path = find_game_fixture_file(
+        assets_dir_, "analysis-line-and-revert", "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3758,7 +3793,8 @@ TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
 #if TEST_CACHE_CORRECTNESS
 
 TEST_F(DetectorsTest, CacheCorrectness) {
-    const std::string video_path = (std::filesystem::path(assets_dir_) / "fixtures" / "games" / "short" / "seven-plies" / "video.mp4").string();
+    const std::string video_path = find_game_fixture_file(
+        assets_dir_, "short/seven-plies", "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;

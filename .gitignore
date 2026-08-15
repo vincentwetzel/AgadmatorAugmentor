@@ -104,6 +104,9 @@ full_game_variations_debug.txt
 *.dmp
 *.core
 
+# Pytest temporary basetemp directories
+pytest-cache-files-*/
+
 # Temporary / OS files
 *.swp
 *.swo

@@ -166,6 +166,7 @@ Important environment toggles:
 | `CTA_REPLAY_OBSERVATIONS` | Use a saved compact observation trace and artifacts instead of decoding source video |
 | `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
 | `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
+| `CTA_MEDIA_ROOT` | Override the external test-media directory containing `games/` |
 
 Detector calibration is deliberately separate from production extraction. Labeled JSONL rows may include `detector`, `component`, `truth`, `prediction`, `confidence`, `transition_id`, `regime`, `condition`, and `case`. The report provides frame/transition confusion metrics, confidence bins, threshold sweeps, representative errors, geometry uncertainty, clock OCR/provenance, temporal metrics, and advisory operating points. Test-side outputs are available through `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`; the repository manifests are seed data, not acceptance thresholds.
 

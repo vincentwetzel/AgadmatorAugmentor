@@ -47,6 +47,18 @@ python tests\run_tests.py --no-build ^
 
 On Windows `cmd.exe`, use `^` for line continuation instead of `\`.
 
+## Integration video is skipped as missing
+
+Large integration videos are not stored in the repository. Place them under
+the sibling `chess-tube-analyzer-media/games/` directory, or set
+`CTA_MEDIA_ROOT` to a media directory containing `games/`. The renamed full
+fixture is `warmerdam-vs-dommaraju`.
+
+```powershell
+$env:CTA_MEDIA_ROOT = 'E:\path\to\chess-tube-analyzer-media'
+python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extraction
+```
+
 For a failed integration test, inspect the automatically generated diagnostic bundle under the selected build directory's `diagnostics` folder. In addition to JSONL and TSV data, the bundle can contain SVG detector overlays and an HTML contact sheet. A `relocalize_required` geometry decision means the frame was rejected because the anchored board geometry drifted beyond the stability guard. Use `--replay-bundle` to rerun the reducer from `observations.jsonl`, or `--compare-replay-traces` to compare source and replay semantics without opening the original video.
 
 ## Clocks are missing or implausible

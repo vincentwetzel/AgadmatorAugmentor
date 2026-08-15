@@ -78,6 +78,22 @@ python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extra
 python tests\run_tests.py --no-build --gtest-filter DetectorsTest.IntegrationClockTimes
 ```
 
+Large integration videos are kept outside the repository. The tests look for
+`CTA_MEDIA_ROOT` first; it should point to the media directory containing a
+`games/` subdirectory. If unset, the tests use the sibling layout
+`..\chess-tube-analyzer-media` when available. Small expected PGN files remain
+under `assets/fixtures/games/` unless they are stored beside their external
+video.
+
+For the standard local layout, the full-game fixture is
+`chess-tube-analyzer-media/games/warmerdam-vs-dommaraju/`. To use another media
+location in PowerShell:
+
+```powershell
+$env:CTA_MEDIA_ROOT = 'E:\path\to\chess-tube-analyzer-media'
+python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extraction
+```
+
 Test toggles are defined at the top of `tests/test_ui_detectors.cpp`. Integration expectations come from sample PGN files. Production code must remain fixture-independent; the runner scans `src/` and `include/` for known fixture-specific override patterns before running.
 
 ## Diagnostic replay

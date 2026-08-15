@@ -187,7 +187,7 @@ ChessTubeAnalyzer/
 |   |-- reference/board/board.png
 |   |-- reference/pieces/{white,black}/*.png
 |   |-- fixtures/detectors/<detector-name>/
-|   |-- fixtures/games/<size>/<fixture-name>/
+|   |-- fixtures/games/<size>/<fixture-name>/expected.pgn
 |   |-- templates/*.json
 |   `-- icons/thumbs-up.png
 |-- docs/
@@ -224,6 +224,11 @@ python tests\run_tests.py
 ```
 
 The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
+
+Large integration videos are stored outside Git in the sibling
+`chess-tube-analyzer-media/games/` directory. Set `CTA_MEDIA_ROOT` when using a
+different location; the tests fall back to that sibling directory by default.
+The full-game fixture is named `warmerdam-vs-dommaraju`.
 
 For a focused reducer investigation, the runner supports `--gtest-filter`, `--stop-after`, `--trace-file`, `--diagnostic-file`, `--failure-report`, `--trace-start`, and `--trace-end`. It also supports `--replay-bundle`, `--compare-replay-traces`, `--compare-source-runs`, `--compare-mapper-runs`, `--detector-calibration`, `--calibration-debug-dir`, `--induce-failure`, and test-side calibration outputs for clocks, yellow squares, and hover/animation. The corresponding extractor controls are diagnostic-only: `CTA_STOP_AFTER_SECONDS`, `CTA_TRACE_FILE`, `CTA_DIAGNOSTIC_FILE`, `CTA_TRACE_START`, and `CTA_TRACE_END`. Optional trace detail switches include `CTA_TRACE_HISTORICAL`, `CTA_TRACE_NEAREST`, and `CTA_TRACE_SETTLE`; clock/revert diagnostics include `CTA_DEBUG_CLOCK_CANDIDATES`, `CTA_DEBUG_CLOCK_ROI_PLY`, `CTA_DEBUG_CLOCK_ROI_DIR`, and `CTA_REVERT_EXHAUSTIVE_FALLBACK`. A failed integration run creates a sibling `*_bundle` with `report.json`, `diagnostics.jsonl`, `observations.jsonl`, optional `events.tsv`, invariant data, SVG overlays, an HTML contact sheet, and retained frame/board/clock artifacts. Use `python tests\run_tests.py --replay-bundle path\to\bundle`, `--compare-replay-traces source.jsonl replay.jsonl`, or `--compare-source-runs source_a.jsonl source_b.jsonl` to inspect runs without decoding the source video again.
 
