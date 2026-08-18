@@ -757,6 +757,7 @@ static std::string build_san_for_test(const libchess::Position& pos, const libch
 }
 
 struct ExpectedGameData {
+    std::map<std::string, std::string> headers;
     std::vector<std::string> main_line;
     std::vector<std::string> variations;
     std::vector<std::string> all_moves;
@@ -1051,6 +1052,32 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
         }
     }
 
+    // Parse the tag pairs separately from movetext.  Header metadata is part
+    // of the fixture contract, so silently ignoring it would allow an output
+    // PGN with incomplete metadata to pass the integration test.
+    std::istringstream header_stream(pgn);
+    std::string header_line;
+    while (std::getline(header_stream, header_line)) {
+        if (header_line.size() < 4 || header_line.front() != '[' || header_line.back() != ']') {
+            continue;
+        }
+
+        const size_t key_start = 1;
+        const size_t separator = header_line.find(' ', key_start);
+        if (separator == std::string::npos || separator <= key_start ||
+            separator + 2 >= header_line.size() || header_line[separator + 1] != '"') {
+            continue;
+        }
+
+        const size_t value_start = separator + 2;
+        const size_t value_end = header_line.rfind('"');
+        if (value_end < value_start) continue;
+
+        result.headers.emplace(
+            header_line.substr(key_start, separator - key_start),
+            header_line.substr(value_start, value_end - value_start));
+    }
+
     std::istringstream iss(cleaned);
     std::string token;
     
@@ -1166,6 +1193,21 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
     }
 
     return result;
+}
+
+static void expect_fixture_metadata_contract(
+    const ExpectedGameData& expected_data,
+    const std::string& pgn_path) {
+    static constexpr std::array<const char*, 6> required_headers = {
+        "Event", "Site", "Date", "Round", "White", "Black",
+    };
+
+    for (const char* key : required_headers) {
+        ASSERT_TRUE(expected_data.headers.contains(key))
+            << "Expected PGN is missing required header [" << key << "]: " << pgn_path;
+    }
+    ASSERT_FALSE(expected_data.headers.empty())
+        << "Expected PGN contains no metadata headers: " << pgn_path;
 }
 
 static std::multiset<std::string> extract_all_moves_multiset(const GameData& data) {
@@ -1489,6 +1531,26 @@ protected:
     cv::Mat board_;
     BoardGeometry geo_;
 };
+
+TEST_F(DetectorsTest, AllAnswerKeyPgnsContainMetadata) {
+    const std::filesystem::path games_dir =
+        std::filesystem::path(assets_dir_) / "fixtures" / "games";
+    ASSERT_TRUE(std::filesystem::exists(games_dir))
+        << "Fixture games directory not found: " << games_dir.string();
+
+    size_t answer_key_count = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(games_dir)) {
+        if (!entry.is_regular_file() || entry.path().filename() != "expected.pgn") continue;
+
+        ++answer_key_count;
+        const ExpectedGameData expected_data =
+            load_expected_uci_moves_from_pgn(entry.path().string());
+        expect_fixture_metadata_contract(expected_data, entry.path().string());
+    }
+
+    EXPECT_GT(answer_key_count, 0u)
+        << "No expected.pgn answer keys were found under " << games_dir.string();
+}
 
 // ─── BOARD LOCALIZER ─────────────────────────────────────────────────────────
 #if TEST_LOCATE_BOARD || TEST_BOARD_LOCALIZATION_CALIBRATION
@@ -3614,7 +3676,7 @@ TEST_F(DetectorsTest, ConstructorThrowsOnMissingAsset) {
 
 TEST_F(DetectorsTest, SevenPliesExtraction) {
     const std::string video_path = find_game_fixture_file(
-        assets_dir_, "short/seven-plies", "video.mp4").string();
+        assets_dir_, "seven-plies", "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3636,10 +3698,11 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     result.plies_extracted = static_cast<int>(data.moves.size());
 
     const std::string pgn_path = find_expected_game_pgn(
-        assets_dir_, "short/seven-plies").string();
+        assets_dir_, "seven-plies").string();
     ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
@@ -3697,7 +3760,7 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     const std::string video_path = find_game_fixture_file(
         assets_dir_, "analysis-line-and-revert", "video.mp4").string();
     const std::string pgn_path = find_expected_game_pgn(
-        assets_dir_, "medium/analysis-line-and-revert").string();
+        assets_dir_, "analysis-line-and-revert").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3720,6 +3783,7 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     result.plies_extracted = static_cast<int>(data.moves.size());
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
@@ -3770,7 +3834,7 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     const std::string video_path = find_game_fixture_file(
         assets_dir_, "warmerdam-vs-dommaraju", "video.mp4").string();
     const std::string pgn_path = find_expected_game_pgn(
-        assets_dir_, "full/warmerdam-vs-dommaraju").string();
+        assets_dir_, "warmerdam-vs-dommaraju").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
@@ -3794,6 +3858,7 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     result.plies_extracted = static_cast<int>(data.moves.size());
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     induce_expected_failure_for_diagnostics(expected_moves);
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
@@ -3920,6 +3985,7 @@ TEST_F(DetectorsTest, YiVsEsipenkoExtraction) {
     result.plies_extracted = static_cast<int>(data.moves.size());
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
     const std::vector<std::string>& expected_moves = expected_data.main_line;
     const std::multiset<std::string> expected_all(
         expected_data.all_moves.begin(), expected_data.all_moves.end());
@@ -4013,6 +4079,7 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
 
     // Extract and verify expected moves from PGN
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected moves from PGN.\n";
@@ -4097,7 +4164,7 @@ TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
 
 TEST_F(DetectorsTest, CacheCorrectness) {
     const std::string video_path = find_game_fixture_file(
-        assets_dir_, "short/seven-plies", "video.mp4").string();
+        assets_dir_, "seven-plies", "video.mp4").string();
 
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;

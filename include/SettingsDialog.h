@@ -69,9 +69,11 @@ private:
 
     struct Ui {
         ToggleSwitch* pgnExportToggle = nullptr;
+        ToggleSwitch* pgnAnalysisToggle = nullptr;
+        ToggleSwitch* pgnAnnotationsToggle = nullptr;
         ToggleSwitch* subtitlesToggle = nullptr;
         ToggleSwitch* analysisVideoToggle = nullptr;
-        ToggleSwitch* moveAnnotationsToggle = nullptr;
+        ToggleSwitch* videoAnnotationsToggle = nullptr;
         ToggleSwitch* removeOriginalToggle = nullptr;
         ToggleSwitch* fastPreviewToggle = nullptr;
 

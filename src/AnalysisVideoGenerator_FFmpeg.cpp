@@ -342,16 +342,16 @@ bool compose_analysis_video(const std::string& input_video_path,
     // Fallback to copy if codec isn't set
     if (aCodec.empty()) aCodec = "copy";
 
-    // Keep source cover art.  The filtered [out] stream replaces the source
-    // presentation video, so it is not enough to rely on automatic mapping.
-    // FFmpeg's uppercase V stream specifier excludes attached pictures;
-    // mapping all source video and subtracting 0:V therefore leaves only the
-    // source thumbnails without assuming a particular stream index.
-    std::string map_args = "-map \"[out]\" -map 0:v -map -0:V -map 0:a? ";
+    // The filtered [out] stream replaces the source presentation video.  Do
+    // not map source video streams here: some MP4 files carry an attached PNG
+    // cover image, and treating that image as a normal output video makes
+    // FFmpeg try to encode it with the presentation codec.  MP4 then rejects
+    // the resulting cover-image stream before composition can start.
+    std::string map_args = "-map \"[out]\" -map 0:a? ";
     if (has_srt) {
         map_args += "-map " + std::to_string(srt_stream_idx) + ":s ";
     }
-    map_args += "-map 0:s? -map 0:t? -map_metadata 0 ";
+    map_args += "-map 0:s? -map 0:d? -map_metadata 0 ";
 
     std::string subtitle_codecs = "-c:s copy";
     if (has_srt) {
@@ -360,17 +360,17 @@ bool compose_analysis_video(const std::string& input_video_path,
         else if (actual_output_path.find(".webm") != std::string::npos) srt_codec = "webvtt";
         else srt_codec = "srt";
         
-        subtitle_codecs = "-c:s copy -c:s:0 " + srt_codec;
+        // Apply one compatible codec to every subtitle stream.  This avoids
+        // conflicting stream-wide and per-stream codec options when the
+        // source already contains subtitles in addition to the generated SRT.
+        subtitle_codecs = "-c:s " + srt_codec;
     }
 
     ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
                  "-filter_complex_threads " + std::to_string(num_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" " +
                  map_args +
-                 // The filtered presentation video is always the first
-                 // output video; all following video streams are source
-                 // attached pictures and must remain stream-copied.
-                 "-c:v copy -c:v:0 " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs +
+                 "-c:v:0 " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs +
                  " -c:t copy -nostats -progress pipe:1 \"" + output_path_arg + "\"";
 
     std::string ffmpeg_tail;

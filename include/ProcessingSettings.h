@@ -11,9 +11,11 @@ struct ProcessingSettings {
     QString boardAssetPath;
     QString assetsPath;
     bool generatePgn = true;
+    bool includePgnAnalysis = false;
+    bool includePgnMoveAnnotations = false;
     bool generateSubtitles = false;
     bool enableStockfish = false;
-    bool enableMoveAnnotations = true;
+    bool enableMoveAnnotations = true; // Quality labels shown in the analysis video.
     bool generateAnalysisVideo = false;
     int multiPv = 3;
     int ffmpegThreads = 4;

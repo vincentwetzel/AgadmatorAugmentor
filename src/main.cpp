@@ -8,11 +8,34 @@
 #include <filesystem>
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <thread>
+#include <vector>
 #ifdef _WIN32
 #include <stdlib.h>
 #endif
+
+static std::string find_default_sample_video() {
+    const std::filesystem::path relative_media_path =
+        std::filesystem::path("games") / "seven-plies" / "video.mp4";
+    std::vector<std::filesystem::path> candidates;
+
+    if (const char* configured_root = std::getenv("CTA_MEDIA_ROOT");
+        configured_root != nullptr && configured_root[0] != '\0') {
+        candidates.emplace_back(std::filesystem::path(configured_root) / "seven-plies" / "video.mp4");
+    }
+
+    candidates.emplace_back(std::filesystem::path("..") / "chess-tube-analyzer-media" / relative_media_path);
+    candidates.emplace_back(std::filesystem::path("..") / ".." / "chess-tube-analyzer-media" / relative_media_path);
+    candidates.emplace_back(std::filesystem::path("..") / ".." / ".." / "chess-tube-analyzer-media" / relative_media_path);
+
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate)) return candidate.string();
+    }
+
+    return candidates.front().string();
+}
 
 int main(int argc, char* argv[]) {
     CLI::App app{"ChessTube Analyzer — Extract chess plies from video"};
@@ -54,7 +77,7 @@ int main(int argc, char* argv[]) {
 
     // F5 convenience: use sample video when no args provided
     if (video_path.empty()) {
-        video_path = "assets/fixtures/games/short/seven-plies/video.mp4";
+        video_path = find_default_sample_video();
         board_asset = "assets/reference/board/board.png";
         debug_level_str = "MOVES";
     }

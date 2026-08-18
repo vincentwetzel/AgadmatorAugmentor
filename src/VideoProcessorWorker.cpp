@@ -48,7 +48,8 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
              settings.overlayConfig.pvText.enabled ||
              ((settings.overlayConfig.board.enabled || arrows_target == "Main Board" || arrows_target == "Both") &&
               (arrows_target == "Analysis Board" || arrows_target == "Main Board" || arrows_target == "Both")));
-        const bool runStockfishAnalysis = settings.enableMoveAnnotations || analysisVideoNeedsEngine;
+        const bool runStockfishAnalysis = settings.includePgnAnalysis ||
+            settings.includePgnMoveAnnotations || settings.enableMoveAnnotations || analysisVideoNeedsEngine;
 
         emit logMessage(
             QString("Overlay config: board(enabled=%1, x=%2, y=%3, scale=%4), "

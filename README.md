@@ -187,7 +187,7 @@ ChessTubeAnalyzer/
 |   |-- reference/board/board.png
 |   |-- reference/pieces/{white,black}/*.png
 |   |-- fixtures/detectors/<detector-name>/
-|   |-- fixtures/games/<size>/<fixture-name>/expected.pgn
+|   |-- fixtures/games/<fixture-name>/expected.pgn
 |   |-- templates/*.json
 |   `-- icons/thumbs-up.png
 |-- docs/

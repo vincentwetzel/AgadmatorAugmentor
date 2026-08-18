@@ -51,10 +51,20 @@ void SettingsDialog::loadSettings() {
     const auto widgets = this->findChildren<QWidget*>();
     for (auto* w : widgets) w->blockSignals(true);
 
-    ui.pgnExportToggle->setChecked(settings.value("generatePgn", true).toBool());
-    ui.subtitlesToggle->setChecked(settings.value("generateSubtitles", false).toBool());
-    ui.analysisVideoToggle->setChecked(settings.value("generateAnalysisVideo", false).toBool());
-    ui.moveAnnotationsToggle->setChecked(settings.value("analysis/enableMoveAnnotations", true).toBool());
+    const bool generatePgn = settings.value("generatePgn", true).toBool();
+    ui.pgnExportToggle->setChecked(generatePgn);
+    const bool includePgnMoveAnnotations = settings.value("pgnAnnotationsToggle", false).toBool();
+    const bool includePgnAnalysis = settings.value("analysis/includePgnAnalysis", false).toBool() || includePgnMoveAnnotations;
+    ui.pgnAnalysisToggle->setChecked(generatePgn && includePgnAnalysis);
+    ui.pgnAnnotationsToggle->setChecked(generatePgn && includePgnMoveAnnotations && includePgnAnalysis);
+    const bool generateSubtitles = settings.value("generateSubtitles", false).toBool();
+    const bool generateAnalysisVideo = settings.value("generateAnalysisVideo", false).toBool() || generateSubtitles;
+    ui.subtitlesToggle->setChecked(generateSubtitles);
+    ui.analysisVideoToggle->setChecked(generateAnalysisVideo);
+    ui.videoAnnotationsToggle->setChecked(generateAnalysisVideo && settings.value("analysis/enableMoveAnnotations", false).toBool());
+    ui.pgnAnalysisToggle->setEnabled(generatePgn);
+    ui.pgnAnnotationsToggle->setEnabled(generatePgn && includePgnAnalysis);
+    ui.videoAnnotationsToggle->setEnabled(generateAnalysisVideo);
 
     int multiPv = settings.value("multiPv", 3).toInt();
     int multiPvIdx = ui.multiPvComboBox->findData(multiPv);
@@ -126,12 +136,14 @@ void SettingsDialog::loadSettings() {
 void SettingsDialog::saveSettings() {
     QSettings settings;
     settings.setValue("generatePgn", ui.pgnExportToggle->isChecked());
+    settings.setValue("analysis/includePgnAnalysis", ui.pgnAnalysisToggle->isChecked());
+    settings.setValue("pgnAnnotationsToggle", ui.pgnAnnotationsToggle->isChecked());
     settings.setValue("generateSubtitles", ui.subtitlesToggle->isChecked());
     settings.setValue("generateAnalysisVideo", ui.analysisVideoToggle->isChecked());
     settings.setValue("multiPv", ui.multiPvComboBox->currentData().toInt());
     settings.setValue("ffmpegThreads", ui.threadComboBox->currentData().toInt());
     settings.setValue("themeMode", ui.themeComboBox->currentIndex());
-    settings.setValue("analysis/enableMoveAnnotations", ui.moveAnnotationsToggle->isChecked());
+    settings.setValue("analysis/enableMoveAnnotations", ui.videoAnnotationsToggle->isChecked());
     settings.setValue("removeOriginalVideo", ui.removeOriginalToggle->isChecked());
 
     settings.setValue("stockfishDepth", ui.depthComboBox->currentData().toInt());
@@ -158,12 +170,14 @@ void SettingsDialog::saveSettings() {
 }
 
 void SettingsDialog::populateSettings(ProcessingSettings& s) const {
-    const bool enableMoveAnnotations = ui.moveAnnotationsToggle->isChecked();
+    const bool enableMoveAnnotations = ui.videoAnnotationsToggle->isChecked();
 
     s.generatePgn = ui.pgnExportToggle->isChecked();
+    s.includePgnMoveAnnotations = ui.pgnExportToggle->isChecked() && ui.pgnAnalysisToggle->isChecked() && ui.pgnAnnotationsToggle->isChecked();
+    s.includePgnAnalysis = ui.pgnExportToggle->isChecked() && (ui.pgnAnalysisToggle->isChecked() || s.includePgnMoveAnnotations);
     s.generateSubtitles = ui.subtitlesToggle->isChecked();
-    s.enableMoveAnnotations = enableMoveAnnotations;
-    s.enableStockfish = enableMoveAnnotations;
+    s.enableMoveAnnotations = ui.analysisVideoToggle->isChecked() && enableMoveAnnotations;
+    s.enableStockfish = s.includePgnAnalysis || s.includePgnMoveAnnotations || enableMoveAnnotations;
     s.generateAnalysisVideo = ui.analysisVideoToggle->isChecked() || ui.subtitlesToggle->isChecked();
     s.multiPv = ui.multiPvComboBox->currentData().toInt();
     s.ffmpegThreads = ui.threadComboBox->currentData().toInt();
@@ -184,9 +198,14 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
 
 void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     ui.pgnExportToggle->setChecked(settings.generatePgn);
+    ui.pgnAnalysisToggle->setChecked(settings.includePgnAnalysis);
+    ui.pgnAnnotationsToggle->setChecked(settings.includePgnMoveAnnotations);
+    ui.pgnAnalysisToggle->setEnabled(settings.generatePgn);
+    ui.pgnAnnotationsToggle->setEnabled(settings.generatePgn && settings.includePgnAnalysis);
     ui.subtitlesToggle->setChecked(settings.generateSubtitles);
-    ui.moveAnnotationsToggle->setChecked(settings.enableMoveAnnotations);
     ui.analysisVideoToggle->setChecked(settings.generateAnalysisVideo);
+    ui.videoAnnotationsToggle->setChecked(settings.generateAnalysisVideo && settings.enableMoveAnnotations);
+    ui.videoAnnotationsToggle->setEnabled(settings.generateAnalysisVideo);
     int idx = ui.multiPvComboBox->findData(settings.multiPv);
     if (idx >= 0) ui.multiPvComboBox->setCurrentIndex(idx);
     setThreadComboValue(ui.threadComboBox, settings.ffmpegThreads);
@@ -201,7 +220,7 @@ void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
 void SettingsDialog::applyHeadlessOverrides(int pgnOverride, int analysisVideoOverride, int moveLabelsOverride, int multiPv, int threads, int depth, int time, int nodes, int analysisDepth, const QString& debugLevelStr, int memoryLimit) {
     if (pgnOverride != -1) ui.pgnExportToggle->setChecked(pgnOverride != 0);
     if (analysisVideoOverride != -1) ui.analysisVideoToggle->setChecked(analysisVideoOverride != 0);
-    if (moveLabelsOverride != -1) ui.moveAnnotationsToggle->setChecked(moveLabelsOverride != 0);
+    if (moveLabelsOverride != -1) ui.videoAnnotationsToggle->setChecked(moveLabelsOverride != 0);
     if (multiPv > 0) {
         int idx = ui.multiPvComboBox->findData(multiPv);
         if (idx >= 0) ui.multiPvComboBox->setCurrentIndex(idx);

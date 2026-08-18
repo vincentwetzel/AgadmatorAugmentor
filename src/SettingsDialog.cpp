@@ -175,34 +175,6 @@ void SettingsDialog::setupUi() {
         }
     });
 
-    // Generation Options
-    auto* togglesGroup = new QGroupBox("Files to Create");
-    togglesGroup->setToolTip("Choose which files ChessTube Analyzer should create for each video.");
-    auto* togglesLayout = new QVBoxLayout(togglesGroup);
-    togglesLayout->addWidget(createHelpText(
-        "Start with the moves-only PGN. Engine-backed video overlays will run Stockfish automatically.",
-        "Explains the recommended output choices."
-    ));
-    togglesLayout->addWidget(createToggleRow("Moves-only PGN", "Create a compact PGN containing the extracted legal moves.", ui.pgnExportToggle, true));
-    togglesLayout->addWidget(createToggleRow("Move subtitles", "Embed synced move subtitles into the analysis video.", ui.subtitlesToggle, false));
-
-    bool pgnAnnotationsEnabled = QSettings().value("pgnAnnotationsToggle", false).toBool();
-    ToggleSwitch* pgnAnnotationsToggle = nullptr;
-    auto* pgnAnnotationsRow = createToggleRow("PGN move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to the exported PGN file. This runs Stockfish automatically.", pgnAnnotationsToggle, pgnAnnotationsEnabled);
-    pgnAnnotationsToggle->setObjectName("pgnAnnotationsToggle");
-    connect(pgnAnnotationsToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
-        QSettings().setValue("pgnAnnotationsToggle", checked);
-        saveSettings();
-    });
-    togglesLayout->addWidget(pgnAnnotationsRow);
-
-    auto* annotationsRow = createToggleRow("Video move quality labels", "Add familiar labels such as Book, !!, !, ?!, and ? to the analysis video text. This runs Stockfish automatically.", ui.moveAnnotationsToggle, true);
-    ui.moveAnnotationsToggle->setObjectName("moveAnnotationsToggle");
-    togglesLayout->addWidget(annotationsRow);
-
-    togglesLayout->addWidget(createToggleRow("Analysis video", "Create a new video with board, evaluation, and engine overlays.", ui.analysisVideoToggle, false));
-    generalLayout->addWidget(togglesGroup);
-
     auto* cleanupGroup = new QGroupBox("Cleanup");
     cleanupGroup->setToolTip("Options for cleaning up files after processing.");
     auto* cleanupLayout = new QVBoxLayout(cleanupGroup);
@@ -222,7 +194,37 @@ void SettingsDialog::setupUi() {
     generalLayout->addStretch();
     tabWidget->addTab(generalTab, "General");
 
-    // === Tab 2: Video Export ===
+    // === Tab 2: Outputs ===
+    auto* outputsTab = new QWidget();
+    auto* outputsLayout = new QVBoxLayout(outputsTab);
+
+    auto* pgnGroup = new QGroupBox("PGN output");
+    pgnGroup->setToolTip("Choose what goes into the exported chess game file.");
+    auto* pgnLayout = new QVBoxLayout(pgnGroup);
+    pgnLayout->addWidget(createHelpText(
+        "PGN output is independent from the analysis video. Engine analysis adds evaluations and suggested continuations; quality labels add symbols such as ! and ?.",
+        "Explains the difference between a basic PGN and an engine-enriched PGN."
+    ));
+    pgnLayout->addWidget(createToggleRow("Create PGN file", "Export the moves, clocks, and variations as a PGN file.", ui.pgnExportToggle, true));
+    pgnLayout->addWidget(createToggleRow("Include engine analysis", "Add evaluations and suggested engine continuations to the PGN. This runs Stockfish when a PGN is created.", ui.pgnAnalysisToggle, false));
+    pgnLayout->addWidget(createToggleRow("Add move quality labels", "Add labels such as Book, !!, !, ?!, and ? to the PGN moves. This requires engine analysis.", ui.pgnAnnotationsToggle, false));
+    outputsLayout->addWidget(pgnGroup);
+
+    auto* videoOutputGroup = new QGroupBox("Analysis video output");
+    videoOutputGroup->setToolTip("Choose whether to create an annotated video and add synchronized move subtitles.");
+    auto* videoOutputLayout = new QVBoxLayout(videoOutputGroup);
+    videoOutputLayout->addWidget(createHelpText(
+        "Video appearance and encoding are configured on the Video Export tab. Engine overlays automatically request the analysis they need.",
+        "Explains where to configure the analysis video."
+    ));
+    videoOutputLayout->addWidget(createToggleRow("Create analysis video", "Create a new video with the configured board, evaluation, opening, and engine overlays.", ui.analysisVideoToggle, false));
+    videoOutputLayout->addWidget(createToggleRow("Add move subtitles", "Add synchronized move subtitles to the analysis video. Enabling this also creates the analysis video.", ui.subtitlesToggle, false));
+    videoOutputLayout->addWidget(createToggleRow("Add move quality labels", "Add labels such as Book, !!, !, ?!, and ? to move text in the analysis video. This requires engine analysis.", ui.videoAnnotationsToggle, false));
+    outputsLayout->addWidget(videoOutputGroup);
+    outputsLayout->addStretch();
+    tabWidget->addTab(outputsTab, "Outputs");
+
+    // === Tab 3: Video Export ===
     auto* videoExportTab = new QWidget();
     auto* videoExportLayout = new QVBoxLayout(videoExportTab);
     auto* encodingGroup = new QGroupBox("Analysis Video Export");
@@ -264,11 +266,11 @@ void SettingsDialog::setupUi() {
     videoExportLayout->addStretch();
     tabWidget->addTab(videoExportTab, "Video Export");
 
-    // === Tab 3: Stockfish ===
+    // === Tab 4: Stockfish ===
     auto* stockfishTab = new QWidget();
     auto* stockfishLayout = new QVBoxLayout(stockfishTab);
-    ui.stockfishSettingsGroup = new QGroupBox("Engine Analysis");
-    ui.stockfishSettingsGroup->setToolTip("Choose how much Stockfish analysis to add to PGNs and analysis videos.");
+    ui.stockfishSettingsGroup = new QGroupBox("Engine settings");
+    ui.stockfishSettingsGroup->setToolTip("Configure Stockfish when PGN or video output requests engine analysis.");
     auto* stockfishOptionsLayout = new QVBoxLayout(ui.stockfishSettingsGroup);
 
     stockfishOptionsLayout->addWidget(createHelpText(
@@ -346,9 +348,9 @@ void SettingsDialog::setupUi() {
 
     stockfishLayout->addWidget(ui.stockfishSettingsGroup);
     stockfishLayout->addStretch();
-    tabWidget->addTab(stockfishTab, "Stockfish");
+    tabWidget->addTab(stockfishTab, "Engine");
 
-    // === Tab 4: Advanced ===
+    // === Tab 5: Advanced ===
     auto* advancedTab = new QWidget();
     auto* advancedLayout = new QVBoxLayout(advancedTab);
 

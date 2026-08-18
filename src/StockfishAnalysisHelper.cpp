@@ -292,7 +292,7 @@ bool StockfishAnalysisHelper::runAnalysis() {
 
     emit logMessage("Stockfish analysis complete.");
 
-    if (settings_.enableMoveAnnotations) {
+    if (settings_.enableMoveAnnotations || settings_.includePgnMoveAnnotations) {
         emit logMessage("Generating move quality annotations...");
         processVideoMoveAnnotations();
         processMainLineAnnotationsAndStats();

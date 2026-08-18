@@ -77,6 +77,12 @@ namespace cta {
 void SettingsDialog::connectAutoSaveSignals() {
     connect(ui.pgnExportToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
         emit logMessage(checked ? "PGN export enabled" : "PGN export disabled");
+        ui.pgnAnalysisToggle->setEnabled(checked);
+        ui.pgnAnnotationsToggle->setEnabled(checked && ui.pgnAnalysisToggle->isChecked());
+        if (!checked) {
+            ui.pgnAnalysisToggle->setChecked(false);
+            ui.pgnAnnotationsToggle->setChecked(false);
+        }
         saveSettings();
     });
     connect(ui.subtitlesToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
@@ -90,6 +96,10 @@ void SettingsDialog::connectAutoSaveSignals() {
         emit logMessage(checked ? "Analysis Video generation enabled" : "Analysis Video generation disabled");
         if (!checked && ui.subtitlesToggle->isChecked()) {
             ui.subtitlesToggle->setChecked(false);
+        }
+        ui.videoAnnotationsToggle->setEnabled(checked);
+        if (!checked) {
+            ui.videoAnnotationsToggle->setChecked(false);
         }
         saveSettings(); 
     });
@@ -142,8 +152,22 @@ void SettingsDialog::connectAutoSaveSignals() {
         emit themeChanged();
     });
     
-    connect(ui.moveAnnotationsToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
-        emit logMessage(checked ? "Move quality annotations enabled" : "Move quality annotations disabled");
+    connect(ui.pgnAnalysisToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
+        if (checked && !ui.pgnExportToggle->isChecked()) {
+            ui.pgnExportToggle->setChecked(true);
+        }
+        ui.pgnAnnotationsToggle->setEnabled(checked);
+        if (!checked && ui.pgnAnnotationsToggle->isChecked()) {
+            ui.pgnAnnotationsToggle->setChecked(false);
+        }
+        saveSettings();
+    });
+    connect(ui.pgnAnnotationsToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
+        if (checked) ui.pgnAnalysisToggle->setChecked(true);
+        saveSettings();
+    });
+    connect(ui.videoAnnotationsToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
+        emit logMessage(checked ? "Video move quality labels enabled" : "Video move quality labels disabled");
         saveSettings();
     });
     

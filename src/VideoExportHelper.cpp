@@ -137,19 +137,17 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
         pgn.add_header("BlackAccuracy", ss.str());
     }
 
-    bool pgnAnnotationsEnabled = QSettings().value("pgnAnnotationsToggle", false).toBool();
-
     for (size_t i = 0; i < gameData.moves.size(); ++i) {
         std::string clockStr;
         size_t clockIdx = i + 1;
         const auto* clk_ptr = (clockIdx < gameData.clocks.size()) ? &gameData.clocks[clockIdx] : (i < gameData.clocks.size()) ? &gameData.clocks[i] : nullptr;
         clockStr = clk_ptr ? ((i % 2 == 0) ? clk_ptr->white_time : clk_ptr->black_time) : "0:00:00";
         
-        std::string main_eval_str = (settings.enableMoveAnnotations && !sfResults.mainLineResults.empty() && i + 1 < sfResults.mainLineResults.size() && !sfResults.mainLineResults[i + 1].lines.empty()) 
+        std::string main_eval_str = (settings.includePgnAnalysis && !sfResults.mainLineResults.empty() && i + 1 < sfResults.mainLineResults.size() && !sfResults.mainLineResults[i + 1].lines.empty())
             ? ChessFenUtils::format_eval_string(sfResults.mainLineResults[i + 1].lines[0], sfResults.mainLineResults[i + 1].fen) : "";
         
         std::string move_with_annotation = gameData.moves[i];
-        if (pgnAnnotationsEnabled && i < sfResults.moveAnnotations.size()) {
+        if (settings.includePgnMoveAnnotations && i < sfResults.moveAnnotations.size()) {
             move_with_annotation += sfResults.moveAnnotations[i];
         }
         pgn.add_ply(move_with_annotation, Utils::format_clock_string(clockStr), main_eval_str);
@@ -162,7 +160,7 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
                     std::string var_clock_str = "0:00:00";
                     if (j < var_data.clocks.size()) var_clock_str = ((i + j) % 2 == 0) ? var_data.clocks[j].white_time : var_data.clocks[j].black_time;
                     std::string eval_str = "";
-                    if (settings.enableMoveAnnotations && j + 1 < var_data.fens.size()) {
+                    if (settings.includePgnAnalysis && j + 1 < var_data.fens.size()) {
                         auto cache_it = sfResults.fenCache.find(var_data.fens[j + 1]);
                         if (cache_it != sfResults.fenCache.end() && !cache_it->second.lines.empty()) eval_str = ChessFenUtils::format_eval_string(cache_it->second.lines[0], cache_it->second.fen);
                     }

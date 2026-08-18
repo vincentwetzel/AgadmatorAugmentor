@@ -6,10 +6,10 @@ The asset tree is divided by purpose:
   boards and to assemble detector calibration boards.
 - `fixtures/detectors/` contains small, labeled image corpora for detector
   tests and calibration reports.
-- `fixtures/games/` contains small PGN integration baselines grouped by size or
-  scenario. Large integration videos live outside the repository under the
-  sibling `chess-tube-analyzer-media/games/` directory and are selected by the
-  test suite through `CTA_MEDIA_ROOT`.
+- `fixtures/games/<fixture-name>/` contains small PGN integration baselines.
+  Large integration videos live outside the repository under the matching
+  sibling `chess-tube-analyzer-media/games/<fixture-name>/` directory and are
+  selected by the test suite through `CTA_MEDIA_ROOT`.
 - `templates/` contains the built-in overlay template JSON files copied beside
   the GUI executable at build time.
 - `icons/` contains small UI assets used by video rendering.
