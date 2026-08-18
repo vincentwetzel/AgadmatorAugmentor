@@ -108,6 +108,18 @@ void MainWindow::removeSelectedVideos() {
     refreshQueueUi();
 }
 
+void MainWindow::removeQueueItem(QListWidgetItem* item) {
+    if (!item || itemStatus(item) == QueueItemStatus::Processing) return;
+
+    const int row = queueList_->row(item);
+    if (row < 0) return;
+
+    const QString fileName = QFileInfo(item->data(PathRole).toString()).fileName();
+    delete queueList_->takeItem(row);
+    appendLog("Removed \"" + fileName + "\" from the queue.");
+    refreshQueueUi();
+}
+
 void MainWindow::clearQueue() {
     if (queueList_->count() == 0) return;
 

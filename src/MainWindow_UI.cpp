@@ -68,10 +68,6 @@ void MainWindow::setupUi() {
     moveDownBtn_->setToolTip("Move the selected queue items down by one position. The currently processing item cannot be moved.");
     fileLayout->addWidget(moveDownBtn_);
 
-    removeSelectedBtn_ = new QPushButton("Remove Selected");
-    removeSelectedBtn_->setToolTip("Remove the selected queue entries, except for the video that is currently processing");
-    fileLayout->addWidget(removeSelectedBtn_);
-
     clearQueueBtn_ = new QPushButton("Clear Queue");
     clearQueueBtn_->setToolTip("Remove all queue entries except for the video that is currently processing");
     fileLayout->addWidget(clearQueueBtn_);
@@ -99,7 +95,7 @@ void MainWindow::setupUi() {
     queueList_ = new QListWidget();
     queueList_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     queueList_->setAlternatingRowColors(true);
-    queueList_->setToolTip("Queued videos. Drag files from File Explorer onto this queue, or use Add Video(s). Statuses stay visible here while the batch runs. Select non-processing entries and press Delete to remove them.");
+    queueList_->setToolTip("Queued videos. Drag files from File Explorer onto this queue, or use Add Video(s). Each row has its own Remove button; select non-processing entries and press Delete to remove them with the keyboard.");
     queueList_->setMinimumHeight(170);
 
     auto* queueAreaWidget = new QWidget();
@@ -149,7 +145,6 @@ void MainWindow::setupUi() {
     connect(browseBtn_, &QPushButton::clicked, this, &MainWindow::browseVideo);
     connect(moveUpBtn_, &QPushButton::clicked, this, &MainWindow::moveSelectedVideosUp);
     connect(moveDownBtn_, &QPushButton::clicked, this, &MainWindow::moveSelectedVideosDown);
-    connect(removeSelectedBtn_, &QPushButton::clicked, this, &MainWindow::removeSelectedVideos);
     connect(clearQueueBtn_, &QPushButton::clicked, this, &MainWindow::clearQueue);
     connect(deleteSelectionShortcut_, &QShortcut::activated, this, &MainWindow::removeSelectedVideos);
     connect(startCancelBtn_, &QPushButton::clicked, this, &MainWindow::onStartCancelClicked);

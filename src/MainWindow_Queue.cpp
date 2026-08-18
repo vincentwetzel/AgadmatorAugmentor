@@ -118,7 +118,7 @@ QString MainWindow::templateNameForItem(const QListWidgetItem* item) const {
     return cta::TemplateManager::instance().getFallbackTemplate().name;
 }
 
-QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
+QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) {
     const QString path = item->data(PathRole).toString();
     const QString fileName = QFileInfo(path).fileName();
     const QueueItemStatus status = itemStatus(item);
@@ -151,6 +151,17 @@ QWidget* MainWindow::createQueueItemWidget(QListWidgetItem* item) const {
     statusLabel->setObjectName("statusLabel");
     statusLabel->setToolTip("Current processing status for this queued video.");
     topRow->addWidget(statusLabel, 0, Qt::AlignRight);
+
+    auto* removeBtn = new QPushButton("Remove");
+    removeBtn->setObjectName("removeQueueItemBtn");
+    removeBtn->setToolTip(status == QueueItemStatus::Processing
+        ? "The video currently being processed cannot be removed."
+        : "Remove this video from the queue.");
+    removeBtn->setEnabled(status != QueueItemStatus::Processing);
+    connect(removeBtn, &QPushButton::clicked, container, [this, item]() {
+        removeQueueItem(item);
+    });
+    topRow->addWidget(removeBtn, 0, Qt::AlignRight);
     layout->addLayout(topRow);
 
     auto* pathLabel = new QLabel(path);
@@ -255,6 +266,13 @@ void MainWindow::refreshQueueItem(QListWidgetItem* item) {
 
         if (auto* statusLabel = existingWidget->findChild<QLabel*>("statusLabel")) {
             statusLabel->setText(queueStatusText(status));
+        }
+        if (auto* removeBtn = existingWidget->findChild<QPushButton*>("removeQueueItemBtn")) {
+            const bool removable = status != QueueItemStatus::Processing;
+            removeBtn->setEnabled(removable);
+            removeBtn->setToolTip(removable
+                ? "Remove this video from the queue."
+                : "The video currently being processed cannot be removed.");
         }
         if (auto* nameLabel = existingWidget->findChild<QLabel*>("nameLabel")) {
             QFont nameFont = nameLabel->font();
@@ -365,7 +383,6 @@ void MainWindow::refreshQueueUi() {
 
     if (queueEmptyStateLabel_) queueEmptyStateLabel_->setVisible(!hasItems);
 
-    removeSelectedBtn_->setEnabled(hasItems && hasRemovableItems());
     clearQueueBtn_->setEnabled(hasItems && hasRemovableItems());
     moveUpBtn_->setEnabled(hasItems && canMoveSelectionUp());
     moveDownBtn_->setEnabled(hasItems && canMoveSelectionDown());
@@ -374,7 +391,7 @@ void MainWindow::refreshQueueUi() {
     if (isProcessing_) {
         startCancelBtn_->setText("Cancel Current");
         startCancelBtn_->setEnabled(true);
-        queueHelperLabel_->setText("Queue is live: add more videos while processing. Select non-processing items and press Delete to remove them.");
+        queueHelperLabel_->setText("Queue is live: add more videos while processing. Use a row's Remove button, or select non-processing items and press Delete.");
     } else {
         startCancelBtn_->setText("Start Processing");
         startCancelBtn_->setEnabled(hasQueuedItems());

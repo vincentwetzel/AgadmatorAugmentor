@@ -396,7 +396,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                                   board_txt_path, bar_txt_path, text_txt_path, opening_txt_path, main_arrows_txt_path,
                                   draw_main_arrows, width, height, debug_w, debug_h, text_w, text_h,
                                   bar_w, bar_h, opening_w, opening_h, resolution, vCodec, aCodec, crf,
-                                  num_threads, total_frames, cancel_flag, progress_callback);
+                                  num_threads,
+                                  (total_frames > 0 && fps > 0.0) ? static_cast<double>(total_frames) / fps : 0.0,
+                                  cancel_flag, progress_callback);
 }
 
 void AnalysisVideoGenerator::render_opening_text(cv::Mat& image,

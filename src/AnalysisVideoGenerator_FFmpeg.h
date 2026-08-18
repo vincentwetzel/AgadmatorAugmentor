@@ -34,7 +34,7 @@ bool compose_analysis_video(const std::string& input_video_path,
                             std::string aCodec,
                             const std::string& crf,
                             int num_threads,
-                            int total_frames,
+                            double total_duration_seconds,
                             std::atomic<bool>* cancel_flag,
                             const std::function<void(int, const std::string&)>& progress_callback);
 

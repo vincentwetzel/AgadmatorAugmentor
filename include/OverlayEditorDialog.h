@@ -78,6 +78,7 @@ private:
     void loadTemplateToUi(int index);
     void saveUiToTemplate(int index);
     void refreshTemplateCombo();
+    void selectTemplate(int index);
 
     std::vector<OverlayTemplate> templates_;
     std::vector<QString> deletedTemplateIds_;

@@ -78,12 +78,12 @@ python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extra
 python tests\run_tests.py --no-build --gtest-filter DetectorsTest.IntegrationClockTimes
 ```
 
-Large integration videos are kept outside the repository. The tests look for
-`CTA_MEDIA_ROOT` first; it should point to the media directory containing a
-`games/` subdirectory. If unset, the tests use the sibling layout
-`..\chess-tube-analyzer-media` when available. Small expected PGN files remain
-under `assets/fixtures/games/` unless they are stored beside their external
-video.
+Large integration videos are kept outside the repository. All expected PGN
+baselines live under `assets/fixtures/games/`; the tests look for those files
+in the repository first. Videos are resolved through `CTA_MEDIA_ROOT`, which
+should point to the media directory containing a `games/` subdirectory. If
+unset, the tests use the sibling layout `..\chess-tube-analyzer-media` when
+available.
 
 For the standard local layout, the full-game fixture is
 `chess-tube-analyzer-media/games/warmerdam-vs-dommaraju/`. To use another media
@@ -94,7 +94,12 @@ $env:CTA_MEDIA_ROOT = 'E:\path\to\chess-tube-analyzer-media'
 python tests\run_tests.py --no-build --gtest-filter DetectorsTest.FullGame1Extraction
 ```
 
-Test toggles are defined at the top of `tests/test_ui_detectors.cpp`. Integration expectations come from sample PGN files. Production code must remain fixture-independent; the runner scans `src/` and `include/` for known fixture-specific override patterns before running.
+Each test has a `TEST_*` compile-time toggle at the top of
+`tests/test_ui_detectors.cpp`; set the desired test to `1` and the others to
+`0`, then run the helper without `--no-build` so the changed selection is
+compiled. Integration expectations come from sample PGN files. Production code
+must remain fixture-independent; the runner scans `src/` and `include/` for
+known fixture-specific override patterns before running.
 
 ## Diagnostic replay
 
@@ -135,6 +140,39 @@ bundle without decoding the video again:
 ```cmd
 python tests\run_tests.py --replay-bundle build_diag\diagnostics\first_divergence_bundle
 ```
+
+Each bundle also contains `decision_summary.json`. It records the last matching
+state, the first post-divergence candidate, the expected-move status
+(`never_emitted`, `emitted_not_accepted`, `emitted_but_rejected`,
+`wrong_move_accepted`, `accepted_as_expected`, or
+`accepted_only_on_incorrect_branch`), the timestamp interval, and the ordered
+decision events with their legal alternatives, detector evidence, reducer state,
+and relative frame or board artifacts. The runner validates the summary and its
+artifact links when the bundle is created; `--replay-bundle` validates them again before
+reanalyzing the saved trace. This makes the first review pass possible without
+searching the full JSONL file manually.
+
+The runner first uses a conservative anchor window, then performs a second
+bounded pass when the first trace identifies a narrower evidence interval. The
+final bundle therefore contains the last matching state plus a small one-second
+context on either side of the observed decision interval rather than depending
+only on the extracted move timestamp.
+
+When the test executable is available, bundle creation also runs the reducer
+from `observations.jsonl` and writes `replay_comparison.json`. A `match` means
+the source and observation replay agree; `diverged` records the first replay
+layer and evidence separately, so it cannot be mistaken for the original video
+extraction failure. Motion-leading observations also retain a predecessor board
+artifact so replay starts from the same pre-change image as the source reducer.
+Replay parity requires candidate/event ordering and accepted, rejected, recovery,
+variation, and clock semantics to match; pixel-derived measurement text is kept
+as evidence but is not treated as a reducer decision when comparing traces.
+
+Decision-chain entries also contain versioned `provenance` records. These are
+diagnostic-only records with stable IDs connecting the source observation and
+artifacts, mapper emission, visual candidate and legal alternatives, detector
+validation, reducer/revert state, and mainline or variation context. They are
+review and replay evidence; they are not inputs to production move selection.
 
 The compact observation file is the input for direct reducer replay; its records
 retain timestamps, mapper provenance, board features, detector assessments,
@@ -187,6 +225,33 @@ fail and the runner creates a diagnostic failure bundle. It is useful for
 validating the reporting path, not for changing expected results in normal
 tests.
 
+The diagnostic validation was also run from a clean `build_tests_clean`
+directory. The dependency source was kept local so the command does not rely
+on network access:
+
+```powershell
+$env:TEMP = "E:\coding_workspaces\CPP\chess-tube-analyzer\tmp\msbuild-temp"
+$env:TMP = $env:TEMP
+cmake -S . -B build_tests_clean -G "Visual Studio 18 2026" -DBUILD_TESTS=ON `
+  -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=E:/coding_workspaces/CPP/chess-tube-analyzer/build/_deps/googletest-src `
+  -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build_tests_clean --config Release --parallel 1
+ctest --test-dir build_tests_clean -C Release --output-on-failure `
+  -R "ExtractionDiagnosticsTest|VideoChunkMapperTest|ChessVideoExtractorTest|ExtractionInternalTest"
+python -m unittest discover -s tests -p "test_*.py"
+python tests\run_tests.py --build-dir build_tests_clean --no-build `
+  --gtest-filter DetectorsTest.FullGame1Extraction --stop-after 80 --induce-failure
+python tests\run_tests.py --replay-bundle `
+  build_tests_clean\diagnostics\first_divergence_bundle
+```
+
+The build succeeded, the focused C++ diagnostics set passed 5/5, the Python
+diagnostic contracts passed 52/52, and the intentional bounded probe produced
+a valid bundle whose replay comparison passed. The Python diagnostic contract
+suite now contains 52 tests. The underlying integration test
+still fails intentionally because the probe stops before the expected full
+game, which is the expected result for this validation workflow.
+
 The current full-game seed reaches its first ordinary extraction divergence
 around ply 36, so a normal run may still fail while producing useful evidence.
 The induced run is a separate workflow check: it swaps only test-side expected
@@ -203,6 +268,21 @@ is absent does not become fabricated confidence or a fabricated clock value;
 the chronological reducer remains the only component allowed to advance the
 position, and accepted moves retain the detector/clock provenance that justified
 them.
+The Python diagnostic contract suite explicitly exercises all seven normalized
+outcome classes.
+When `BUILD_TESTS=ON`, it is also registered as the `DiagnosticRunnerContracts`
+CTest test, so repeated-source and replay-comparison regressions run alongside
+the C++ diagnostic tests. The video-backed intentional-failure probe remains
+opt-in because it requires the media workspace and is expected to fail the
+selected integration assertion.
+
+Diagnostic capture is opt-in and bounded. A three-pair Release benchmark on
+the clean test build compared the same 80-second induced-failure run with
+diagnostics disabled versus a 56.1s-58.3s diagnostic window. Mean runtime was
+3,844.5 ms without diagnostics and 4,122.0 ms with them, or 7.2% overhead;
+the diagnostic run retained 18 JSONL records and 18 frame/board/clock
+artifacts, all inside the requested window. This is a bounded validation
+measurement, not a universal performance guarantee for every video regime.
 
 The command emits JSON with aligned emission counts, every difference, and the
 first divergence classified as `mapper_emission`, `detector_evidence`,
@@ -251,15 +331,34 @@ directory. Interpretation is explicit: `strong`, `weak`, or `advisory`, and is
 always marked advisory-only for production.
 An optional `case` field provides separate metrics for categories such as
 `capture`, `double_pawn`, `check`, and `promotion`.
-The repository's initial yellow-square label manifest is
-`assets/fixtures/detectors/yellow-squares/labels.jsonl`; it contains eight positive move
-examples and an unhighlighted-board negative control, with the current C++
-detector predictions recorded separately for each origin, destination, and
-paired row. It is intentionally a small seed set, not a calibrated acceptance
-corpus.
-The focused C++ calibration test currently measures destination at 8/8 recall
-and origin/paired endpoints at 7/8 recall; the `Na5` sample is the known
-origin-disambiguation miss (`c6a5` observed versus `c7a5` labeled).
+The repository's yellow-square label manifest is
+`assets/fixtures/detectors/yellow-squares/labels.jsonl`; it now contains 21
+positive move-image groups plus an unhighlighted-board negative control, with
+the current C++ detector predictions recorded separately for each origin,
+destination, and paired row (66 labeled component observations in total).
+The expanded set includes double-pawn moves, captures, checks, real-video
+frames, synthetic and real-video promotion probes, and controlled occlusion,
+localization, compression, adjacent-highlight, theme, and scaling variants.
+The real promotion sequence contains pre-move, animation, and settled frames;
+only the settled frame emits the expected `d7d8` candidate, while the earlier
+frames expose wrong candidates and remain advisory evidence. It is still a
+calibration corpus, not a production acceptance gate: the current measured
+endpoint recall is 71.43% for origin, 80.95% for destination, and 66.67% for
+paired moves. The misses are retained as
+evidence for the next detector-tuning chunk rather than being hidden by
+changing the expected labels. The unhighlighted control emits `b7e7`, so the
+manifest and label contract now record one false positive for each endpoint/
+pair component (three false-positive rows overall).
+`DetectorsTest.YellowSquares` consumes this same manifest rather than deriving
+expected moves from filenames. It is a non-gating corpus diagnostic that prints
+every exact match and miss; `YellowSquareCalibrationLabels` remains the
+authoritative metric contract.
+The Python calibration report also classifies deduplicated emitted moves as
+exact, wrong candidate, missing candidate, unexpected candidate, or
+unmeasured. On the current 10-regime output this exposes 126 exact moves, 86
+wrong candidates, and 10 unexpected candidates, including the six native
+corpus misses and the two real-promotion transition frames with their
+transformed-regime repetitions.
 The yellow calibration regime test expands the same labels across native,
 scaled, brightness, blur, geometry-offset, and corner-margin variants. Its
 JSONL output retains endpoint/pair scores, geometry availability, offsets, and
@@ -281,12 +380,12 @@ negative control overlaps the positive score distributions; no normalization
 is promoted into production validation yet.
 
 The yellow report evaluates 187 endpoint/pair threshold combinations, six
-corner-sampling fractions, and 41 minimum pair-edge-density terms. Its best
-edge-density point on the current matrix is a 0.005 minimum pair-edge score,
-with 98.35% recall and 0% false positives. The endpoint/pair grid remains
-advisory: the selected point changes when transformed corner regimes are
-included, and the production 25/70 point is intentionally unchanged until a
-broader independent-negative corpus supports a stable operating point.
+corner-sampling fractions, and 41 minimum pair-edge-density terms. These
+threshold sweeps remain advisory after the corpus expansion: the selected
+point changes when transformed corner regimes and the new promotion/
+localization rows are included, and the production 25/70 point is intentionally
+unchanged until a broader independent-negative corpus supports a stable
+operating point.
 
 Yellow calibration rows now also retain post-move occupancy metadata, the
 pre-move destination occupancy used to distinguish captures, and yellowness
@@ -294,12 +393,12 @@ measurements for neighboring squares around both endpoints. The current
 10-regime run reports the same occupancy fields across native, transformed,
 geometry-error, and six corner-sampling regimes, as well as adjacent-square
 measurements.
-Category coverage is explicit: `quiet`, `double_pawn`, `capture`, `check`, and
-`promotion` are now present. Check and promotion are covered by test-only legal
-synthetic board probes assembled from the checked-in board and piece assets;
-they close category measurement coverage but do not substitute for independent
-real-video labels. Adjacent-square measurements are diagnostic and do not
-change endpoint thresholds.
+Category coverage is explicit in the combined calibration tests: `quiet`,
+`double_pawn`, `capture`, `check`, and `promotion` are present. Promotion is
+represented by both a legal synthetic board probe assembled from the checked-in
+board and piece assets and a real-video transition sequence from the full-game
+fixture. Adjacent-square measurements are diagnostic and do not change endpoint
+thresholds.
 
 Validation records a calibrated temporal fallback for weak current-frame
 evidence. It scans the next 0.75 seconds and accepts only after two samples
@@ -310,13 +409,23 @@ flash, and a transient flash; all four cases matched their expected outcomes
 `passed_temporal` and retain weak evidence provenance even after the temporal
 gate is calibrated.
 
-Clock labels are similarly seeded in `assets/fixtures/detectors/clock-changes/labels.jsonl`
-with measured predictions for active-side, white-OCR, black-OCR, changed, and
-unchanged fields. Missing and misread OCR examples remain an explicit gap in
-the checked-in clock corpus; transformed regime runs now report misreads and
-missing readings separately without turning them into seed labels.
+Clock labels are similarly maintained in
+`assets/fixtures/detectors/clock-changes/labels.jsonl`, now covering 20 image
+groups and 60 active-side/white-OCR/black-OCR rows. The three original clock
+transition samples are joined by nine real-video samples and eight transformed
+stress samples, including explicit partial-update, missing-reading, and
+OCR-failure cases. The manifest now has 20 image groups and 60 component rows;
+current measured quality is active-side 12/20, white OCR 3/20, and black OCR
+3/20. The misses remain in the corpus as explicit evidence. The label-only
+report keeps OCR rows unmeasured until a calibration test emits selected
+readings, while transformed regime runs report misreads and missing readings
+separately.
+`DetectorsTest.GameClocks` now uses the same manifest and is a non-gating corpus
+diagnostic: it prints every observed miss without confusing known calibration
+failures with a test-runner or filename-parsing failure. The calibration-label
+test remains the authoritative metric contract.
 
-The clock calibration test can expand those seed labels into structured JSONL
+The clock calibration test can expand the checked-in labels into structured JSONL
 observations for controlled visual regimes:
 
 ```cmd
@@ -331,31 +440,33 @@ records the test preprocessing/ROI variant, OCR preprocessing path, thresholding
 mode, segmented glyph boxes, candidate readings, and selected reading. The
 calibration report adds per-digit accuracy, complete-string accuracy, and
 per-variant comparisons. It also records whether the complete reading was
-valid, missing, or misread. The current seed
-manifest remains label-only; its OCR section reports those rows as unmeasured
-until a calibration test emits a selected reading.
+valid, missing, or misread. The current label manifest remains label-only; its
+OCR section reports those rows as unmeasured until a calibration test emits a
+selected reading.
 The expanded clock regime matrix measures native, 75% scaling, small and large
 rendered scale, anti-aliasing, JPEG compression, reduced/increased brightness,
 blur, low-time formatting, separator removal, and a partial digit change. On
-the current three-image seed, native and JPEG compression retained complete OCR
-at 3/3; 75% scaling reached 1/3, small/large font-size transforms 0/3,
-anti-aliasing 0/3, reduced/increased brightness 2/3, blur 0/3, low-time
-formatting 3/3, separator removal 1/3, and partial change 3/3. Activity
-detection remained 3/3 except under reduced brightness (0/3). The report now
-requires explicit coverage for all seven stress categories and marks coverage
-complete for the expanded run. These are controlled transform measurements,
-not independent labeled frames, and they do not change production clock
-decisions.
+the current 20-image corpus, native and JPEG compression retain complete OCR
+at 3/20; 75% scaling reaches 1/20, small/large font-size transforms 0/20,
+anti-aliasing 0/20, reduced/increased brightness 2/20, blur 0/20, low-time
+formatting 3/20, separator removal 1/20, and partial change 3/20. Activity
+detection remains 12/20 in most regimes and 0/20 under reduced brightness. The
+new missing-reading and OCR-failure cases are intentionally represented as
+invalid/missing readings rather than successful OCR. The report requires
+explicit coverage for all seven stress categories and marks coverage complete
+for the expanded run. These are controlled transform measurements, not
+independent labeled frames, and they do not change production clock decisions.
 
 The ROI calibration test separately applies small localization shifts and
-left-margin changes to the clock crops. Across 42 OCR rows, the native ROI
-was 100% complete-string accurate; left/right shifts were 50%/100%, up/down
-shifts were 83%/33%, and expanded/narrowed left margins were both 83%. The
-report retains the signed geometry offsets and crop edge ratio, selects the
-native board-relative ROI as the baseline, and requires all three perturbation
-families to be present. The production ROI constants are shared by the mapper
-and full-frame fallback, so future tuning changes one contract rather than
-duplicated crop formulas.
+left-margin changes to the clock crops. Across the 20-image corpus, complete
+OCR was 3/20 for the native ROI, 1/20 and 3/20 for left/right shifts, 2/20 and
+1/20 for up/down shifts, and 2/20 for both expanded and narrowed left margins.
+Activity detection was 12/20 for every ROI variant. The report retains the
+signed geometry offsets and crop edge ratio, selects the native board-relative
+ROI as the baseline, and requires all three perturbation families to be
+present. The production ROI constants are shared by the mapper and full-frame
+fallback, so future tuning changes one contract rather than duplicated crop
+formulas.
 
 Clock calibration now reports three separate quality targets under
 `quality_targets`: `active_side`, `complete_ocr`, and `usable_clock`. The first
@@ -404,7 +515,8 @@ square evidence is evaluated. Small localization jitter remains accepted, and
 the interval can be shortened for investigation through the environment
 variable above.
 
-Hover calibration is available through the board-asset synthetic matrix:
+Hover calibration is available through the board-asset synthetic matrix and the
+checked-in real-video corpus:
 
 ```cmd
 python tests\run_tests.py --no-build ^
@@ -421,8 +533,11 @@ seconds): all three transition regimes reached `settled_tail` after 0.2
 seconds with zero premature settles. The report keeps settled-board false
 positives separate from true mid-drag detections and exposes transition-level
 settle delay metrics. These remain deterministic detector-regression controls;
-real video labels are still needed before animation thresholds become broad
-production gates.
+the 25-row hover/geometry manifest currently covers real settled boards,
+mid-drag cursor overlays, camera movement, and fast/slow animation. Its static
+labels measure 18 hover rows and 7 geometry rows with no false positives or
+false negatives. The corpus is still advisory and small, so animation and
+geometry thresholds remain unchanged production gates.
 
 `DetectorsTest.BoardLocalizationCalibration` measures localization against
 known synthetic bounds at five board scales and offsets, including two frames
@@ -443,6 +558,20 @@ divergent. `compare_replay_traces` returns a non-zero process status on mapper,
 event, semantic, or malformed-trace divergence.
 
 Keep traces in an ignored build or temporary directory. Do not add fixture names, expected moves, expected clocks, or asset-specific branches to production extraction code.
+
+Reducer diagnostics now separate detector state from evidence strength. Each
+structured detector assessment reports `strong`, `weak`, `advisory`, `missing`,
+or `conflicting` strength independently of states such as `passed` or
+`ocr_plausible`. Direct yellow and clock readings remain advisory because the
+corpora do not establish calibrated confidence; temporal yellow acceptance is
+weak; missing or ambiguous evidence is preserved; and repeated, agreeing clock
+reconciliation is the only current strong classification. The Python quality
+report consumes this explicit field and counts accepted records with
+non-strong evidence. This classification is diagnostic-only until the measured
+targets support changing reducer eligibility. The C++ classification rules are
+centralized in `MoveValidations` and covered by `EvidenceStrengthTest`, so a
+future calibration promotion changes one policy contract rather than several
+inline string comparisons.
 
 ## Code and documentation checklist
 

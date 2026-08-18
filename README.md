@@ -223,7 +223,7 @@ ChessTubeAnalyzer/
 python tests\run_tests.py
 ```
 
-The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp` with compile-time toggles at the top of the file. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
+The test helper configures `BUILD_TESTS=ON`, builds `test_extract_moves` in `build_tests/` by default, and runs the executable. Set `CTA_TEST_BUILD_DIR` to use a different build tree, or `CTA_ENABLE_SYSTEM_CUDA=OFF` to force the test configure through the CPU fallback path. Use `--no-build` for repeated runs against an existing test target. All detector and integration tests live in `tests/test_ui_detectors.cpp`; set each test's `TEST_*` compile-time toggle at the top of that file to `1` or `0`, then rebuild to select the tests to run. Integration tests derive expected move lists from sample PGN files instead of separate golden JSON artifacts, and the runner rejects fixture-specific production overrides.
 
 Large integration videos are stored outside Git in the sibling
 `chess-tube-analyzer-media/games/` directory. Set `CTA_MEDIA_ROOT` when using a

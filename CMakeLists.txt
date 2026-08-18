@@ -602,6 +602,27 @@ if(BUILD_TESTS)
 
     enable_testing()
 
+    # Keep the diagnostic runner's deterministic source/replay comparison
+    # contracts in the same CTest entry point as the C++ diagnostics. The
+    # video-backed failure probe remains opt-in because it requires the media
+    # workspace and intentionally fails its integration assertion.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME DiagnosticRunnerContracts
+            COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+                    -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                    -p "test_*.py"
+        )
+        set_tests_properties(DiagnosticRunnerContracts PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            LABELS "diagnostic_contract"
+            TIMEOUT 60
+        )
+    else()
+        message(STATUS "Python3 interpreter not found; DiagnosticRunnerContracts will not be registered")
+    endif()
+
     add_executable(test_extract_moves
         tests/test_ui_detectors.cpp
     )

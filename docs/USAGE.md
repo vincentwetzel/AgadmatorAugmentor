@@ -133,7 +133,14 @@ Unit tests are opt-in so the default application build does not need to download
 python tests\run_tests.py
 ```
 
-The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. You can control which tests are active by editing the defines at the top of `tests/test_ui_detectors.cpp`. Integration tests read expected moves from the sample PGN files, so the old medium-game golden JSON artifact is no longer required. Before building, the helper scans production sources and fails if fixture-specific detector overrides are introduced.
+The helper configures `BUILD_TESTS=ON`, builds `test_extract_moves`, and runs the executable. Each test has a `TEST_*` compile-time toggle at the top of `tests/test_ui_detectors.cpp`; set the desired test to `1` and the others to `0`, then rebuild. Integration tests read expected moves from the sample PGN files, so the old medium-game golden JSON artifact is no longer required. Before building, the helper scans production sources and fails if fixture-specific detector overrides are introduced.
+
+Every test-run invocation writes a readable log under `<build-dir>\\logs` (25
+recent logs retained by default). Use `--log-dir` to choose another location or
+`--log-retention`/`CTA_TEST_LOG_RETENTION` to change retention. Failure bundles
+include the originating `test-run.log`. GUI and headless video jobs likewise
+write a per-video log under the application log directory's `jobs` subfolder;
+the existing **Keep previous logs** setting controls their retention.
 
 For a faster focused replay while diagnosing a long fixture, use the generic timestamp cutoff and GoogleTest filter:
 
@@ -163,6 +170,6 @@ Compare a source diagnostic trace with an observation-replay trace:
 python tests\run_tests.py --compare-replay-traces source.jsonl replay.jsonl
 ```
 
-The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output, `--compare-source-runs` for repeated source determinism, and `--detector-calibration` for labeled detector quality reports. Test-side calibration observations can be emitted with `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`. Use `--induce-failure` to verify that the first-divergence bundle path is operational. The seed manifests are `assets\fixtures\detectors\yellow-squares\labels.jsonl` and `assets\fixtures\detectors\clock-changes\labels.jsonl`; their results are advisory until the corpus is expanded.
+The comparison checks observation IDs, mapper provenance, board hashes, event/FEN/move agreement, and semantic equivalence for accepted moves, clock provenance, recovery/reverts, and variations. Other useful commands are `--compare-mapper-runs` for sequential/controlled-parallel mapper output, `--compare-source-runs` for repeated source determinism, and `--detector-calibration` for labeled detector quality reports. Test-side calibration observations can be emitted with `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`. Use `--induce-failure` to verify that the first-divergence bundle path is operational. The expanded review manifests are `assets\fixtures\detectors\yellow-squares\labels.jsonl` and `assets\fixtures\detectors\clock-changes\labels.jsonl`; their results remain advisory until an independent representative corpus supports production thresholds.
 
 Clock records preserve `initial`, `direct`, `contextual`, `temporal`, `inherited`, `missing`, or `rejected` provenance. A temporal repair requires repeated plausible settled readings; a single or conflicting OCR result remains uncertain and cannot by itself veto a visually legal move.

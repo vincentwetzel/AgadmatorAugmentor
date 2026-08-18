@@ -1,0 +1,25 @@
+[Event "Unknown"]
+[Site "Unknown"]
+[Date "Unknown"]
+[Round "Unknown"]
+[White "Wei Yi"]
+[Black "Andrey Esipenko"]
+[WhiteElo "2752"]
+[BlackElo "2681"]
+[ECO "C10"]
+[Opening "French Defense: Rubinstein Variation"]
+[WhiteACPL "93"]
+[WhiteAccuracy "52.3"]
+[BlackACPL "128"]
+[BlackAccuracy "41.0"]
+
+1. e4 {[%clk 1:30:54]} e6 {[%clk 1:30:44]}
+2. d4 {[%clk 1:30:43]} d5 {[%clk 1:31:06]}
+3. Nc3 {[%clk 1:30:39]} dxe4 {[%clk 1:31:23]}
+4. Nxe4 {[%clk 1:31:03]} Nd7 {[%clk 1:31:49]}
+5. Nf3 {[%clk 1:20:32]} Ngf6 {[%clk 1:31:40]}
+6. Nxf6 {[%clk 1:20:50]} Nxf6 {[%clk 1:32:00]}
+7. Bd3 {[%clk 1:20:38]} c5 {[%clk 1:32:11]}
+8. Be3 {[%clk 1:20:38]}
+	(8. dxc5 {[%clk 1:20:38]} Bxc5 {[%clk 1:32:11]} 9. Qe2 {[%clk 1:20:38]})
+	

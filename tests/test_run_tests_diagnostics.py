@@ -23,6 +23,64 @@ def report_for(expected_move="d2d4"):
 
 
 class DiagnosticClassificationTests(unittest.TestCase):
+    def test_test_run_log_cycles_to_the_requested_retention_count(self):
+        root = Path("build_tests") / "tmp" / "test_run_log_cycle"
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            (root / "test_run_older.log").write_text("older\n", encoding="utf-8")
+            log = RUNNER.TestRunLog(root, retain_count=1)
+            try:
+                log.file.write("current\n")
+            finally:
+                log.close()
+            retained = list(root.glob("test_run_*.log"))
+            self.assertEqual(len(retained), 1)
+            self.assertEqual(retained[0], log.path)
+            self.assertEqual(log.path.read_text(encoding="utf-8"), "current\n")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_outcome_contract_covers_every_supported_reducer_outcome(self):
+        records = [
+            {"event": "ACCEPT"},
+            {"event": "VALIDATION_REJECTED"},
+            {"event": "SETTLE_PROBE"},
+            {"event": "ORIGIN_CANDIDATE"},
+            {"event": "REVERT_SEARCH"},
+            {"event": "CANDIDATE"},
+            {"event": "QUIET"},
+        ]
+
+        outcome_counts = RUNNER.summarize_detector_quality(records)[
+            "uncertainty"
+        ]["outcome_counts"]
+
+        self.assertEqual(outcome_counts, {
+            "ACCEPT": 1,
+            "REJECT": 1,
+            "WAIT_FOR_SETTLE": 1,
+            "AMBIGUOUS": 1,
+            "RECOVERING": 1,
+            "OBSERVED": 1,
+            "INFORMATIONAL": 1,
+        })
+
+    def test_move_override_and_hover_measure_are_reviewable_events(self):
+        self.assertEqual(RUNNER._replay_event_layer("MOVE_OVERRIDE"), "reducer")
+        self.assertEqual(
+            RUNNER._replay_event_layer("HOVER_MEASURE"),
+            "detector_or_validation",
+        )
+        self.assertEqual(
+            RUNNER._diagnostic_outcome({"event": "MOVE_OVERRIDE"}),
+            "OBSERVED",
+        )
+        self.assertEqual(
+            RUNNER._diagnostic_outcome({"event": "HOVER_MEASURE"}),
+            "OBSERVED",
+        )
+
     def test_acceptance_is_at_next_active_ply(self):
         records = [
             {
@@ -208,6 +266,21 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(
             quality["evidence_strength"]["highlights"]["strong_count"], 0)
 
+    def test_explicit_advisory_strength_is_not_promoted_to_strong(self):
+        quality = RUNNER.summarize_detector_quality([{
+            "event": "ACCEPT",
+            "evidence": {
+                "yellow_checked": True,
+                "yellow_decision": "passed",
+                "yellow_assessment": {"strength": "advisory"},
+            },
+        }])
+        highlights = quality["evidence_strength"]["highlights"]
+        self.assertEqual(highlights["advisory_count"], 1)
+        self.assertEqual(highlights["strong_count"], 0)
+        self.assertEqual(
+            quality["uncertainty"]["accepted_with_non_strong_evidence_count"], 1)
+
     def test_uncertainty_keeps_outcomes_and_evidence_families_separate(self):
         records = [
             {
@@ -303,12 +376,19 @@ class DiagnosticClassificationTests(unittest.TestCase):
                 "observation_id": 9,
                 "timestamp": 4.1,
                 "event": "CANDIDATE",
-                "evidence": {"board_hash": [3.0]},
+                "evidence": {
+                    "board_hash": [3.0],
+                    "diagnostic_predecessor_board_path": "frames/before.png",
+                },
             },
         ]
         observations = RUNNER.compact_observations(records)
         self.assertEqual(len(observations), 1)
         self.assertEqual(observations[0]["board"]["hash"], [3.0])
+        self.assertEqual(
+            observations[0]["images"]["predecessor_board"],
+            "frames/before.png",
+        )
         self.assertEqual(
             [event["event"] for event in observations[0]["events"]],
             ["CANDIDATE", "ACCEPT"],
@@ -454,6 +534,9 @@ class DiagnosticClassificationTests(unittest.TestCase):
         report_path = bundle_dir / "replay_bundle_report.json"
         diagnostic_path = bundle_dir / "replay_bundle_diagnostics.jsonl"
         summary_path = bundle_dir / "replay_bundle_summary.json"
+        decision_summary_path = bundle_dir / "replay_bundle_decision_summary.json"
+        replay_comparison_path = bundle_dir / "replay_bundle_comparison.json"
+        frame_dir = bundle_dir / "frames"
         report = report_for()
         records = [
             {
@@ -477,11 +560,23 @@ class DiagnosticClassificationTests(unittest.TestCase):
                 "\n".join(json.dumps(record) for record in records) + "\n",
                 encoding="utf-8",
             )
+            frame_dir.mkdir(exist_ok=True)
+            (frame_dir / "before_frame.png").write_bytes(b"png-placeholder")
+            (frame_dir / "before_board.png").write_bytes(b"png-placeholder")
             classification = RUNNER.classify_diagnostics(report, records)
+            decision_summary_path.write_text(
+                json.dumps(RUNNER.build_decision_summary(report, records)),
+                encoding="utf-8",
+            )
+            replay_comparison_path.write_text(
+                json.dumps({"status": "match"}), encoding="utf-8"
+            )
             summary_path.write_text(
                 json.dumps({
                     "report": report_path.name,
                     "diagnostics": diagnostic_path.name,
+                    "decision_summary": decision_summary_path.name,
+                    "replay_comparison": replay_comparison_path.name,
                     "classification": classification,
                 }),
                 encoding="utf-8",
@@ -493,10 +588,227 @@ class DiagnosticClassificationTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Records replayed: 1", output.getvalue())
             self.assertIn("Classification matches saved summary: yes", output.getvalue())
+            self.assertIn("Replay comparison: PASS", output.getvalue())
         finally:
-            for path in (report_path, diagnostic_path, summary_path):
+            for path in (
+                report_path, diagnostic_path, summary_path, decision_summary_path,
+                replay_comparison_path,
+            ):
                 if path.exists():
                     path.unlink()
+            shutil.rmtree(frame_dir, ignore_errors=True)
+
+    def test_decision_summary_connects_last_good_state_to_wrong_acceptance(self):
+        report = report_for(expected_move="d2d4")
+        report.update({
+            "extracted_move": "c2c4",
+            "failure_kind": "move_mismatch",
+            "first_mismatch_ply": 2,
+            "last_matching_ply": 0,
+        })
+        records = [
+            {
+                "sequence": 1,
+                "observation_id": 1,
+                "timestamp": 3.8,
+                "active_ply": 0,
+                "event": "ACCEPT",
+                "best_move": "e2e4",
+                "fen": "after-e2e4",
+                "branch_id": 0,
+            },
+            {
+                "sequence": 2,
+                "observation_id": 2,
+                "timestamp": 4.1,
+                "active_ply": 1,
+                "event": "CANDIDATE",
+                "best_move": "c2c4",
+                "best_score": 91.0,
+                "fen": "before-d2d4",
+                "evidence": {
+                    "legal_candidates": [
+                        {"move": "c2c4", "rank": 1, "score": 91.0},
+                        {"move": "d2d4", "rank": 2, "score": 88.0},
+                    ],
+                    "yellow_decision": "passed",
+                    "settle_decision": "accepted_same_move",
+                    "diagnostic_frame_path": "frames/candidate.png",
+                },
+            },
+            {
+                "sequence": 3,
+                "observation_id": 3,
+                "timestamp": 4.2,
+                "active_ply": 1,
+                "event": "ACCEPT",
+                "best_move": "c2c4",
+                "best_score": 94.0,
+                "fen": "after-c2c4",
+                "branch_id": 0,
+                "evidence": {
+                    "rejection_reason": "",
+                    "settle_decision": "accepted_same_move",
+                },
+            },
+        ]
+
+        summary = RUNNER.build_decision_summary(report, records)
+
+        self.assertEqual(summary["target_scope"], "active_ply=1")
+        self.assertEqual(summary["expected_move"], "d2d4")
+        self.assertEqual(summary["expected_move_status"], "wrong_move_accepted")
+        self.assertEqual(summary["last_matching_observation"]["observation_id"], 1)
+        self.assertEqual(
+            summary["first_post_divergence_candidate"]["best_move"], "c2c4"
+        )
+        self.assertEqual(len(summary["wrong_acceptances"]), 1)
+        self.assertEqual(len(summary["expected_move_observations"]), 1)
+        target_provenance = next(
+            entry for entry in summary["provenance_records"]
+            if entry["reducer"]["event"] == "ACCEPT"
+            and entry["reducer"]["active_ply"] == 1
+        )
+        self.assertTrue(target_provenance["diagnostic_only"])
+        self.assertEqual(target_provenance["schema_version"], 1)
+        self.assertEqual(target_provenance["mapper"]["chunk"], 0)
+        self.assertIn("clock", target_provenance["evidence_families"])
+        self.assertIn("variation", target_provenance["evidence_families"])
+        target_candidate_provenance = next(
+            entry for entry in summary["decision_chain"]
+            if entry["event"] == "CANDIDATE"
+            and entry["active_ply"] == 1
+        )["provenance"]
+        self.assertEqual(
+            target_candidate_provenance["visual_candidate"]["legal_candidates"][1]["move"],
+            "d2d4",
+        )
+        self.assertEqual(target_provenance["output_context"]["variation_branch"], 0)
+        self.assertFalse(target_provenance["output_context"]["pgn_reference"]["variation"])
+        self.assertEqual(summary["timestamp_interval"]["start"], 3.8)
+        self.assertEqual(summary["timestamp_interval"]["end"], 4.2)
+
+    def test_decision_summary_classifies_expected_move_outcomes(self):
+        cases = (
+            ([], "never_emitted"),
+            ([{
+                "event": "VALIDATION_REJECTED",
+                "active_ply": 0,
+                "timestamp": 4.1,
+                "best_move": "d2d4",
+                "evidence": {"rejection_reason": "yellow_missing"},
+            }], "emitted_but_rejected"),
+            ([{
+                "event": "CANDIDATE",
+                "active_ply": 0,
+                "timestamp": 4.1,
+                "best_move": "c2c4",
+                "evidence": {"legal_candidates": [{"move": "d2d4"}]},
+            }], "emitted_not_accepted"),
+            ([{
+                "event": "ACCEPT",
+                "active_ply": 0,
+                "timestamp": 4.1,
+                "best_move": "c2c4",
+                "branch_id": 0,
+            }], "wrong_move_accepted"),
+            ([{
+                "event": "ACCEPT",
+                "active_ply": 0,
+                "timestamp": 4.1,
+                "best_move": "d2d4",
+                "branch_id": 3,
+            }], "accepted_only_on_incorrect_branch"),
+        )
+        for records, expected_status in cases:
+            with self.subTest(expected_status=expected_status):
+                summary = RUNNER.build_decision_summary(report_for(), records)
+                self.assertEqual(summary["expected_move_status"], expected_status)
+
+    def test_provenance_preserves_clock_revert_and_variation_context(self):
+        report = report_for(expected_move="d2d4")
+        report.update({"first_mismatch_ply": 2, "anchor_timestamp": 4.0})
+        records = [
+            {
+                "sequence": 1, "observation_id": 1, "timestamp": 3.8,
+                "active_ply": 0, "event": "ACCEPT", "best_move": "e2e4",
+            },
+            {
+                "sequence": 2, "observation_id": 2, "timestamp": 4.0,
+                "active_ply": 1, "event": "CANDIDATE", "best_move": "d2d4",
+                "branch_id": 2, "revert_generation": 3,
+                "metadata": "variation_root=1",
+                "evidence": {
+                    "mapper_chunk": 1,
+                    "source_frame_index": 120,
+                    "mapper_emission_reason": "settled_tail",
+                    "legal_candidates": [{"move": "d2d4", "rank": 1}],
+                    "yellow_assessment": {"state": "passed", "strength": "advisory"},
+                    "clock_assessment": {"state": "ocr_plausible", "strength": "advisory"},
+                    "hover_assessment": {"state": "clear"},
+                    "geometry_assessment": {"state": "stable"},
+                },
+            },
+            {
+                "sequence": 3, "observation_id": 2, "timestamp": 4.0,
+                "active_ply": 1, "event": "CLOCK_STATE", "best_move": "d2d4",
+            },
+            {
+                "sequence": 4, "observation_id": 2, "timestamp": 4.1,
+                "active_ply": 1, "event": "REVERT_APPLIED", "branch_id": 2,
+                "revert_generation": 3,
+            },
+            {
+                "sequence": 5, "observation_id": 2, "timestamp": 4.1,
+                "active_ply": 1, "event": "VARIATION_ROOT", "branch_id": 2,
+            },
+        ]
+
+        summary = RUNNER.build_decision_summary(report, records)
+        candidate = next(
+            entry for entry in summary["decision_chain"]
+            if entry["event"] == "CANDIDATE"
+        )["provenance"]
+        self.assertEqual(candidate["mapper"]["emission_reason"], "settled_tail")
+        self.assertEqual(candidate["evidence_families"]["clock"]["state"], "ocr_plausible")
+        self.assertEqual(candidate["detector_validation"]["yellow_strength"], "advisory")
+        self.assertEqual(candidate["detector_validation"]["clock_strength"], "advisory")
+        self.assertEqual(candidate["evidence_families"]["variation"]["branch_id"], 2)
+        self.assertEqual(candidate["evidence_families"]["revert"]["generation"], 3)
+        self.assertTrue(any(
+            entry["event"] == "VARIATION_ROOT"
+            for entry in summary["decision_chain"]
+        ))
+
+    def test_decision_summary_validation_checks_referenced_artifacts(self):
+        report = report_for()
+        records = [{
+            "sequence": 1,
+            "observation_id": 1,
+            "timestamp": 4.1,
+            "active_ply": 0,
+            "event": "CANDIDATE",
+            "best_move": "d2d4",
+            "evidence": {"diagnostic_frame_path": "frames/missing.png"},
+        }]
+        summary = RUNNER.build_decision_summary(report, records)
+        findings = RUNNER.validate_decision_summary(
+            report, records, summary, Path("build_tests") / "tmp"
+        )
+
+        self.assertTrue(any("missing frame" in finding for finding in findings))
+
+    def test_evidence_window_refines_broad_anchor_window(self):
+        summary = {
+            "timestamp_interval": {"start": 57.1, "end": 57.3}
+        }
+        self.assertEqual(
+            RUNNER.evidence_window_from_summary(summary, 52.3, 67.3),
+            (56.1, 58.3),
+        )
+        self.assertIsNone(
+            RUNNER.evidence_window_from_summary(summary, 56.1, 58.3)
+        )
 
     def test_compact_observation_validation_reports_ordering_and_duplicate_ids(self):
         observations = [
@@ -544,6 +856,8 @@ class DiagnosticClassificationTests(unittest.TestCase):
         result = RUNNER.compare_replay_traces_from_records(source, replay)
         self.assertEqual(result["status"], "diverged")
         self.assertEqual(result["first_divergence"]["layer"], "mapper_or_artifact")
+        self.assertEqual(result["first_divergence"]["observation_id"], "7")
+        self.assertEqual(result["first_divergence"]["kind"], "mapper_chunk")
 
     def test_replay_trace_comparison_classifies_reducer_event_difference(self):
         source = [{"observation_id": 7, "event": "ACCEPT", "active_ply": 1, "fen": "a"}]
@@ -699,12 +1013,14 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(clock_errors, [])
         yellow = RUNNER.detector_calibration(yellow_records)["detectors"]["yellow"]
         clock = RUNNER.detector_calibration(clock_records)["detectors"]["clock"]
-        self.assertEqual(yellow["frame"]["labeled"], 27)
-        self.assertEqual(yellow["components"]["origin"]["false_negative"], 1)
-        self.assertEqual(clock["frame"]["labeled"], 9)
-        self.assertEqual(clock["frame"]["false_negative"], 0)
+        self.assertEqual(yellow["frame"]["labeled"], 66)
+        self.assertEqual(yellow["frame"]["false_positive"], 3)
+        self.assertEqual(yellow["components"]["origin"]["false_negative"], 6)
+        self.assertEqual(yellow["components"]["origin"]["false_positive"], 1)
+        self.assertEqual(clock["frame"]["labeled"], 60)
+        self.assertEqual(clock["frame"]["false_negative"], 36)
         self.assertEqual(clock["ocr"]["rows"], 0)
-        self.assertEqual(clock["ocr"]["unmeasured_rows"], 6)
+        self.assertEqual(clock["ocr"]["unmeasured_rows"], 40)
 
     def test_detector_calibration_reports_confusion_rates_and_transitions(self):
         records = [
@@ -911,6 +1227,57 @@ class DiagnosticClassificationTests(unittest.TestCase):
         self.assertEqual(measurements["threshold_grid"]["status"], "advisory")
         self.assertEqual(measurements["edge_density"]["origin_edge_density"]["count"], 0)
 
+    def test_yellow_calibration_reports_move_outcomes_separately(self):
+        records = [
+            {
+                "detector": "yellow", "component": "paired",
+                "image": "exact.png", "regime": "native",
+                "truth": "positive", "prediction": "positive",
+                "expected_move": "e2e4", "observed_move": "e2e4",
+            },
+            {
+                "detector": "yellow", "component": "paired",
+                "image": "wrong.png", "regime": "native",
+                "truth": "positive", "prediction": "positive",
+                "expected_move": "e2e4", "observed_move": "e2e3",
+            },
+            {
+                "detector": "yellow", "component": "paired",
+                "image": "missing.png", "regime": "native",
+                "truth": "positive", "prediction": "negative",
+                "expected_move": "e2e4", "observed_move": "",
+            },
+            {
+                "detector": "yellow", "component": "paired",
+                "image": "negative.png", "regime": "native",
+                "truth": "negative", "prediction": "positive", "observed_move": "b7e7",
+            },
+            {
+                "detector": "yellow", "component": "paired",
+                "image": "unmeasured.png", "regime": "native",
+                "truth": "positive", "prediction": "negative",
+                "expected_move": "e2e4",
+            },
+        ]
+        diagnostics = RUNNER.detector_calibration(records)["detectors"]["yellow"][
+            "yellow_measurements"]["move_diagnostics"]
+        self.assertEqual(diagnostics["rows"], 5)
+        self.assertEqual(diagnostics["measured_rows"], 4)
+        self.assertEqual(
+            diagnostics["outcomes"],
+            {
+                "exact": 1,
+                "missing_candidate": 1,
+                "unexpected_candidate": 1,
+                "unmeasured": 1,
+                "wrong_candidate": 1,
+            },
+        )
+        self.assertEqual(
+            {item["outcome"] for item in diagnostics["mismatches"]},
+            {"missing_candidate", "unexpected_candidate", "wrong_candidate"},
+        )
+
     def test_yellow_calibration_reports_temporal_persistence(self):
         records = [
             {
@@ -1068,23 +1435,30 @@ class DiagnosticClassificationTests(unittest.TestCase):
         try:
             report_path = root / "failure.json"
             diagnostic_path = root / "failure.jsonl"
+            test_run_log_path = root / "test_run.log"
             frame_dir = RUNNER.diagnostic_frame_directory(diagnostic_path)
             frame_dir.mkdir()
             report_path.write_text(json.dumps(report_for()), encoding="utf-8")
             diagnostic_path.write_text(
                 json.dumps({
+                    "event": "CANDIDATE",
                     "observation_id": 7,
                     "timestamp": 4.1,
                     "evidence": {
                         "board_hash": [1.0, 2.0],
                         "diagnostic_frame_path": str(frame_dir / "before_frame.png"),
                         "diagnostic_board_path": str(frame_dir / "before_board.png"),
+                        "diagnostic_predecessor_board_path": str(
+                            frame_dir / "before_predecessor_board.png"
+                        ),
                     }
                 }) + "\n",
                 encoding="utf-8",
             )
             (frame_dir / "before_frame.png").write_bytes(b"png-placeholder")
             (frame_dir / "before_board.png").write_bytes(b"png-placeholder")
+            (frame_dir / "before_predecessor_board.png").write_bytes(b"png-placeholder")
+            test_run_log_path.write_text("test runner output\n", encoding="utf-8")
 
             classification = RUNNER.classify_diagnostics(report_for(), [])
             bundle_dir, summary_path = RUNNER.write_failure_bundle(
@@ -1094,6 +1468,7 @@ class DiagnosticClassificationTests(unittest.TestCase):
                 None,
                 report_for(),
                 classification,
+                test_run_log_path=test_run_log_path,
             )
 
             self.assertEqual(
@@ -1101,13 +1476,38 @@ class DiagnosticClassificationTests(unittest.TestCase):
                 str((bundle_dir / "frames").resolve()),
             )
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                Path(summary["test_run_log"]),
+                (bundle_dir / "test-run.log").resolve(),
+            )
+            self.assertEqual(
+                (bundle_dir / "test-run.log").read_text(encoding="utf-8"),
+                "test runner output\n",
+            )
+            decision_summary_path = Path(summary["decision_summary"])
+            self.assertTrue(decision_summary_path.exists())
+            decision_summary = json.loads(
+                decision_summary_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(decision_summary["status"], "ok")
+            self.assertEqual(summary["decision_summary_validation"], [])
+            self.assertEqual(summary["observation_validation"], [])
+            self.assertTrue(Path(summary["replay_comparison"]).exists())
+            self.assertEqual(summary["replay_comparison_status"], "not_run")
             self.assertTrue(Path(summary["observations"]).exists())
             compact = json.loads(
                 (bundle_dir / "observations.jsonl").read_text(encoding="utf-8")
             )
             self.assertEqual(compact["board"]["hash"], [1.0, 2.0])
             self.assertEqual(compact["images"]["frame"], str(Path("frames") / "before_frame.png"))
+            self.assertEqual(
+                compact["images"]["predecessor_board"],
+                str(Path("frames") / "before_predecessor_board.png"),
+            )
             self.assertTrue((bundle_dir / "frames" / "before_board.png").exists())
+            self.assertTrue(
+                (bundle_dir / "frames" / "before_predecessor_board.png").exists()
+            )
             artifacts = json.loads(summary_path.read_text(encoding="utf-8"))["artifacts"]
             self.assertEqual(artifacts["overlay_count"], 1)
             self.assertTrue(Path(artifacts["contact_sheet"]).exists())

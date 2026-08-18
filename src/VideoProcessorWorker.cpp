@@ -109,12 +109,24 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         
         extractor.set_fen_detected_callback(lichessHelper.getFenCallback());
 
-        // Step 1: Extract moves from video
+        // Step 1: Extract moves from video. Keep the stage boundaries explicit
+        // because the per-video job log is the first place users look after a
+        // successful run as well as after a failure.
+        emit logMessage("Stage 1/4: extracting and verifying chess moves.");
         GameData gameData = extractor.extract_moves_from_video(
             settings.videoPath.toStdString(),
             "", // debug_label
             cancelFlag
         );
+
+        size_t variationCount = 0;
+        for (const auto& entry : gameData.variations) {
+            variationCount += entry.second.size();
+        }
+        emit logMessage(QString("Move extraction complete: %1 main-line plies, %2 variation(s), %3 clock record(s).")
+            .arg(gameData.moves.size())
+            .arg(variationCount)
+            .arg(gameData.clocks.size()));
 
         if (cancelFlag && *cancelFlag) {
             emit finished();
@@ -127,10 +139,13 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         connect(&sfHelper, &StockfishAnalysisHelper::progressUpdated, this, &VideoProcessorWorker::progressUpdated, Qt::DirectConnection);
         
         if (runStockfishAnalysis) {
+            emit logMessage("Stage 2/4: running Stockfish analysis.");
             if (!sfHelper.runAnalysis()) {
                 emit finished();
                 return;
             }
+        } else {
+            emit logMessage("Stage 2/4: Stockfish analysis not requested.");
         }
         
         const auto& sfResults = sfHelper.getResults();
@@ -143,13 +158,15 @@ void VideoProcessorWorker::process(const ProcessingSettings& settings, std::atom
         double white_acpl = sfResults.whiteAcpl;
         double black_acpl = sfResults.blackAcpl;
 
+        emit logMessage("Stage 3/4: resolving opening metadata.");
         lichessHelper.waitAndProcess(gameData, cancelFlag);
         const auto& lichessResults = lichessHelper.getResults();
         std::string final_eco = lichessResults.finalEco;
         std::string final_opening_name = lichessResults.finalOpeningName;
         const auto& video_opening_names = lichessResults.videoOpeningNames;
 
-        // Step 3: Export results
+        // Step 4: Export results
+        emit logMessage("Stage 4/4: exporting requested outputs.");
         if (!exportHelper.exportAll(settings, gameData, sfResults, lichessResults, *extractor.get_board_geometry(), cancelFlag)) {
             if (cancelFlag && *cancelFlag) {
                 emit finished();

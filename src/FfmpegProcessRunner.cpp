@@ -1,6 +1,9 @@
 #include "FfmpegProcessRunner.h"
 #include <algorithm>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
+#include <string_view>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -51,9 +54,44 @@ void append_tail(std::string& tail, const char* data, size_t size) {
         tail.erase(0, tail.size() - kMaxTailBytes);
     }
 }
+
+void report_progress(std::string& output_acc,
+                     double total_duration_seconds,
+                     const std::function<void(int, const std::string&)>& progress_callback) {
+    constexpr std::string_view kTimePrefix = "out_time_us=";
+    const size_t time_pos = output_acc.rfind(kTimePrefix);
+    if (time_pos == std::string::npos) return;
+
+    const size_t value_pos = time_pos + kTimePrefix.size();
+    const size_t value_end = output_acc.find_first_of("\r\n ", value_pos);
+    if (value_end == std::string::npos) return;
+
+    try {
+        const long long output_time_us = std::stoll(output_acc.substr(value_pos, value_end - value_pos));
+        const double output_time_seconds = std::max(0.0, static_cast<double>(output_time_us) / 1'000'000.0);
+
+        if (progress_callback) {
+            int percent = 80;
+            std::ostringstream message;
+            message << "Muxing video: encoded time " << std::fixed << std::setprecision(1)
+                    << output_time_seconds << "s";
+            if (total_duration_seconds > 0.0) {
+                percent = 80 + static_cast<int>((output_time_seconds * 20.0) / total_duration_seconds);
+                percent = std::clamp(percent, 80, 99);
+            }
+            progress_callback(percent, message.str());
+        }
+
+        // Discard the parsed value so the same progress update is not reported
+        // repeatedly while the next FFmpeg update is being read.
+        output_acc.erase(0, value_end);
+    } catch (...) {
+        // Leave incomplete or malformed progress data available for the next read.
+    }
+}
 } // namespace
 
-int FfmpegProcessRunner::run_with_progress(const std::string& cmd, int total_frames, std::atomic<bool>* cancel_flag, std::function<void(int, const std::string&)> progress_callback, std::string& out_tail) {
+int FfmpegProcessRunner::run_with_progress(const std::string& cmd, double total_duration_seconds, std::atomic<bool>* cancel_flag, std::function<void(int, const std::string&)> progress_callback, std::string& out_tail) {
     out_tail.clear();
     int result = -1;
 #ifdef _WIN32
@@ -99,23 +137,7 @@ int FfmpegProcessRunner::run_with_progress(const std::string& cmd, int total_fra
             buffer[bytesRead] = '\0';
             append_tail(out_tail, buffer, bytesRead);
             output_acc += buffer;
-            
-            size_t frame_pos = output_acc.rfind("frame=");
-            if (frame_pos != std::string::npos) {
-                size_t end_pos = output_acc.find("fps=", frame_pos);
-                if (end_pos != std::string::npos) {
-                    std::string frame_str = output_acc.substr(frame_pos + 6, end_pos - (frame_pos + 6));
-                    try {
-                        int frame_num = std::stoi(frame_str);
-                        if (total_frames > 0 && progress_callback) {
-                            int percent = 80 + (frame_num * 20) / total_frames;
-                            percent = std::clamp(percent, 80, 99);
-                            progress_callback(percent, "Muxing video: frame " + std::to_string(frame_num) + " / " + std::to_string(total_frames));
-                        }
-                    } catch (...) {}
-                    output_acc.erase(0, end_pos);
-                }
-            }
+            report_progress(output_acc, total_duration_seconds, progress_callback);
             if (output_acc.length() > 4096) {
                 output_acc.erase(0, output_acc.length() - 2048);
             }
@@ -144,22 +166,7 @@ int FfmpegProcessRunner::run_with_progress(const std::string& cmd, int total_fra
             if (cancel_flag && *cancel_flag) break;
             append_tail(out_tail, buffer, std::strlen(buffer));
             output_acc += buffer;
-            size_t frame_pos = output_acc.rfind("frame=");
-            if (frame_pos != std::string::npos) {
-                size_t end_pos = output_acc.find("fps=", frame_pos);
-                if (end_pos != std::string::npos) {
-                    std::string frame_str = output_acc.substr(frame_pos + 6, end_pos - (frame_pos + 6));
-                    try {
-                        int frame_num = std::stoi(frame_str);
-                        if (total_frames > 0 && progress_callback) {
-                            int percent = 80 + (frame_num * 20) / total_frames;
-                            percent = std::clamp(percent, 80, 99);
-                            progress_callback(percent, "Muxing video: frame " + std::to_string(frame_num) + " / " + std::to_string(total_frames));
-                        }
-                    } catch (...) {}
-                    output_acc.erase(0, end_pos);
-                }
-            }
+            report_progress(output_acc, total_duration_seconds, progress_callback);
             if (output_acc.length() > 4096) {
                 output_acc.erase(0, output_acc.length() - 2048);
             }

@@ -29,6 +29,7 @@ struct CandidateFrame {
     // Populated only when the diagnostic frame artifact path is enabled.
     std::string diagnostic_frame_path;
     std::string diagnostic_board_path;
+    std::string diagnostic_predecessor_board_path;
     std::string diagnostic_clock_top_path;
     std::string diagnostic_clock_bottom_path;
     double t;

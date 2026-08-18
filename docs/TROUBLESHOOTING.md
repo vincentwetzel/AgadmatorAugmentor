@@ -109,7 +109,10 @@ python tests\run_tests.py --detector-calibration assets\fixtures\detectors\yello
 python tests\run_tests.py --detector-calibration assets\fixtures\detectors\clock-changes\labels.jsonl
 ```
 
-The seed manifests are intentionally too small to establish production thresholds. Treat their precision/recall and confidence results as review evidence only.
+The manifests are expanded review corpora, but they are still not independent
+enough to establish production thresholds. Treat their precision/recall and
+confidence results as advisory evidence only; do not tune production behavior
+to a single fixture or transformed regime.
 
 ## GPU acceleration is unavailable
 
@@ -121,4 +124,10 @@ Opening metadata requires network access to Lichess Explorer on Windows. Results
 
 ## Where outputs and settings are stored
 
-PGN and analysis-video paths follow the selected output setting: beside the source video by default or in the configured custom directory. Settings, logs, opening cache, and templates are stored under the application’s `%APPDATA%\ChessTubeAnalyzer` location. A successful cleanup option moves the source video to the trash; failed or cancelled processing preserves it.
+PGN and analysis-video paths follow the selected output setting: beside the source video by default or in the configured custom directory. Settings, logs, opening cache, and templates are stored under the application's `%APPDATA%\ChessTubeAnalyzer` location. A successful cleanup option moves the source video to the trash; failed or cancelled processing preserves it.
+
+Application logs are in `%APPDATA%\ChessTubeAnalyzer\logs`; per-video job
+logs are in its `jobs` subdirectory. **Advanced** logging controls configure
+retention and optional compression, and **Open Logs** opens the directory.
+Test-run logs are separate and default to `<build-dir>\logs`; use `--log-dir`
+or `--log-retention` with `tests\run_tests.py` to change them.

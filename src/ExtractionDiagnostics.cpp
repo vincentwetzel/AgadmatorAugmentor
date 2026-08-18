@@ -49,6 +49,14 @@ void classify(const char* event, Phase& phase, Outcome& outcome, Reason& reason)
         phase = Phase::Reducer;
         outcome = Outcome::Deferred;
         reason = Reason::CandidateHeldForSettling;
+    } else if (is_event(event, "MOVE_OVERRIDE")) {
+        phase = Phase::Reducer;
+        outcome = Outcome::Observed;
+        reason = Reason::MoveOverride;
+    } else if (is_event(event, "HOVER_MEASURE")) {
+        phase = Phase::Validation;
+        outcome = Outcome::Observed;
+        reason = Reason::HoverMeasured;
     } else if (is_event(event, "ORIGIN_CANDIDATE")) {
         phase = Phase::Scoring;
         outcome = Outcome::Ambiguous;
@@ -130,6 +138,8 @@ const char* to_string(Reason reason) {
     case Reason::FrameCoalesced: return "frame_coalesced";
     case Reason::CandidateHeldForSettling: return "candidate_held_for_settling";
     case Reason::CandidateAmbiguous: return "candidate_ambiguous";
+    case Reason::MoveOverride: return "move_override";
+    case Reason::HoverMeasured: return "hover_measured";
     case Reason::ScoreThreshold: return "score_threshold";
     case Reason::ClockObservation: return "clock_observation";
     case Reason::RevertSearch: return "revert_search";
@@ -193,6 +203,7 @@ void write_json_line(std::ostream& output, const Record& record) {
         }
         return nlohmann::json{
             {"state", assessment.state},
+            {"strength", assessment.strength},
             {"confidence", assessment.confidence},
             {"thresholds", assessment.thresholds},
             {"measurements", measurements},
@@ -229,6 +240,7 @@ void write_json_line(std::ostream& output, const Record& record) {
             {"mapper_emission_reason", record.evidence.mapper_emission_reason},
             {"diagnostic_frame_path", record.evidence.diagnostic_frame_path},
             {"diagnostic_board_path", record.evidence.diagnostic_board_path},
+            {"diagnostic_predecessor_board_path", record.evidence.diagnostic_predecessor_board_path},
             {"diagnostic_clock_top_path", record.evidence.diagnostic_clock_top_path},
             {"diagnostic_clock_bottom_path", record.evidence.diagnostic_clock_bottom_path},
             {"observation_tags", record.evidence.observation_tags},
@@ -370,6 +382,10 @@ void write_json_line(std::ostream& output, const Record& record) {
                         {"rank", candidate.rank},
                         {"move", candidate.move},
                         {"score", candidate.score},
+                        {"yellow_from", candidate.yellow_from},
+                        {"yellow_to", candidate.yellow_to},
+                        {"yellow_pair", candidate.yellow_from + candidate.yellow_to},
+                        {"yellow_decision", candidate.yellow_decision},
                     });
                 }
                 return candidates;

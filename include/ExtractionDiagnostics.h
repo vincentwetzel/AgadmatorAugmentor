@@ -45,6 +45,8 @@ enum class Reason {
     FrameCoalesced,
     CandidateHeldForSettling,
     CandidateAmbiguous,
+    MoveOverride,
+    HoverMeasured,
     ScoreThreshold,
     ClockObservation,
     RevertSearch,
@@ -58,6 +60,9 @@ struct CandidateScore {
     std::string move;
     double score = 0.0;
     std::size_t rank = 0;
+    double yellow_from = 0.0;
+    double yellow_to = 0.0;
+    std::string yellow_decision;
 };
 
 struct SquareScore {
@@ -80,6 +85,11 @@ struct YellowMeasurement {
 // still emitted so an uncalibrated score is never mistaken for certainty.
 struct DetectorAssessment {
     std::string state = "not_checked";
+    // Evidence strength is intentionally separate from detector state. A
+    // detector can report a positive state while remaining advisory until
+    // its calibration target is met; missing and conflicting evidence must
+    // never be silently promoted to strong reducer evidence.
+    std::string strength = "unmeasured";
     double confidence = -1.0;
     std::vector<double> thresholds;
     std::vector<std::pair<std::string, double>> measurements;
@@ -104,6 +114,7 @@ struct Evidence {
     std::string mapper_emission_reason;
     std::string diagnostic_frame_path;
     std::string diagnostic_board_path;
+    std::string diagnostic_predecessor_board_path;
     std::string diagnostic_clock_top_path;
     std::string diagnostic_clock_bottom_path;
     // Stable labels describing the evidence state of the mapped observation.

@@ -40,9 +40,7 @@ OverlayEditorDialog::OverlayEditorDialog(QWidget* parent)
     setupOverlays();
     
     refreshTemplateCombo();
-    if (!templates_.empty()) {
-        templateCombo_->setCurrentIndex(0);
-    }
+    if (!templates_.empty()) selectTemplate(0);
 }
 
 OverlayEditorDialog::~OverlayEditorDialog() {
@@ -74,10 +72,11 @@ void OverlayEditorDialog::setupUi() {
     auto* reloadBtn = new QPushButton("Reload");
     reloadBtn->setToolTip("Discard unsaved changes and reload templates from disk.");
     connect(reloadBtn, &QPushButton::clicked, this, [this]() {
+        currentIndex_ = -1;
         cta::TemplateManager::instance().reloadTemplates();
         templates_ = cta::TemplateManager::instance().getAllTemplates();
         refreshTemplateCombo();
-        if (!templates_.empty()) templateCombo_->setCurrentIndex(0);
+        if (!templates_.empty()) selectTemplate(0);
     });
     row1->addWidget(reloadBtn);
     row1->addStretch();
@@ -188,12 +187,17 @@ void OverlayEditorDialog::setupOverlays() {
         bp.end();
     }
 
-    QPixmap evalMock(40, 600);
+    // Overlay scale values are defined against a 1920x1080 video. Keep the
+    // editor's mock assets at the same logical dimensions used by the
+    // renderer, otherwise saved normalized positions change when exported.
+    boardMock = boardMock.scaled(1080, 1080, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+    QPixmap evalMock(30, 1080);
     evalMock.fill(Qt::black);
     QPainter ep(&evalMock);
     ep.setBrush(Qt::white);
     ep.setPen(Qt::NoPen);
-    ep.drawRect(0, 300, 40, 300); // 50% advantage
+    ep.drawRect(0, 540, 30, 540); // 50% advantage
     ep.end();
 
     QSettings settings;
@@ -241,6 +245,16 @@ void OverlayEditorDialog::refreshTemplateCombo() {
         templateCombo_->addItem(tpl.name, tpl.id);
     }
     templateCombo_->blockSignals(false);
+}
+
+void OverlayEditorDialog::selectTemplate(int index) {
+    templateCombo_->blockSignals(true);
+    templateCombo_->setCurrentIndex(index);
+    templateCombo_->blockSignals(false);
+    // Index zero may already be selected after insertion while signals were
+    // blocked. Always load explicitly so the reference image and overlay
+    // geometry belong to the selected template.
+    onTemplateChanged(index);
 }
 
 void OverlayEditorDialog::loadTemplateToUi(int index) {
@@ -355,6 +369,9 @@ void OverlayEditorDialog::onTemplateChanged(int index) {
 }
 
 void OverlayEditorDialog::onNewTemplate() {
+    if (currentIndex_ >= 0 && currentIndex_ < static_cast<int>(templates_.size())) {
+        saveUiToTemplate(currentIndex_);
+    }
     OverlayTemplate newTpl;
     newTpl.id = "custom_" + QString::number(QDateTime::currentMSecsSinceEpoch());
     newTpl.name = "New Custom Template";
@@ -363,7 +380,7 @@ void OverlayEditorDialog::onNewTemplate() {
     
     templates_.push_back(newTpl);
     refreshTemplateCombo();
-    templateCombo_->setCurrentIndex(templates_.size() - 1);
+    selectTemplate(static_cast<int>(templates_.size() - 1));
 }
 
 void OverlayEditorDialog::onDeleteTemplate() {
@@ -376,7 +393,7 @@ void OverlayEditorDialog::onDeleteTemplate() {
         templates_.erase(templates_.begin() + currentIndex_);
         currentIndex_ = -1;
         refreshTemplateCombo();
-        if (!templates_.empty()) templateCombo_->setCurrentIndex(0);
+        if (!templates_.empty()) selectTemplate(0);
         else {
             backgroundItem_->setPixmap(QPixmap());
             templateNameEdit_->clear();

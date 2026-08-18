@@ -97,6 +97,7 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | NF-8 | Tests must remain Google Test based, opt-in through `BUILD_TESTS=ON`, and controlled by compile-time toggles in `tests/test_ui_detectors.cpp`. `tests/run_tests.py` must support focused filters, no-build runs, bounded diagnostic replays, structured JSONL/TSV output, failure bundles, mapper/source/replay comparison, intentional failure probes, detector calibration, and replay-trace comparison. |
 | NF-9 | Integration tests should derive expected UCI moves from sample PGN files instead of separate golden JSON files. |
 | NF-10 | Production extraction must not branch on fixture names, expected moves, expected clocks, or asset paths; the test runner must reject such overrides. |
+| NF-11 | Application and test logs must include elapsed-time and phase context sufficient to diagnose extraction, engine, network, and FFmpeg failures without logging secrets. |
 
 ## 3. Component Architecture
 
@@ -167,8 +168,9 @@ Important environment toggles:
 | `CTA_TEST_BUILD_DIR` | Override the test build directory used by `tests/run_tests.py` |
 | `CTA_ENABLE_SYSTEM_CUDA` | Configure tests with or without system CUDA/NPP |
 | `CTA_MEDIA_ROOT` | Override the external test-media directory containing `games/` |
+| `CTA_TEST_LOG_RETENTION` | Set the default number of retained test-run logs |
 
-Detector calibration is deliberately separate from production extraction. Labeled JSONL rows may include `detector`, `component`, `truth`, `prediction`, `confidence`, `transition_id`, `regime`, `condition`, and `case`. The report provides frame/transition confusion metrics, confidence bins, threshold sweeps, representative errors, geometry uncertainty, clock OCR/provenance, temporal metrics, and advisory operating points. Test-side outputs are available through `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`; the repository manifests are seed data, not acceptance thresholds.
+Detector calibration is deliberately separate from production extraction. Labeled JSONL rows may include `detector`, `component`, `truth`, `prediction`, `confidence`, `transition_id`, `regime`, `condition`, and `case`. The report provides frame/transition confusion metrics, confidence bins, threshold sweeps, representative errors, geometry uncertainty, clock OCR/provenance, temporal metrics, and advisory operating points. Test-side outputs are available through `--clock-calibration-output`, `--yellow-calibration-output`, and `--hover-calibration-output`; the repository manifests are expanded review data, not acceptance thresholds.
 
 ## 7. Accuracy Contract
 

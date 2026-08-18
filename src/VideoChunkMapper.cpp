@@ -261,6 +261,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                                   const cv::Mat& frame,
                                   const cv::Mat& bgr_view,
                                   const cv::Mat& gray,
+                                  const cv::Mat& predecessor_bgr_view,
                                   const char* emission_reason,
                                   std::uint64_t source_frame_index) {
             CandidateFrame cf;
@@ -324,6 +325,13 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                 if (cv::imwrite(board_path.string(), cf.board_bgr)) {
                     cf.diagnostic_board_path = board_path.string();
                 }
+                if (!predecessor_bgr_view.empty()) {
+                    const auto predecessor_path = std::filesystem::path(diagnostic_frame_dir_) /
+                        (stem.str() + "_predecessor_board.png");
+                    if (cv::imwrite(predecessor_path.string(), predecessor_bgr_view)) {
+                        cf.diagnostic_predecessor_board_path = predecessor_path.string();
+                    }
+                }
                 if (!cf.clock_top_bgr.empty() &&
                     cv::imwrite(clock_top_path.string(), cf.clock_top_bgr)) {
                     cf.diagnostic_clock_top_path = clock_top_path.string();
@@ -371,6 +379,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
 
             if (!emitted_initial) { 
                 emit_candidate(local_t, frame, board_bgr_view, board_gray,
+                               cv::Mat(),
                                "initial_frame", source_frame_index);
                 emitted_initial = true; 
                 last_emit_t = local_t;
@@ -380,6 +389,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                 // so the reducer has a chance to see the settled state of the first move!
                 if (prev_local_t > last_emit_t + 0.02) {
                     emit_candidate(prev_local_t, prev_frame, prev_board_bgr_view, prev_gray,
+                                   cv::Mat(),
                                    "motion_spike_prev_frame", prev_source_frame_index);
                     last_emit_t = prev_local_t;
                 }
@@ -393,6 +403,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                 // loses otherwise valid moves during fast analysis playback.
                 if (!has_pending_motion && local_t > last_emit_t + 0.02) {
                     emit_candidate(local_t, frame, board_bgr_view, board_gray,
+                                   prev_board_bgr_view,
                                    "motion_leading_edge", source_frame_index);
                     last_emit_t = local_t;
                 }
@@ -401,6 +412,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                 // states indefinitely.
                 if (local_t - last_emit_t > kMapperMotionBurstCapSeconds) {
                     emit_candidate(local_t, frame, board_bgr_view, board_gray,
+                                   prev_board_bgr_view,
                                    "motion_burst_cap", source_frame_index);
                     last_emit_t = local_t;
                 }
@@ -409,6 +421,7 @@ void VideoChunkMapper::map_worker(int worker_idx, std::atomic<bool>* cancel_flag
                 quiet_after_motion_seconds += fine_step;
                 if (quiet_after_motion_seconds >= kMapperSettleConfirmationSeconds) {
                     emit_candidate(local_t, frame, board_bgr_view, board_gray,
+                                   prev_board_bgr_view,
                                    "settled_tail", source_frame_index);
                     has_pending_motion = false;
                     quiet_after_motion_seconds = 0.0;

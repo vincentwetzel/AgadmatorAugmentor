@@ -14,5 +14,10 @@ The asset tree is divided by purpose:
   the GUI executable at build time.
 - `icons/` contains small UI assets used by video rendering.
 
+The detector manifests are review inputs rather than production acceptance
+gates. The current yellow-square manifest contains 66 component rows and the
+clock manifest contains 60 component rows; calibration output should remain
+outside the repository unless it is an intentionally versioned fixture.
+
 Asset and fixture names use lowercase kebab-case. Keep generated diagnostics,
 decoded frames, output videos, and large test videos outside this directory.

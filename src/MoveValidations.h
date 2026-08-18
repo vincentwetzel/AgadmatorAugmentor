@@ -7,6 +7,29 @@
 namespace cta {
 namespace validation {
 
+enum class EvidenceStrength {
+    Strong,
+    Weak,
+    Advisory,
+    Missing,
+    Conflicting,
+};
+
+const char* to_string(EvidenceStrength strength);
+
+// These classifiers describe what the current measured evidence can justify;
+// they do not select a move. Direct detector thresholds remain advisory until
+// calibration supports a stronger production claim.
+EvidenceStrength classify_yellow_evidence(bool accepted_inverse,
+                                           bool direct_pass,
+                                           bool temporal_pass,
+                                           bool absent);
+
+EvidenceStrength classify_clock_evidence(bool temporal_reconciled,
+                                         bool contextual_reconciled,
+                                         bool direct_observed,
+                                         bool missing);
+
 inline constexpr double kYellowEndpointThreshold = 25.0;
 inline constexpr double kYellowPairThreshold = 70.0;
 inline constexpr double kYellowTemporalWindowSeconds = 0.75;

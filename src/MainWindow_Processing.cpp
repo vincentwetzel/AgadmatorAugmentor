@@ -4,6 +4,7 @@
 #include "SettingsDialog.h"
 #include "TemplateManager.h"
 #include "SysUtils.h"
+#include "Logger.h"
 
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -60,6 +61,12 @@ void MainWindow::startProcessingItem(QListWidgetItem* item) {
 
     auto settings = gatherSettings();
     settings.overlayConfig = overlayConfigForItem(item);
+    const QString jobLogPath = Logger::beginJob(path);
+    if (jobLogPath.isEmpty()) {
+        appendLog("Warning: Could not create a per-video job log.");
+    } else {
+        appendLog("Job log: " + jobLogPath);
+    }
     appendLog("Using template \"" + templateNameForItem(item) + "\" for: " + QFileInfo(path).fileName());
 
     item->setData(OutputDirRole, QFileInfo(settings.outputPath).absolutePath());
@@ -183,11 +190,13 @@ void MainWindow::processingFinished() {
 
     if (cancelRequested_) {
         appendLog("Processing cancelled.");
+        Logger::endJob("cancelled");
         setItemStatus(finishedItem, QueueItemStatus::Cancelled);
         finishProcessingSession();
         return;
     } else {
         appendLog("Processing finished successfully for: " + finishedVideo);
+        Logger::endJob("succeeded");
         setItemProgress(finishedItem, 100);
         setItemStatus(finishedItem, QueueItemStatus::Completed);
 
@@ -214,6 +223,7 @@ void MainWindow::processingFinished() {
 
 void MainWindow::processingError(const QString& errorMessage) {
     appendLog("Error: " + errorMessage);
+    Logger::endJob(cancelRequested_ ? "cancelled" : "failed");
     auto* currentItem = findQueueItemByPath(property("currentVideo").toString());
 
     if (cancelRequested_) {

@@ -13,7 +13,7 @@ This roadmap reflects the current implementation. Completed work is summarized s
 | Tests | Google Test, PGN-backed integration baselines, clock-time coverage, and fixture-independence guard |
 | GUI/headless | Qt6 queue UI plus persisted-settings headless mode |
 | Templates | Built-in and custom channel templates with per-queue snapshots |
-| Diagnostics | Observation replay, first-divergence bundles, source/mapper comparison, geometry stability, temporal clock provenance, and advisory detector calibration |
+| Diagnostics | Observation replay, first-divergence bundles, source/mapper comparison, geometry stability, temporal clock provenance, advisory detector calibration, and retained test/job logs |
 
 ## Remaining for v1.0.0
 
@@ -56,7 +56,8 @@ This roadmap reflects the current implementation. Completed work is summarized s
 - Structured JSONL observations can retain mapper provenance, detector assessments, board features, and sampled image artifacts; `CTA_REPLAY_OBSERVATIONS` reuses that contract for reducer replay.
 - `tests/run_tests.py` supports filtered/no-build runs, selectable build directories, diagnostic JSONL/TSV output, automatic first-divergence bundles with SVG/contact-sheet artifacts, bundle reanalysis, mapper comparison, replay-trace comparison, cached Google Test sources, and a production fixture-override scan.
 - `tests/run_tests.py` also compares repeated source runs, supports an intentional-failure bundle probe, and emits test-side clock, yellow-square, and hover/animation calibration JSONL.
-- Detector calibration reports frame/transition metrics, uncertainty, confidence bins, threshold sweeps, condition/regime breakdowns, geometry uncertainty, clock provenance/temporal metrics, and representative errors. Seed labels are tracked under `assets/fixtures/detectors/yellow-squares/` and `assets/fixtures/detectors/clock-changes/`; they remain advisory until expanded.
+- Detector calibration reports frame/transition metrics, uncertainty, confidence bins, threshold sweeps, condition/regime breakdowns, geometry uncertainty, clock provenance/temporal metrics, and representative errors. The expanded labels under `assets/fixtures/detectors/yellow-squares/` and `assets/fixtures/detectors/clock-changes/` remain advisory until an independent, representative corpus supports promotion.
+- Test runs retain readable logs under the build directory's `logs` folder, while GUI/headless jobs retain per-video logs under the application `logs/jobs` folder. Retention is configurable in the GUI or with the test runner's `--log-retention` option.
 - Integration expectations are read from sample PGN files rather than fixture-specific production code or golden JSON artifacts.
 
 ## Reference commands

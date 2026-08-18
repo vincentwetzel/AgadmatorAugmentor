@@ -4,12 +4,89 @@ import shutil
 import subprocess
 import sys
 import argparse
+import atexit
 import html
 import json
+from datetime import datetime
 from collections import Counter
 from pathlib import Path
 
 TEST_TARGET = "test_extract_moves"
+
+
+class TeeStream:
+    """Mirror runner output to the console and the durable test-run log."""
+
+    def __init__(self, console, log_file):
+        self.console = console
+        self.log_file = log_file
+
+    def write(self, text):
+        self.console.write(text)
+        self.log_file.write(text)
+        return len(text)
+
+    def flush(self):
+        self.console.flush()
+        self.log_file.flush()
+
+
+class TestRunLog:
+    """Always retain a concise, human-readable record of a test invocation."""
+
+    def __init__(self, directory, retain_count):
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.retain_count = max(1, retain_count)
+        existing = sorted(
+            self.directory.glob("test_run_*.log"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for old_path in existing[self.retain_count - 1:]:
+            old_path.unlink(missing_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")[:-3]
+        self.path = self.directory / f"test_run_{timestamp}.log"
+        self.file = self.path.open("w", encoding="utf-8", buffering=1)
+        self._original_stdout = None
+        self._original_stderr = None
+
+    def install(self):
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        sys.stdout = TeeStream(self._original_stdout, self.file)
+        sys.stderr = TeeStream(self._original_stderr, self.file)
+
+    def close(self):
+        if self._original_stdout is not None:
+            sys.stdout = self._original_stdout
+        if self._original_stderr is not None:
+            sys.stderr = self._original_stderr
+        if not self.file.closed:
+            self.file.flush()
+            self.file.close()
+
+
+def run_logged_process(command, cwd, env, check=False):
+    """Run a child command while preserving its live console output in the log."""
+    print("$ " + " ".join(str(part) for part in command))
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert process.stdout is not None
+    for line in process.stdout:
+        print(line, end="")
+    return_code = process.wait()
+    if check and return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command)
+    return return_code
 
 
 def parse_args():
@@ -91,6 +168,16 @@ def parse_args():
     )
     parser.add_argument("--trace-start", type=float, help="First timestamp to trace.")
     parser.add_argument("--trace-end", type=float, help="Last timestamp to trace.")
+    parser.add_argument(
+        "--log-dir",
+        help="Directory for retained test-run logs (default: <build-dir>/logs).",
+    )
+    parser.add_argument(
+        "--log-retention",
+        type=int,
+        default=int(os.environ.get("CTA_TEST_LOG_RETENTION", "25")),
+        help="Number of recent test-run logs to keep (default: 25).",
+    )
     return parser.parse_args()
 
 
@@ -162,6 +249,9 @@ def compact_observations(records):
             "images": {
                 "frame": evidence.get("diagnostic_frame_path", ""),
                 "board": evidence.get("diagnostic_board_path", ""),
+                "predecessor_board": evidence.get(
+                    "diagnostic_predecessor_board_path", ""
+                ),
                 "clock_top": evidence.get("diagnostic_clock_top_path", ""),
                 "clock_bottom": evidence.get("diagnostic_clock_bottom_path", ""),
             },
@@ -255,7 +345,9 @@ def validate_compact_observations(observations, bundle_dir):
             previous_timestamp = timestamp
 
         images = observation.get("images", {}) or {}
-        for image_name in ("frame", "board", "clock_top", "clock_bottom"):
+        for image_name in (
+            "frame", "board", "predecessor_board", "clock_top", "clock_bottom"
+        ):
             image_path = images.get(image_name, "")
             if image_path and not (bundle_dir / image_path).exists():
                 findings.append(
@@ -279,10 +371,12 @@ def validate_compact_observations(observations, bundle_dir):
     return findings
 
 
-def run_test_process(exe_path, exe_dir, env, gtest_filter):
+def run_test_process(exe_path, exe_dir, env, gtest_filter, logged=False):
     run_cmd = [exe_path]
     if gtest_filter:
         run_cmd.append("--gtest_filter=" + gtest_filter)
+    if logged:
+        return run_logged_process(run_cmd, exe_dir, env, check=False)
     return subprocess.run(run_cmd, cwd=exe_dir, env=env, check=False).returncode
 
 
@@ -636,6 +730,64 @@ def _clock_quality_metrics(labels):
     }
 
 
+def _yellow_move_diagnostics(labels):
+    """Classify emitted yellow candidates independently from endpoint scores."""
+    unique_rows = {}
+    for label in labels:
+        if str(label.get("detector", "")).lower() != "yellow":
+            continue
+        if "expected_move" not in label and "observed_move" not in label:
+            continue
+        expected = str(label.get("expected_move", "")).strip()
+        observed = str(label.get("observed_move", "")).strip()
+        key = (
+            str(label.get("image", "")), str(label.get("regime", "")),
+            str(label.get("case", "")), expected, observed,
+        )
+        unique_rows.setdefault(key, label)
+
+    outcomes = Counter()
+    mismatches = []
+    for label in unique_rows.values():
+        expected_present = "expected_move" in label
+        observed_present = "observed_move" in label
+        expected = str(label.get("expected_move", "")).strip()
+        observed = str(label.get("observed_move", "")).strip()
+        if not observed_present:
+            outcome = "unmeasured"
+        elif expected:
+            if not observed:
+                outcome = "missing_candidate"
+            elif observed == expected:
+                outcome = "exact"
+            else:
+                outcome = "wrong_candidate"
+        elif observed:
+            outcome = "unexpected_candidate"
+        else:
+            outcome = "no_candidate" if expected_present else "unmeasured"
+        outcomes[outcome] += 1
+        if outcome in {"missing_candidate", "wrong_candidate", "unexpected_candidate"}:
+            mismatches.append({
+                "image": label.get("image", ""),
+                "regime": label.get("regime", "unspecified"),
+                "condition": label.get("condition", "unspecified"),
+                "case": label.get("case", "unspecified"),
+                "expected_move": expected,
+                "observed_move": observed,
+                "outcome": outcome,
+            })
+    return {
+        "rows": len(unique_rows),
+        "measured_rows": sum(
+            count for outcome, count in outcomes.items()
+            if outcome != "unmeasured"
+        ),
+        "outcomes": dict(sorted(outcomes.items())),
+        "mismatches": mismatches[:20],
+    }
+
+
 def _yellow_measurement_metrics(labels):
     """Summarize endpoint scores and perturbation metadata for yellow labels."""
     yellow_labels = [label for label in labels if label.get("detector") == "yellow"]
@@ -881,6 +1033,7 @@ def _yellow_measurement_metrics(labels):
             # independent-negative coverage are incomplete.
             "status": "advisory" if edge_density_selection else "insufficient_data",
         },
+        "move_diagnostics": _yellow_move_diagnostics(yellow_labels),
         "temporal_calibration": {
             "rows": len(temporal_labels),
             "metrics": _calibration_metrics(temporal_labels),
@@ -1359,7 +1512,8 @@ def _replay_event_layer(event):
     if event in {"CANDIDATE", "QUIET", "SETTLE_PROBE", "SETTLE_RETARGET"}:
         return "detector_or_scoring"
     if event in {
-        "VALIDATION_REJECTED", "REJECTED_FRAME", "CLOCK_STATE", "CLOCK_BACKFILL_CHECK"
+        "VALIDATION_REJECTED", "REJECTED_FRAME", "HOVER_MEASURE", "CLOCK_STATE",
+        "CLOCK_BACKFILL_CHECK"
     }:
         return "detector_or_validation"
     if (
@@ -1369,6 +1523,8 @@ def _replay_event_layer(event):
         or event.startswith("HISTORICAL")
         or event in {"ACCEPT", "COALESCED_STOP", "PRESERVED_MAINLINE_RESTORED"}
     ):
+        return "reducer"
+    if event == "MOVE_OVERRIDE":
         return "reducer"
     return "reducer_or_trace_contract"
 
@@ -1527,6 +1683,45 @@ def compare_replay_traces(source_path, replay_path):
                 break
         result["semantic_equivalence"][name] = not mismatches
 
+    def stable_recovery_metadata(value):
+        """Ignore pixel-derived diagnostics while retaining recovery decisions."""
+        volatile_keys = {"active_score", "active_mean", "source_mean"}
+        stable_parts = []
+        for part in str(value or "").split(";"):
+            key, separator, item = part.partition("=")
+            if separator and key in volatile_keys:
+                continue
+            stable_parts.append(part)
+        return ";".join(stable_parts)
+
+    def compare_recovery_semantics(source_items, replay_items):
+        fields = (
+            "event", "outcome", "active_ply", "fen", "best_move", "branch_id",
+            "state_generation", "revert_generation",
+        )
+
+        def signature(record):
+            evidence = record.get("evidence", {}) or {}
+            return tuple(
+                evidence.get(field, record.get(field, "")) for field in fields
+            ) + (stable_recovery_metadata(record.get("metadata", "")),)
+
+        source_signatures = [signature(record) for record in source_items]
+        replay_signatures = [signature(record) for record in replay_items]
+        mismatches = result["semantic_mismatches"]["recovery"]
+        for index in range(max(len(source_signatures), len(replay_signatures))):
+            source_signature = source_signatures[index] if index < len(source_signatures) else None
+            replay_signature = replay_signatures[index] if index < len(replay_signatures) else None
+            if source_signature != replay_signature:
+                mismatches.append({
+                    "index": index,
+                    "source": source_signature,
+                    "replay": replay_signature,
+                    "layer": "revert_or_rebase",
+                })
+                break
+        result["semantic_equivalence"]["recovery"] = not mismatches
+
     accepted_fields = (
         "event", "outcome", "best_move", "active_ply", "fen", "branch_id",
         "state_generation", "revert_generation",
@@ -1565,16 +1760,9 @@ def compare_replay_traces(source_path, replay_path):
         or "REBASE" in str(record.get("event", "")).upper()
         or "HISTORICAL" in str(record.get("event", "")).upper()
     )
-    recovery_fields = (
-        "event", "outcome", "active_ply", "fen", "best_move", "branch_id",
-        "state_generation", "revert_generation", "metadata",
-    )
-    compare_semantic(
-        "recovery",
+    compare_recovery_semantics(
         ordered_records(source_records, recovery_predicate),
         ordered_records(replay_records, recovery_predicate),
-        recovery_fields,
-        "revert_or_rebase",
     )
 
     variation_predicate = lambda record: (
@@ -1632,11 +1820,100 @@ def compare_replay_trace_files(source_path, replay_path):
     return 0 if result["status"] == "match" else 1
 
 
+def run_observation_replay_comparison(
+    bundle_dir,
+    source_diagnostic_path,
+    observations_path,
+    executable=None,
+    executable_dir=None,
+    environment=None,
+    gtest_filter=None,
+):
+    """Run the reducer from bundled observations and compare its trace.
+
+    The source diagnostic trace is produced by the bounded video run. The
+    replay process consumes only the compact observation file and its bundled
+    image artifacts, so a mismatch here is a replay-contract problem rather
+    than a second interpretation of the original video.
+    """
+    bundle_dir = Path(bundle_dir)
+    result = {
+        "status": "not_run",
+        "reason": "observation replay executable was not supplied",
+        "source_diagnostics": str(Path(source_diagnostic_path).resolve())
+        if source_diagnostic_path else "",
+        "observations": str(Path(observations_path).resolve())
+        if observations_path else "",
+    }
+    if not executable:
+        return result
+    if not source_diagnostic_path or not Path(source_diagnostic_path).exists():
+        result["reason"] = "source diagnostic trace is missing"
+        return result
+    if not observations_path or not Path(observations_path).exists():
+        result["reason"] = "compact observation file is missing"
+        return result
+
+    replay_diagnostic = bundle_dir / "replay_diagnostics.jsonl"
+    replay_trace = bundle_dir / "replay_events.tsv"
+    replay_invariants = bundle_dir / "replay_invariants.jsonl"
+    replay_failure = bundle_dir / "replay_failure_report.json"
+    replay_frames = bundle_dir / "replay_frames"
+    for path in (replay_diagnostic, replay_trace, replay_invariants, replay_failure):
+        if path.exists():
+            path.unlink()
+    if replay_frames.exists():
+        shutil.rmtree(replay_frames, ignore_errors=True)
+
+    replay_environment = dict(environment or os.environ)
+    replay_environment.update({
+        "CTA_REPLAY_OBSERVATIONS": str(Path(observations_path).resolve()),
+        "CTA_DIAGNOSTIC_FILE": str(replay_diagnostic.resolve()),
+        "CTA_TRACE_FILE": str(replay_trace.resolve()),
+        "CTA_INVARIANT_REPORT_FILE": str(replay_invariants.resolve()),
+        "CTA_FAILURE_REPORT_FILE": str(replay_failure.resolve()),
+        "CTA_DIAGNOSTIC_FRAME_DIR": str(replay_frames.resolve()),
+        "CTA_DIAGNOSTIC_FRAME_INTERVAL_SECONDS": "1.0",
+    })
+    command = [str(executable)]
+    if gtest_filter:
+        command.append("--gtest_filter=" + gtest_filter)
+    completed = subprocess.run(
+        command,
+        cwd=str(executable_dir or Path(executable).parent),
+        env=replay_environment,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    result.update({
+        "replay_diagnostics": str(replay_diagnostic.resolve()),
+        "replay_return_code": completed.returncode,
+        "replay_output_tail": (completed.stdout or "")[-4000:],
+    })
+    if not replay_diagnostic.exists():
+        result["status"] = "invalid_trace"
+        result["reason"] = "replay process did not produce a diagnostic trace"
+        result["first_divergence"] = {
+            "layer": "replay_process",
+            "return_code": completed.returncode,
+        }
+        return result
+
+    comparison = compare_replay_traces(source_diagnostic_path, replay_diagnostic)
+    result.update(comparison)
+    result.pop("reason", None)
+    result["status"] = comparison["status"]
+    return result
+
+
 _SOURCE_RUN_IGNORED_KEYS = {
     # Artifact locations intentionally differ between repeated runs. The
     # image contents and detector evidence remain part of the comparison.
     "diagnostic_frame_path",
     "diagnostic_board_path",
+    "diagnostic_predecessor_board_path",
     "diagnostic_clock_top_path",
     "diagnostic_clock_bottom_path",
 }
@@ -1990,6 +2267,8 @@ def _diagnostic_outcome(record):
         return "REJECT"
     if event in {"SETTLE_PROBE", "SETTLE_RETARGET", "COALESCED_STOP"}:
         return "WAIT_FOR_SETTLE"
+    if event in {"MOVE_OVERRIDE", "HOVER_MEASURE"}:
+        return "OBSERVED"
     if event == "ORIGIN_CANDIDATE":
         return "AMBIGUOUS"
     if (
@@ -2010,6 +2289,7 @@ def _strength_summary(states):
         "counts": dict(counts),
         "strong_count": counts.get("strong", 0),
         "weak_count": counts.get("weak", 0),
+        "advisory_count": counts.get("advisory", 0),
         "missing_count": counts.get("missing", 0),
         "conflicting_count": counts.get("conflicting", 0),
     }
@@ -2023,6 +2303,13 @@ def _record_evidence_strength(record):
     into a plausible-looking aggregate confidence value.
     """
     evidence = record.get("evidence", {}) or {}
+    def explicit_strength(assessment_name):
+        assessment = evidence.get(assessment_name, {}) or {}
+        strength = str(assessment.get("strength", "")).lower()
+        return strength if strength in {
+            "strong", "weak", "advisory", "missing", "conflicting"
+        } else ""
+
     changed_squares = evidence.get("changed_squares", []) or []
     changed_count = evidence.get("changed_square_count")
     if changed_squares or changed_count is not None:
@@ -2035,7 +2322,10 @@ def _record_evidence_strength(record):
         board_difference = "missing"
 
     yellow_decision = str(evidence.get("yellow_decision", "")).lower()
-    if not evidence.get("yellow_checked") and not yellow_decision:
+    explicit_yellow_strength = explicit_strength("yellow_assessment")
+    if explicit_yellow_strength:
+        highlights = explicit_yellow_strength
+    elif not evidence.get("yellow_checked") and not yellow_decision:
         highlights = "missing"
     elif yellow_decision in {"ambiguous", "conflicting"}:
         highlights = "conflicting"
@@ -2049,7 +2339,10 @@ def _record_evidence_strength(record):
         highlights = "weak"
 
     clock_decision = str(evidence.get("clock_decision", "")).lower()
-    if not evidence.get("clock_checked") and not clock_decision:
+    explicit_clock_strength = explicit_strength("clock_assessment")
+    if explicit_clock_strength:
+        clocks = explicit_clock_strength
+    elif not evidence.get("clock_checked") and not clock_decision:
         clocks = "missing"
     elif clock_decision in {"ambiguous", "conflicting", "turn_mismatch"}:
         clocks = "conflicting"
@@ -2074,7 +2367,10 @@ def _record_evidence_strength(record):
         temporal_stability = "missing"
 
     hover_decision = str(evidence.get("hover_decision", "")).lower()
-    if not evidence.get("hover_checked") and not hover_decision:
+    explicit_hover_strength = explicit_strength("hover_assessment")
+    if explicit_hover_strength:
+        hover_state = explicit_hover_strength
+    elif not evidence.get("hover_checked") and not hover_decision:
         hover_state = "missing"
     elif hover_decision in {"ambiguous", "conflicting"}:
         hover_state = "conflicting"
@@ -2139,7 +2435,8 @@ def summarize_uncertainty(records, evidence_strength=None):
     weak_records = [
         item for item in record_states
         if item["outcome"] in {"WAIT_FOR_SETTLE", "AMBIGUOUS"}
-        or any(state in {"weak", "conflicting"} for state in item["states"].values())
+        or any(state in {"weak", "advisory", "conflicting"}
+               for state in item["states"].values())
         or (
             item["event"] in {"CANDIDATE", "ORIGIN_CANDIDATE", "VALIDATION_REJECTED", "REJECTED_FRAME"}
             and any(state == "missing" for state in item["states"].values())
@@ -2889,8 +3186,453 @@ def classify_diagnostics(report, records, malformed_lines=None):
     }
 
 
+def _record_timestamp(record):
+    try:
+        return float(record.get("timestamp", 0.0))
+    except (TypeError, ValueError):
+        return None
+
+
+def _provenance_record(record):
+    """Build a stable, diagnostic-only provenance record for one event."""
+    evidence = record.get("evidence", {}) or {}
+    event = str(record.get("event", ""))
+    observation_id = record.get("observation_id", 0)
+    sequence = record.get("sequence", 0)
+    detector_evidence = {
+        name: evidence.get(name, "")
+        for name in (
+            "yellow_decision", "yellow_from", "yellow_to",
+            "hover_decision", "hover_detected",
+            "clock_decision", "clock_provenance", "active_clock_player",
+            "geometry_decision", "geometry_uncertainty",
+            "settle_decision", "rejection_reason",
+            "score_threshold_decision", "score_margin",
+        )
+        if evidence.get(name, "") not in ("", None, False)
+    }
+    for field, assessment_name in (
+        ("yellow_strength", "yellow_assessment"),
+        ("clock_strength", "clock_assessment"),
+        ("hover_strength", "hover_assessment"),
+        ("geometry_strength", "geometry_assessment"),
+    ):
+        strength = (evidence.get(assessment_name, {}) or {}).get("strength", "")
+        if strength:
+            detector_evidence[field] = strength
+    return {
+        "schema_version": 1,
+        "diagnostic_only": True,
+        "provenance_id": f"observation-{observation_id}-sequence-{sequence}",
+        "source": {
+            "observation_id": observation_id,
+            "sequence": sequence,
+            "timestamp": record.get("timestamp", 0.0),
+            "source_frame_index": evidence.get("source_frame_index", 0),
+            "artifacts": {
+                "frame": evidence.get("diagnostic_frame_path", ""),
+                "board": evidence.get("diagnostic_board_path", ""),
+                "predecessor_board": evidence.get(
+                    "diagnostic_predecessor_board_path", ""
+                ),
+                "clock_top": evidence.get("diagnostic_clock_top_path", ""),
+                "clock_bottom": evidence.get("diagnostic_clock_bottom_path", ""),
+            },
+        },
+        "mapper": {
+            "chunk": evidence.get("mapper_chunk", 0),
+            "emission_reason": evidence.get("mapper_emission_reason", ""),
+        },
+        "visual_candidate": {
+            "candidate_id": record.get("candidate_id", 0),
+            "transition_id": record.get("transition_id", 0),
+            "best_move": record.get("best_move", ""),
+            "best_score": record.get("best_score", 0.0),
+            "changed_squares": evidence.get("changed_squares", []) or [],
+            "legal_candidates": evidence.get("legal_candidates", []) or [],
+        },
+        "detector_validation": detector_evidence,
+        "evidence_families": {
+            "highlight": evidence.get("yellow_assessment", {}) or {},
+            "clock": evidence.get("clock_assessment", {}) or {},
+            "hover": evidence.get("hover_assessment", {}) or {},
+            "geometry": evidence.get("geometry_assessment", {}) or {},
+            "revert": {
+                "generation": record.get("revert_generation", 0),
+                "event": event if "REVERT" in event.upper() else "",
+            },
+            "variation": {
+                "branch_id": record.get("branch_id", 0),
+                "metadata": record.get("metadata", ""),
+            },
+        },
+        "reducer": {
+            "event": event,
+            "outcome": _diagnostic_outcome(record),
+            "active_ply": record.get("active_ply", 0),
+            "fen": record.get("fen", ""),
+            "reducer_state": record.get("reducer_state", ""),
+            "branch_id": record.get("branch_id", 0),
+            "state_generation": record.get("state_generation", 0),
+            "revert_generation": record.get("revert_generation", 0),
+            "metadata": record.get("metadata", ""),
+        },
+        "output_context": {
+            "accepted": event == "ACCEPT",
+            "move": record.get("best_move", ""),
+            "mainline_ply": record.get("active_ply", 0)
+            if event == "ACCEPT" and record.get("branch_id", 0) == 0 else None,
+            "variation_branch": record.get("branch_id", 0),
+            "pgn_reference": {
+                "uci": record.get("best_move", ""),
+                "ply": record.get("active_ply", 0) if event == "ACCEPT" else None,
+                "variation": record.get("branch_id", 0) != 0,
+            },
+        },
+    }
+
+
+def _decision_record(record):
+    """Keep the causal fields needed to review one reducer decision."""
+    evidence = record.get("evidence", {}) or {}
+    artifacts = {
+        name: evidence.get(field, "")
+        for name, field in (
+            ("frame", "diagnostic_frame_path"),
+            ("board", "diagnostic_board_path"),
+            ("predecessor_board", "diagnostic_predecessor_board_path"),
+            ("clock_top", "diagnostic_clock_top_path"),
+            ("clock_bottom", "diagnostic_clock_bottom_path"),
+        )
+        if evidence.get(field, "")
+    }
+    detector_evidence = {
+        name: evidence.get(name, "")
+        for name in (
+            "yellow_decision", "yellow_from", "yellow_to",
+            "hover_decision", "hover_detected",
+            "clock_decision", "clock_provenance", "active_clock_player",
+            "geometry_decision", "geometry_uncertainty",
+            "settle_decision", "rejection_reason",
+            "score_threshold_decision", "score_margin",
+        )
+        if evidence.get(name, "") not in ("", None, False)
+    }
+    for field, assessment_name in (
+        ("yellow_strength", "yellow_assessment"),
+        ("clock_strength", "clock_assessment"),
+        ("hover_strength", "hover_assessment"),
+        ("geometry_strength", "geometry_assessment"),
+    ):
+        strength = (evidence.get(assessment_name, {}) or {}).get("strength", "")
+        if strength:
+            detector_evidence[field] = strength
+    decision = {
+        "sequence": record.get("sequence", 0),
+        "observation_id": record.get("observation_id", 0),
+        "candidate_id": record.get("candidate_id", 0),
+        "transition_id": record.get("transition_id", 0),
+        "timestamp": record.get("timestamp", 0.0),
+        "active_ply": record.get("active_ply", 0),
+        "event": record.get("event", ""),
+        "outcome": _diagnostic_outcome(record),
+        "branch_id": record.get("branch_id", 0),
+        "state_generation": record.get("state_generation", 0),
+        "revert_generation": record.get("revert_generation", 0),
+        "reducer_state": record.get("reducer_state", ""),
+        "best_move": record.get("best_move", ""),
+        "best_score": record.get("best_score", 0.0),
+        "fen": record.get("fen", ""),
+        "metadata": record.get("metadata", ""),
+        "changed_squares": evidence.get("changed_squares", []) or [],
+        "legal_candidates": evidence.get("legal_candidates", []) or [],
+        "detector_evidence": detector_evidence,
+        "artifacts": artifacts,
+    }
+    decision["provenance"] = _provenance_record(record)
+    return decision
+
+
+def build_decision_summary(report, records):
+    """Build a compact, causal summary for the first reported divergence."""
+    mismatch_ply = report.get("first_mismatch_ply")
+    try:
+        mismatch_ply = int(mismatch_ply)
+    except (TypeError, ValueError):
+        mismatch_ply = 0
+    target_active_ply = max(0, mismatch_ply - 1)
+    try:
+        anchor_timestamp = float(report.get("anchor_timestamp", 0.0))
+    except (TypeError, ValueError):
+        anchor_timestamp = 0.0
+
+    ordered = sorted(
+        records,
+        key=lambda record: (
+            _record_timestamp(record) if _record_timestamp(record) is not None else 0.0,
+            int(record.get("sequence", 0) or 0),
+        ),
+    )
+    target_records = [
+        record for record in ordered
+        if record.get("active_ply") == target_active_ply
+    ]
+    if not target_records:
+        target_records, target_scope = _target_records(report, ordered)
+    else:
+        target_scope = f"active_ply={target_active_ply}"
+
+    target_timestamps = [
+        timestamp for timestamp in (_record_timestamp(record) for record in target_records)
+        if timestamp is not None
+    ]
+    first_target_timestamp = min(target_timestamps) if target_timestamps else anchor_timestamp
+    last_target_timestamp = max(target_timestamps) if target_timestamps else anchor_timestamp
+
+    terminal_events = {
+        "ACCEPT", "REVERT_APPLIED", "PRESERVED_MAINLINE_RESTORED",
+        "HISTORICAL_HANDOFF", "REPEATED_BRANCH_HANDOFF",
+    }
+    prior_terminal = [
+        record for record in ordered
+        if record.get("event") in terminal_events
+        and (_record_timestamp(record) is not None)
+        and _record_timestamp(record) < first_target_timestamp
+    ]
+    last_matching = prior_terminal[-1] if prior_terminal else None
+
+    decision_events = {
+        "CANDIDATE", "ACCEPT", "VALIDATION_REJECTED", "REJECTED_FRAME",
+        "SCORE_THRESHOLD_REJECTED", "SETTLE_PROBE", "SETTLE_RETARGET", "MOVE_OVERRIDE",
+        "COALESCED_STOP", "ORIGIN_CANDIDATE", "REVERT_APPLIED",
+        "REVERT_SEARCH", "HOVER_MEASURE", "CLOCK_STATE", "CLOCK_BACKFILL_CHECK",
+        "HANDOFF_SCAN", "HANDOFF_RESULT", "HISTORICAL_HANDOFF",
+        "PRESERVED_MAINLINE_RESTORED", "VARIATION_ROOT", "VARIATION_DEMOTED",
+        "VARIATION_PRESERVED", "VARIATION_RESTORED", "FINAL_VARIATION",
+    }
+    def is_decision_event(record):
+        event = str(record.get("event", "")).upper()
+        return event in decision_events or event.startswith((
+            "CLOCK_", "REVERT", "REBASE", "HANDOFF", "HISTORICAL",
+            "VARIATION", "PRESERVED_", "REPEATED_BRANCH_",
+        ))
+
+    last_matching_timestamp = (
+        _record_timestamp(last_matching) if last_matching is not None else None
+    )
+    interval_start = (
+        last_matching_timestamp
+        if last_matching_timestamp is not None
+        else first_target_timestamp
+    )
+    interval_end = max(last_target_timestamp, anchor_timestamp)
+    interval_records = [
+        record for record in ordered
+        if is_decision_event(record)
+        and (_record_timestamp(record) is not None)
+        and interval_start <= _record_timestamp(record) <= interval_end
+    ]
+    # A missing timestamp should not make an otherwise useful target decision
+    # disappear from the summary. It is still represented, but cannot widen
+    # the evidence interval.
+    interval_records.extend(
+        record for record in target_records
+        if is_decision_event(record)
+        and _record_timestamp(record) is None
+    )
+    chain = [_decision_record(record) for record in interval_records]
+    chain.sort(key=lambda entry: (float(entry.get("timestamp", 0.0)), entry["sequence"]))
+    target_chain = [
+        _decision_record(record)
+        for record in target_records
+        if is_decision_event(record)
+    ]
+    target_chain.sort(
+        key=lambda entry: (float(entry.get("timestamp", 0.0)), entry["sequence"])
+    )
+    first_candidate = next(
+        (entry for entry in target_chain if entry["event"] == "CANDIDATE"),
+        None,
+    )
+    expected_move = report.get("expected_move", "")
+    expected_candidates = [
+        entry for entry in target_chain
+        if entry["best_move"] == expected_move or any(
+            candidate.get("move") == expected_move
+            for candidate in entry["legal_candidates"]
+        )
+    ]
+    accepted_wrong = [
+        entry for entry in target_chain
+        if entry["event"] == "ACCEPT" and entry["best_move"] != expected_move
+    ]
+
+    expected_accepted = [
+        entry for entry in target_chain
+        if entry["event"] == "ACCEPT" and entry["best_move"] == expected_move
+    ]
+    expected_rejected = [
+        entry for entry in target_chain
+        if entry["event"] in {
+            "VALIDATION_REJECTED", "REJECTED_FRAME", "SCORE_THRESHOLD_REJECTED"
+        }
+        and (
+            entry["best_move"] == expected_move
+            or any(candidate.get("move") == expected_move
+                   for candidate in entry["legal_candidates"])
+        )
+    ]
+    expected_branch_ids = {
+        entry["branch_id"] for entry in expected_accepted
+    }
+    if expected_accepted and expected_branch_ids and expected_branch_ids != {0}:
+        expected_move_status = "accepted_only_on_incorrect_branch"
+    elif expected_accepted:
+        expected_move_status = "accepted_as_expected"
+    elif accepted_wrong:
+        expected_move_status = "wrong_move_accepted"
+    elif expected_rejected:
+        expected_move_status = "emitted_but_rejected"
+    elif expected_candidates:
+        expected_move_status = "emitted_not_accepted"
+    else:
+        expected_move_status = "never_emitted"
+
+    def state_snapshot(record):
+        if record is None:
+            return None
+        return _decision_record(record)
+
+    return {
+        "schema_version": 1,
+        "status": "ok" if records else "insufficient_records",
+        "target_scope": target_scope,
+        "first_mismatch_ply": mismatch_ply,
+        "last_matching_ply": report.get("last_matching_ply", max(0, mismatch_ply - 1)),
+        "expected_move": expected_move,
+        "extracted_move": report.get("extracted_move", ""),
+        "expected_move_status": expected_move_status,
+        "failure_kind": report.get("failure_kind", ""),
+        "failure_scope": report.get("failure_scope", ""),
+        "timestamp_interval": {
+            "start": interval_start,
+            "end": interval_end,
+            "anchor": anchor_timestamp,
+            "last_matching": last_matching_timestamp,
+            "first_target": first_target_timestamp,
+            "last_target": last_target_timestamp,
+        },
+        "last_matching_observation": state_snapshot(last_matching),
+        "first_post_divergence_candidate": first_candidate,
+        "expected_move_observations": expected_candidates,
+        "wrong_acceptances": accepted_wrong,
+        "provenance_records": [
+            entry["provenance"]
+            for entry in chain
+            if entry["event"] in {
+                "ACCEPT", "VALIDATION_REJECTED", "REJECTED_FRAME",
+                "SCORE_THRESHOLD_REJECTED",
+            }
+        ],
+        "decision_chain": chain,
+    }
+
+
+def evidence_window_from_summary(decision_summary, fallback_start, fallback_end):
+    """Return a padded diagnostic window centered on observed decision evidence."""
+    interval = decision_summary.get("timestamp_interval", {}) or {}
+    try:
+        evidence_start = float(interval.get("start"))
+        evidence_end = float(interval.get("end"))
+    except (TypeError, ValueError):
+        return None
+    if evidence_start < 0.0 or evidence_end < evidence_start:
+        return None
+
+    padding_before = 1.0
+    padding_after = 1.0
+    refined_start = max(0.0, evidence_start - padding_before)
+    refined_end = max(refined_start + 0.5, evidence_end + padding_after)
+    if refined_start >= fallback_start - 0.05 and refined_end >= fallback_end - 0.05:
+        return None
+    return refined_start, refined_end
+
+
+def validate_decision_summary(report, records, decision_summary, bundle_dir=None):
+    """Validate the compact decision summary and its referenced artifacts."""
+    findings = []
+    required = (
+        "schema_version", "first_mismatch_ply", "expected_move",
+        "extracted_move", "expected_move_status", "timestamp_interval",
+        "provenance_records", "decision_chain",
+    )
+    for field in required:
+        if field not in decision_summary:
+            findings.append(f"decision summary is missing {field}")
+
+    if decision_summary.get("first_mismatch_ply") != report.get("first_mismatch_ply"):
+        findings.append("decision summary mismatch ply disagrees with failure report")
+    interval = decision_summary.get("timestamp_interval", {}) or {}
+    start = interval.get("start")
+    end = interval.get("end")
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        findings.append("decision summary timestamp interval is not numeric")
+    elif start > end:
+        findings.append("decision summary timestamp interval is reversed")
+
+    if records and not decision_summary.get("decision_chain"):
+        findings.append("diagnostic records exist but decision chain is empty")
+
+    provenance_records = decision_summary.get("provenance_records", []) or []
+    provenance_ids = [entry.get("provenance_id") for entry in provenance_records]
+    if len(provenance_ids) != len(set(provenance_ids)):
+        findings.append("provenance records repeat a provenance_id")
+    for index, entry in enumerate(provenance_records, start=1):
+        if entry.get("schema_version") != 1:
+            findings.append(f"provenance record {index} has an unsupported schema")
+        if entry.get("diagnostic_only") is not True:
+            findings.append(f"provenance record {index} is not marked diagnostic_only")
+        for section in (
+            "source", "mapper", "visual_candidate", "detector_validation",
+            "evidence_families", "reducer", "output_context",
+        ):
+            if section not in entry:
+                findings.append(f"provenance record {index} is missing {section}")
+
+    allowed_statuses = {
+        "never_emitted", "emitted_not_accepted", "emitted_but_rejected",
+        "wrong_move_accepted", "accepted_as_expected",
+        "accepted_only_on_incorrect_branch",
+    }
+    if decision_summary.get("expected_move_status") not in allowed_statuses:
+        findings.append(
+            "decision summary has an unknown expected_move_status: "
+            f"{decision_summary.get('expected_move_status')}"
+        )
+
+    if bundle_dir is not None:
+        bundle_dir = Path(bundle_dir)
+        for entry in decision_summary.get("decision_chain", []) or []:
+            for artifact_name, artifact_path in (entry.get("artifacts", {}) or {}).items():
+                if artifact_path and not (bundle_dir / artifact_path).exists():
+                    findings.append(
+                        f"decision chain references missing {artifact_name} artifact: {artifact_path}"
+                    )
+        for entry in provenance_records:
+            for artifact_name, artifact_path in (
+                entry.get("source", {}).get("artifacts", {}) or {}
+            ).items():
+                if artifact_path and not (bundle_dir / artifact_path).exists():
+                    findings.append(
+                        f"provenance references missing {artifact_name} artifact: {artifact_path}"
+                    )
+    return findings
+
+
 def write_failure_bundle(
-    report_path, diagnostic_path, trace_path, invariant_path, report, classification
+    report_path, diagnostic_path, trace_path, invariant_path, report, classification,
+    replay_executable=None, replay_executable_dir=None, replay_environment=None,
+    gtest_filter=None, test_run_log_path=None,
 ):
     """Persist a compact, reproducible diagnostic bundle beside the report."""
     report_source = Path(report_path)
@@ -2899,6 +3641,10 @@ def write_failure_bundle(
 
     bundle_report = bundle_dir / "report.json"
     shutil.copyfile(report_source, bundle_report)
+    bundle_test_log = None
+    if test_run_log_path and Path(test_run_log_path).exists():
+        bundle_test_log = bundle_dir / "test-run.log"
+        shutil.copyfile(test_run_log_path, bundle_test_log)
     bundle_diagnostic = None
     bundle_diagnostic_records = []
     if diagnostic_path and Path(diagnostic_path).exists():
@@ -2913,6 +3659,7 @@ def write_failure_bundle(
                     for field in (
                         "diagnostic_frame_path",
                         "diagnostic_board_path",
+                        "diagnostic_predecessor_board_path",
                         "diagnostic_clock_top_path",
                         "diagnostic_clock_bottom_path",
                     ):
@@ -2938,24 +3685,62 @@ def write_failure_bundle(
         bundle_frames = bundle_dir / "frames"
         shutil.copytree(frame_source, bundle_frames, dirs_exist_ok=True)
     bundle_observations = None
+    observation_validation = []
     if diagnostic_path and Path(diagnostic_path).exists():
         bundle_observations = bundle_dir / "observations.jsonl"
         write_compact_observation_trace(bundle_diagnostic_records, bundle_observations)
+        compact_records, compact_errors = read_diagnostic_records(bundle_observations)
+        observation_validation = validate_compact_observations(
+            compact_records, bundle_dir
+        )
+        observation_validation.extend(
+            f"compact observation line {line} is malformed"
+            for line in compact_errors
+        )
     bundle_artifacts = None
     if bundle_diagnostic_records:
         bundle_artifacts = write_diagnostic_artifacts(
             bundle_diagnostic_records, bundle_dir / "artifacts"
         )
 
+    decision_summary = build_decision_summary(report, bundle_diagnostic_records)
+    decision_summary_findings = validate_decision_summary(
+        report, bundle_diagnostic_records, decision_summary, bundle_dir
+    )
+    decision_summary_path = bundle_dir / "decision_summary.json"
+    with open(decision_summary_path, "w", encoding="utf-8") as summary_file:
+        json.dump(decision_summary, summary_file, indent=2, sort_keys=True)
+        summary_file.write("\n")
+
+    replay_comparison = run_observation_replay_comparison(
+        bundle_dir,
+        bundle_diagnostic,
+        bundle_observations,
+        executable=replay_executable,
+        executable_dir=replay_executable_dir,
+        environment=replay_environment,
+        gtest_filter=gtest_filter,
+    )
+    replay_comparison_path = bundle_dir / "replay_comparison.json"
+    with open(replay_comparison_path, "w", encoding="utf-8") as comparison_file:
+        json.dump(replay_comparison, comparison_file, indent=2, sort_keys=True)
+        comparison_file.write("\n")
+
     summary = {
         "schema_version": 1,
         "report": str(bundle_report.resolve()),
+        "test_run_log": str(bundle_test_log.resolve()) if bundle_test_log else "",
         "diagnostics": str(bundle_diagnostic.resolve()) if bundle_diagnostic else "",
         "events": str(bundle_trace.resolve()) if bundle_trace else "",
         "invariants": str(bundle_invariants.resolve()) if bundle_invariants else "",
         "frames": str(bundle_frames.resolve()) if bundle_frames else "",
         "observations": str(bundle_observations.resolve()) if bundle_observations else "",
         "artifacts": bundle_artifacts or {},
+        "decision_summary": str(decision_summary_path.resolve()),
+        "decision_summary_validation": decision_summary_findings,
+        "observation_validation": observation_validation,
+        "replay_comparison": str(replay_comparison_path.resolve()),
+        "replay_comparison_status": replay_comparison.get("status", "not_run"),
         "failure": report,
         "classification": classification,
         "detector_quality": classification["detector_quality"],
@@ -3049,6 +3834,63 @@ def replay_bundle(bundle_path):
 
     records, malformed_lines = read_diagnostic_records(diagnostic_path)
     classification = classify_diagnostics(report, records, malformed_lines)
+    decision_summary_path = _bundle_artifact_path(
+        bundle_dir, summary.get("decision_summary"), "decision_summary.json"
+    )
+    if decision_summary_path is None:
+        print("Decision summary: MISSING")
+        return 1
+    try:
+        with decision_summary_path.open("r", encoding="utf-8") as decision_file:
+            decision_summary = json.load(decision_file)
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"Could not read decision summary: {error}")
+        return 1
+    decision_findings = validate_decision_summary(
+        report, records, decision_summary, bundle_dir
+    )
+    if decision_findings:
+        print("Decision summary checks: FAIL")
+        for finding in decision_findings:
+            print(f"  - {finding}")
+        return 1
+    print(
+        "Decision summary checks: PASS "
+        f"({len(decision_summary.get('decision_chain', []))} decision events)"
+    )
+    interval = decision_summary.get("timestamp_interval", {}) or {}
+    print(
+        "Decision outcome: "
+        f"{decision_summary.get('expected_move_status', 'unknown')} "
+        f"for {decision_summary.get('expected_move', '(none)')} "
+        f"in {interval.get('start', 0.0):.3f}s-{interval.get('end', 0.0):.3f}s"
+    )
+    replay_comparison_path = _bundle_artifact_path(
+        bundle_dir, summary.get("replay_comparison"), "replay_comparison.json"
+    )
+    if replay_comparison_path is not None:
+        try:
+            with replay_comparison_path.open("r", encoding="utf-8") as comparison_file:
+                replay_comparison = json.load(comparison_file)
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"Replay comparison: INVALID ({error})")
+            return 1
+        replay_status = replay_comparison.get("status", "not_run")
+        if replay_status == "match":
+            print("Replay comparison: PASS (source and observation replay match)")
+        elif replay_status == "not_run":
+            print(
+                "Replay comparison: NOT RUN ("
+                f"{replay_comparison.get('reason', 'no reason recorded')})"
+            )
+        else:
+            print(f"Replay comparison: FAIL ({replay_status})")
+            if replay_comparison.get("first_divergence"):
+                print(
+                    "  Replay divergence: "
+                    + json.dumps(replay_comparison["first_divergence"], sort_keys=True)
+                )
+            return 1
     stored = summary.get("classification", {}) or {}
     stable_fields = ("likely_stage", "confidence", "target_scope", "invariant_findings")
     classification_matches = all(
@@ -3085,6 +3927,13 @@ def main():
     args = parse_args()
     # Go one level up from the 'tests' directory to get the project root
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    build_dir = os.path.join(root_dir, args.build_dir)
+    log_dir = args.log_dir or os.path.join(build_dir, "logs")
+    run_log = TestRunLog(log_dir, args.log_retention)
+    run_log.install()
+    atexit.register(run_log.close)
+    print(f"Test-run log: {run_log.path.resolve()}")
+    print(f"Test log retention: {run_log.retain_count}")
     try:
         assert_no_fixture_specific_production_overrides(root_dir)
     except RuntimeError as error:
@@ -3101,7 +3950,6 @@ def main():
     if args.detector_calibration:
         sys.exit(detector_calibration_file(
             args.detector_calibration, args.calibration_debug_dir))
-    build_dir = os.path.join(root_dir, args.build_dir)
     temp_dir = os.path.join(build_dir, "tmp")
     test_file = os.path.join(root_dir, "tests", "test_ui_detectors.cpp")
     os.makedirs(temp_dir, exist_ok=True)
@@ -3184,7 +4032,7 @@ def main():
         if os.path.isdir(cached_gtest):
             configure_cmd.append("-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=" + cached_gtest)
         try:
-            subprocess.run(configure_cmd, cwd=root_dir, env=build_env, check=True)
+            run_logged_process(configure_cmd, root_dir, build_env, check=True)
         except subprocess.CalledProcessError:
             print("\nCMake configuration failed. Please check the errors above.")
             sys.exit(1)
@@ -3203,7 +4051,7 @@ def main():
             "/p:TrackFileAccess=false",
         ]
         try:
-            subprocess.run(build_cmd, cwd=root_dir, env=build_env, check=True)
+            run_logged_process(build_cmd, root_dir, build_env, check=True)
         except subprocess.CalledProcessError:
             print("\nBuild failed. Please check the compilation errors.")
             sys.exit(1)
@@ -3226,7 +4074,7 @@ def main():
     
     print("\nStarting Test Run...\n" + "="*40)
     try:
-        return_code = run_test_process(exe_path, exe_dir, build_env, args.gtest_filter)
+        return_code = run_test_process(exe_path, exe_dir, build_env, args.gtest_filter, logged=True)
     except FileNotFoundError:
         print(f"\nCould not find the compiled executable at: {exe_path}")
         sys.exit(1)
@@ -3290,8 +4138,41 @@ def main():
         f"{window_start:.3f}s to {window_end:.3f}s"
     )
     bounded_return_code = run_test_process(
-        exe_path, exe_dir, bounded_env, args.gtest_filter
+        exe_path, exe_dir, bounded_env, args.gtest_filter, logged=True
     )
+    if os.path.exists(bounded_diagnostic):
+        preliminary_records, preliminary_errors = read_diagnostic_records(
+            bounded_diagnostic
+        )
+        if not preliminary_errors:
+            preliminary_summary = build_decision_summary(report, preliminary_records)
+            refined_window = evidence_window_from_summary(
+                preliminary_summary, window_start, window_end
+            )
+            if refined_window is not None:
+                refined_start, refined_end = refined_window
+                print(
+                    "Refining diagnostic replay to evidence interval: "
+                    f"{refined_start:.3f}s to {refined_end:.3f}s"
+                )
+                for path in (
+                    bounded_diagnostic,
+                    bounded_trace,
+                    bounded_invariants,
+                    bounded_failure_report,
+                ):
+                    if path and Path(path).exists():
+                        Path(path).unlink()
+                bounded_frame_dir = diagnostic_frame_directory(bounded_diagnostic)
+                if bounded_frame_dir.exists():
+                    shutil.rmtree(bounded_frame_dir, ignore_errors=True)
+                bounded_env["CTA_TRACE_START"] = str(refined_start)
+                bounded_env["CTA_TRACE_END"] = str(refined_end)
+                bounded_env["CTA_STOP_AFTER_SECONDS"] = str(refined_end)
+                bounded_return_code = run_test_process(
+                    exe_path, exe_dir, bounded_env, args.gtest_filter, logged=True
+                )
+                window_start, window_end = refined_start, refined_end
     print(f"Diagnostic JSONL: {os.path.abspath(bounded_diagnostic)}")
     print(f"First-divergence report: {os.path.abspath(failure_report)}")
     bundle_created = False
@@ -3306,10 +4187,42 @@ def main():
                 bounded_invariants,
                 report,
                 classification,
+                replay_executable=exe_path,
+                replay_executable_dir=exe_dir,
+                replay_environment=bounded_env,
+                gtest_filter=args.gtest_filter,
+                test_run_log_path=run_log.path,
             )
             bundle_created = True
+            decision_summary = build_decision_summary(
+                report, diagnostic_records
+            )
             print(f"Likely failure stage: {classification['likely_stage']} "
                   f"({classification['confidence']} confidence)")
+            print(
+                "Decision summary: "
+                f"{len(decision_summary.get('decision_chain', []))} events, "
+                f"{decision_summary.get('target_scope', 'unknown')}"
+            )
+            interval = decision_summary.get("timestamp_interval", {}) or {}
+            print(
+                "Decision outcome: "
+                f"{decision_summary.get('expected_move_status', 'unknown')} "
+                f"for {decision_summary.get('expected_move', '(none)')} "
+                f"in {interval.get('start', 0.0):.3f}s-"
+                f"{interval.get('end', 0.0):.3f}s"
+            )
+            replay_comparison_path = bundle_dir / "replay_comparison.json"
+            if replay_comparison_path.exists():
+                with open(replay_comparison_path, "r", encoding="utf-8") as comparison_file:
+                    replay_comparison = json.load(comparison_file)
+                replay_status = replay_comparison.get("status", "not_run")
+                print(f"Replay comparison: {replay_status}")
+                if replay_comparison.get("first_divergence"):
+                    print(
+                        "  Replay divergence: "
+                        + json.dumps(replay_comparison["first_divergence"], sort_keys=True)
+                    )
             for reason in classification["evidence"]:
                 print(f"  Evidence: {reason}")
             quality = classification["detector_quality"]

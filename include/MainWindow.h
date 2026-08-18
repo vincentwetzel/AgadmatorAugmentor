@@ -82,6 +82,7 @@ private slots:
     void moveSelectedVideosUp();
     void moveSelectedVideosDown();
     void removeSelectedVideos();
+    void removeQueueItem(QListWidgetItem* item);
     void clearQueue();
     void onStartCancelClicked();
     void appendLog(const QString& message);
@@ -97,7 +98,7 @@ private:
     void addVideosToQueue(const QStringList& paths);
     void refreshQueueUi();
     void refreshQueueItem(QListWidgetItem* item);
-    QWidget* createQueueItemWidget(QListWidgetItem* item) const;
+    QWidget* createQueueItemWidget(QListWidgetItem* item);
     QListWidgetItem* findQueueItemByPath(const QString& path) const;
     QListWidgetItem* nextQueuedItem() const;
     bool hasQueuedItems() const;
@@ -126,7 +127,6 @@ private:
     QPushButton* browseBtn_;
     QPushButton* moveUpBtn_;
     QPushButton* moveDownBtn_;
-    QPushButton* removeSelectedBtn_;
     QPushButton* clearQueueBtn_;
     QPushButton* templatesBtn_;
     QPushButton* settingsBtn_;

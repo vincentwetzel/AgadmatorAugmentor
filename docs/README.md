@@ -16,6 +16,10 @@ Repository-wide contributor rules are in [CODING_STANDARDS.md](../CODING_STANDAR
 
 When documents disagree, use the implementation and its command-line help as the authority for behavior, `CODING_STANDARDS.md` and `agents.md` as the authority for contributor constraints, and `CHANGELOG.md` for release history. User-facing workflow changes should be reflected in `README.md` and `USAGE.md`; diagnostic or contributor workflow changes should be reflected in `DEVELOPMENT.md` and `TROUBLESHOOTING.md`.
 
+The current diagnostic contract includes bounded JSONL/TSV replay evidence,
+visual failure bundles, advisory detector calibration, and retained test/job
+logs. These artifacts are intentionally generated outside source control.
+
 The repository stores small image fixtures and PGN baselines. Large integration
 videos are maintained in the sibling `chess-tube-analyzer-media/games/`
 directory and are located through `CTA_MEDIA_ROOT`; see

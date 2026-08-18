@@ -86,6 +86,12 @@ Clock provenance is explicit. A moved clock can be `direct`, `contextual`, `temp
 
 `OpeningFetcher` performs cached Lichess Explorer lookups through WinHTTP on Windows. It can use the optional API token from Advanced settings, stores results under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`, and stops once a position is likely unique.
 
+`Logger` writes elapsed-time application logs under
+`%APPDATA%\ChessTubeAnalyzer\logs` and creates a separate timestamped log for
+each video job under `logs\jobs`. The GUI controls retention and optional
+compression; the test runner keeps its own bounded logs under the selected
+build directory so test evidence is not mixed with user jobs.
+
 `TemplateManager` loads built-in templates from the `templates/` directory beside
 the executable, copies missing defaults into
 `%APPDATA%\ChessTubeAnalyzer\templates`, and treats that AppData directory as
@@ -129,6 +135,9 @@ Diagnostic controls are generic and timestamp-bounded; they do not select a move
 | `CTA_REPLAY_OBSERVATIONS` | Replay a compact `observations.jsonl` trace using saved board/clock artifacts instead of source-video decoding |
 
 `tests/run_tests.py` exposes focused filters, `--no-build`, a selectable build directory, diagnostic JSONL/TSV paths, automatic first-divergence bundles, SVG/contact-sheet artifacts, `--replay-bundle`, `--compare-replay-traces`, `--compare-source-runs`, `--compare-mapper-runs`, intentional failure probes, and detector calibration reports. Test-side calibration modes can emit clock, yellow-square, and hover/animation JSONL. It also scans production `src/` and `include/` files for fixture-specific override patterns. Integration expectations come from sample PGN files, not production special cases.
+
+Each test invocation also records a readable `test-run.log` in the selected
+build log directory; failure bundles retain the originating log for handoff.
 
 Replay comparison has two layers. The trace contract checks observation IDs, mapper provenance, board hashes, and event ordering; semantic contracts separately compare accepted moves, clock provenance, recovery/revert state, and variation state. A trace can therefore have matching event names while still failing because a branch, clock source, or accepted move changed. Diagnostic detector confidence is reported as raw evidence until calibration provides a supported probability model.
 

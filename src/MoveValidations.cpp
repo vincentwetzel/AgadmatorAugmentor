@@ -5,6 +5,37 @@
 namespace cta {
 namespace validation {
 
+const char* to_string(EvidenceStrength strength) {
+    switch (strength) {
+    case EvidenceStrength::Strong: return "strong";
+    case EvidenceStrength::Weak: return "weak";
+    case EvidenceStrength::Advisory: return "advisory";
+    case EvidenceStrength::Missing: return "missing";
+    case EvidenceStrength::Conflicting: return "conflicting";
+    }
+    return "conflicting";
+}
+
+EvidenceStrength classify_yellow_evidence(bool accepted_inverse,
+                                          bool direct_pass,
+                                          bool temporal_pass,
+                                          bool absent) {
+    if (accepted_inverse || direct_pass) return EvidenceStrength::Advisory;
+    if (temporal_pass) return EvidenceStrength::Weak;
+    if (absent) return EvidenceStrength::Missing;
+    return EvidenceStrength::Conflicting;
+}
+
+EvidenceStrength classify_clock_evidence(bool temporal_reconciled,
+                                         bool contextual_reconciled,
+                                         bool direct_observed,
+                                         bool missing) {
+    if (temporal_reconciled) return EvidenceStrength::Strong;
+    if (contextual_reconciled || direct_observed) return EvidenceStrength::Advisory;
+    if (missing) return EvidenceStrength::Missing;
+    return EvidenceStrength::Conflicting;
+}
+
 bool passes_temporal_yellow_check(const YellowTemporalEvidence& evidence) {
     return evidence.sample_count >= kYellowTemporalMinimumSamples &&
         evidence.pair_pass_count >= kYellowTemporalMinimumPairPasses &&

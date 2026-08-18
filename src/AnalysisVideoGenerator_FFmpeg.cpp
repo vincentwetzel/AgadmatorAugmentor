@@ -5,8 +5,11 @@
 #include "GPUAccelerator.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -43,6 +46,30 @@ std::string compose_ffmpeg_failure_message(int result, const std::string& detail
         oss << " No FFmpeg output was captured. Check that ffmpeg is in PATH.";
     }
     return oss.str();
+}
+
+bool wait_for_output_file(const std::filesystem::path& output_path,
+                          std::uintmax_t& output_size,
+                          std::error_code& error) {
+    // A mapped/network drive can make a just-closed file visible to the
+    // filesystem a little after FFmpeg has exited.  Retry briefly before
+    // declaring a successful FFmpeg run invalid.
+    constexpr int kOutputCheckAttempts = 10;
+    constexpr auto kOutputCheckDelay = std::chrono::milliseconds(100);
+
+    for (int attempt = 0; attempt < kOutputCheckAttempts; ++attempt) {
+        error.clear();
+        if (std::filesystem::exists(output_path, error)) {
+            output_size = std::filesystem::file_size(output_path, error);
+            if (!error && output_size > 0) return true;
+        }
+
+        if (attempt + 1 < kOutputCheckAttempts) {
+            std::this_thread::sleep_for(kOutputCheckDelay);
+        }
+    }
+
+    return false;
 }
 
 struct FilterGraphParams {
@@ -162,7 +189,7 @@ bool compose_analysis_video(const std::string& input_video_path,
                             std::string aCodec,
                             const std::string& crf,
                             int num_threads,
-                            int total_frames,
+                            double total_duration_seconds,
                             std::atomic<bool>* cancel_flag,
                             const std::function<void(int, const std::string&)>& progress_callback) {
     // Step 2: Have FFmpeg perform the composition
@@ -315,7 +342,12 @@ bool compose_analysis_video(const std::string& input_video_path,
     // Fallback to copy if codec isn't set
     if (aCodec.empty()) aCodec = "copy";
 
-    std::string map_args = "-map \"[out]\" -map 0:a? ";
+    // Keep source cover art.  The filtered [out] stream replaces the source
+    // presentation video, so it is not enough to rely on automatic mapping.
+    // FFmpeg's uppercase V stream specifier excludes attached pictures;
+    // mapping all source video and subtracting 0:V therefore leaves only the
+    // source thumbnails without assuming a particular stream index.
+    std::string map_args = "-map \"[out]\" -map 0:v -map -0:V -map 0:a? ";
     if (has_srt) {
         map_args += "-map " + std::to_string(srt_stream_idx) + ":s ";
     }
@@ -335,18 +367,24 @@ bool compose_analysis_video(const std::string& input_video_path,
                  "-filter_complex_threads " + std::to_string(num_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" " +
                  map_args +
-                 "-c:v " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs + " -c:t copy \"" + output_path_arg + "\"";
+                 // The filtered presentation video is always the first
+                 // output video; all following video streams are source
+                 // attached pictures and must remain stream-copied.
+                 "-c:v copy -c:v:0 " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs +
+                 " -c:t copy -nostats -progress pipe:1 \"" + output_path_arg + "\"";
 
     std::string ffmpeg_tail;
-    int result = FfmpegProcessRunner::run_with_progress(ffmpeg_cmd, total_frames, cancel_flag, progress_callback, ffmpeg_tail);
+    int result = FfmpegProcessRunner::run_with_progress(ffmpeg_cmd, total_duration_seconds, cancel_flag, progress_callback, ffmpeg_tail);
 
     if (result == 0) {
         std::error_code ec;
-        const bool output_exists = std::filesystem::exists(output_path, ec);
-        const auto output_size = output_exists ? std::filesystem::file_size(output_path, ec) : 0;
-        if (ec || !output_exists || output_size == 0) {
-            std::filesystem::remove(output_path, ec);
-            if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail + "\nError: FFmpeg exited successfully but output file is missing or empty."));
+        std::uintmax_t output_size = 0;
+        if (!wait_for_output_file(output_path, output_size, ec)) {
+            std::ostringstream validation_error;
+            validation_error << "\nError: FFmpeg exited successfully but output file is missing or empty: "
+                             << output_path.generic_string();
+            if (ec) validation_error << " (" << ec.message() << ")";
+            if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail + validation_error.str()));
             return false;
         }
         if (progress_callback) progress_callback(100, "Analysis video composition complete.");
