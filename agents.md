@@ -63,7 +63,7 @@ Acts as the game logic authority and state machine filter.
 
 ### Output
 
-Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN, optional SRT subtitles, and Analysis Video). The intermediate JSON file is no longer written to disk; JSONL is reserved for diagnostic/replay evidence.
+Produces a rich `GameData` structure in-memory containing the full game, including moves, clock times, video timestamps, and variation trees. This is then dispatched to the output generators (PGN, optional embedded or standalone SRT subtitles, and Analysis Video). The intermediate JSON file is no longer written to disk; JSONL is reserved for diagnostic/replay evidence.
 
 ## 3. The Commentary Agent - Future
 
@@ -110,8 +110,9 @@ Red square and yellow arrow detection are fully implemented and produce structur
 - Supports an optional Lichess API token from Advanced settings and verifies API access before processing.
 - Caches API responses under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`.
 - Stores 64-bit game totals and top matching games for rare or unique positions.
+- Resolves candidate master-game metadata by replaying the verified main-line FEN/move sequence, excluding analysis branches and revert markers from identity matching.
 - Stops once a likely unique position is reached, avoiding unnecessary API calls after the opening is known.
-- Supplies ECO/opening names for PGN headers and optional analysis-video opening overlays.
+- Supplies game identity, ECO/opening names for PGN headers, and optional analysis-video opening overlays.
 
 ## 6. The Analysis Video Agent (Overlay & Composition) - Implemented
 
@@ -124,8 +125,8 @@ Red square and yellow arrow detection are fully implemented and produce structur
   - **Move Arrows:** Arrows on the main board indicating the best engine moves. The arrows dynamically scale in thickness and color intensity based on the evaluation difference from the principal variation.
   - **Principal Variation:** Text overlay showing the top engine line.
   - **Opening Name:** Optional text overlay showing the detected ECO/opening name.
-- Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the final MP4.
-- Produces an annotated MP4 at the configured output path, preserving source audio when available; the GUI selects the path and the CLI defaults PGN output under `output/`.
+- Composites overlays onto original video frames and uses **FFmpeg** to mux the original audio stream into the configured output container.
+- Produces an annotated video at the configured output path, preserving source audio when available; Qt-originated non-ASCII paths are preserved through explicit UTF-8/native-path conversion. Move subtitles may be embedded, retained as a standalone SRT, or both.
 
 ## Data Flow
 

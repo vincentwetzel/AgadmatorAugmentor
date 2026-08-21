@@ -124,6 +124,11 @@ int FfmpegProcessRunner::run_with_progress(const std::string& cmd, double total_
 
     if (CreateProcessW(NULL, cmd_buffer.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(hWritePipe);
+
+        // Encoding is deliberately background work.  The thread limit in the
+        // command controls throughput; this priority keeps a higher setting
+        // from making the rest of the desktop unresponsive.
+        SetPriorityClass(pi.hProcess, BELOW_NORMAL_PRIORITY_CLASS);
         
         char buffer[256];
         DWORD bytesRead;

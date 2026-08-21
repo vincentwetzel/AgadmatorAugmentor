@@ -26,10 +26,49 @@
 #include "UIDetectors.h"
 #include "ChessVideoExtractor.h"
 #include "ClockRecognizer.h"
+#include "OpeningFetcher.h"
+#include "PgnWriter.h"
+#include "ChessFenUtils.h"
 #include "ExtractionDiagnostics.h"
 #include "VideoChunkMapper.h"
+#include "../src/ExtractorUtils.h"
 #include "../src/MoveValidations.h"
 #include "../src/ChessVideoExtractor_Internal.h"
+
+TEST(PgnWriterTest, ConvertsVariationMovesFromRecordedRootFenToSan) {
+    cta::PgnWriter writer;
+    writer.add_ply("e2e4");
+    writer.add_ply("e7e6");
+    writer.add_ply("d2d4");
+    writer.add_ply("d7d5");
+
+    libchess::Position variation_root;
+    variation_root.set_fen(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    variation_root.makemove(variation_root.parse_move("e2e4"));
+    variation_root.makemove(variation_root.parse_move("e7e6"));
+    variation_root.makemove(variation_root.parse_move("d2d4"));
+
+    writer.push_variation(variation_root.get_fen());
+    writer.add_ply("d7d6");
+    writer.add_ply("c2c4");
+    writer.add_ply("d6d5");
+    writer.pop_variation();
+
+    const std::string pgn = writer.build();
+    EXPECT_NE(pgn.find("(2... d6 3. c4 d5)"), std::string::npos);
+    EXPECT_EQ(pgn.find("d7d6"), std::string::npos);
+    EXPECT_EQ(pgn.find("c2c4"), std::string::npos);
+    EXPECT_EQ(pgn.find("d6d5"), std::string::npos);
+}
+
+TEST(PgnWriterTest, ConvertsSubtitleMoveLineFromRecordedRootFenToSan) {
+    const std::string root_fen =
+        "rnbqkbnr/pppppppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2";
+    EXPECT_EQ(
+        cta::ChessFenUtils::uci_to_san_line("d7d6 c2c4", root_fen),
+        "d6 c4");
+}
 
 // ─── Test result tracking ────────────────────────────────────────────────────
 struct IntegrationTestResult {
@@ -1198,16 +1237,251 @@ static ExpectedGameData load_expected_uci_moves_from_pgn(const std::string& pgn_
 static void expect_fixture_metadata_contract(
     const ExpectedGameData& expected_data,
     const std::string& pgn_path) {
-    static constexpr std::array<const char*, 6> required_headers = {
-        "Event", "Site", "Date", "Round", "White", "Black",
+    static constexpr std::array<const char*, 7> required_headers = {
+        "Event", "Site", "Date", "Round", "White", "Black", "Result",
     };
 
     for (const char* key : required_headers) {
         ASSERT_TRUE(expected_data.headers.contains(key))
             << "Expected PGN is missing required header [" << key << "]: " << pgn_path;
     }
+    for (const auto& [key, value] : expected_data.headers) {
+        ASSERT_FALSE(value.empty())
+            << "Expected PGN has an empty metadata value for [" << key << "]: " << pgn_path;
+    }
+    const std::string& result = expected_data.headers.at("Result");
+    ASSERT_TRUE(result == "1-0" || result == "0-1" || result == "1/2-1/2" || result == "*")
+        << "Expected PGN has an invalid Result header: " << pgn_path;
     ASSERT_FALSE(expected_data.headers.empty())
         << "Expected PGN contains no metadata headers: " << pgn_path;
+
+    std::cout << "  Answer-key PGN metadata contract: ";
+    bool first_header = true;
+    for (const auto& [key, value] : expected_data.headers) {
+        if (!first_header) std::cout << ", ";
+        std::cout << key << "=\"" << value << "\"";
+        first_header = false;
+    }
+    std::cout << ".\n";
+}
+
+TEST(ExtractorUtilsTest, PreservesNonAsciiWindowsPathCharacters) {
+    const std::string filename = "analysis_\xEF\xBD\x9C\xEF\xBD\x9C.mp4";
+    const auto path = cta::utils::utf8_to_path("C:/exports/" + filename);
+
+#ifdef _WIN32
+    EXPECT_NE(path.filename().native().find(L'\xFF5C'), std::wstring::npos);
+#else
+    EXPECT_EQ(path.filename().string(), filename);
+#endif
+}
+
+static bool resolve_video_metadata(
+    const GameData& extracted_data,
+    LichessGameMetadata& metadata,
+    const std::string& video_path) {
+    const std::vector<std::string>& metadata_fens = extracted_data.fens.empty()
+        ? extracted_data.video_fens : extracted_data.fens;
+    const std::vector<std::string>& metadata_moves = extracted_data.moves.empty()
+        ? extracted_data.video_moves : extracted_data.moves;
+    if (metadata_fens.empty()) {
+        ADD_FAILURE() << "Video extraction produced no FEN positions for metadata lookup: "
+                      << video_path;
+        return false;
+    }
+
+    // Deep positions are the most selective. The complete FEN sequence is
+    // retained for the resolver's prefix check after candidate metadata is
+    // retrieved, but only the last few positions are sent to Explorer.
+    constexpr size_t kMetadataLookupFenCount = 4;
+    const size_t first_lookup_fen = metadata_fens.size() > kMetadataLookupFenCount
+        ? metadata_fens.size() - kMetadataLookupFenCount : 0;
+
+    OpeningFetcher fetcher;
+    for (size_t index = first_lookup_fen; index < metadata_fens.size(); ++index) {
+        fetcher.enqueue_fen(metadata_fens[index]);
+    }
+    constexpr auto kMetadataLookupTimeout = std::chrono::seconds(15);
+    if (!fetcher.wait_until_done_for(kMetadataLookupTimeout)) {
+        ADD_FAILURE() << "Lichess metadata lookup timed out after "
+                      << kMetadataLookupTimeout.count() << " seconds for video: "
+                      << video_path;
+        return false;
+    }
+
+    // A position-level cache entry may belong to a different game that shared
+    // an opening.  The resolver replays the complete verified main line
+    // before it publishes an identity, so do not retain pre-resolution
+    // metadata as a fallback.
+    fetcher.resolve_game_metadata(metadata_fens, metadata_moves);
+    metadata = {};
+    for (const std::string& fen : metadata_fens) {
+        const LichessOpening info = fetcher.get_opening(fen);
+        if (info.game_metadata.found) {
+            metadata = info.game_metadata;
+            break;
+        }
+    }
+    if (!metadata.found) {
+        std::string last_error;
+        int last_status = 0;
+        for (size_t index = first_lookup_fen; index < metadata_fens.size(); ++index) {
+            const LichessOpening info = fetcher.get_opening(metadata_fens[index]);
+            last_error = info.error;
+            last_status = info.http_status;
+        }
+        ADD_FAILURE() << "Lichess did not return metadata for FENs extracted from video: "
+                      << video_path << " (last HTTP status=" << last_status
+                      << ", error=" << (last_error.empty() ? "none" : last_error)
+                      << (last_status == 401
+                          ? "; configure a valid Lichess API token in the application settings"
+                          : "") << "; resolver="
+                      << (fetcher.metadata_resolution_error().empty()
+                          ? "no candidate diagnostic"
+                          : fetcher.metadata_resolution_error()) << ")";
+        return false;
+    }
+
+    std::cout << "  Extracted video metadata from Lichess: Event=\""
+              << metadata.event << "\", Site=\"" << metadata.site
+              << "\", Date=\"" << metadata.date << "\", Round=\""
+              << metadata.round << "\", White=\"" << metadata.white
+              << "\", Black=\"" << metadata.black << "\", Result=\""
+              << metadata.result << "\", WhiteElo=\"" << metadata.white_elo
+              << "\", BlackElo=\"" << metadata.black_elo << "\", ECO=\""
+              << metadata.eco << "\", Opening=\"" << metadata.opening << "\".\n";
+    return true;
+}
+
+static void expect_video_metadata_matches_answer_key(
+    const LichessGameMetadata& actual,
+    const ExpectedGameData& expected,
+    const std::string& video_path) {
+    const auto normalized_tokens = [](const std::string& value) {
+        std::vector<std::string> tokens;
+        std::string current;
+        for (const unsigned char character : value) {
+            if (std::isalnum(character)) {
+                current += static_cast<char>(std::tolower(character));
+            } else if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        }
+        if (!current.empty()) tokens.push_back(current);
+        return tokens;
+    };
+    const auto normalized_value = [&](const std::string& value) {
+        std::string result;
+        for (const std::string& token : normalized_tokens(value)) result += token;
+        return result;
+    };
+    const auto names_equivalent = [&](const std::string& left, const std::string& right) {
+        if (normalized_value(left) == normalized_value(right)) return true;
+        const size_t left_comma = left.find(',');
+        const size_t right_comma = right.find(',');
+        if (left_comma == std::string::npos || right_comma == std::string::npos) return false;
+        const std::string left_surname = normalized_value(left.substr(0, left_comma));
+        const std::string right_surname = normalized_value(right.substr(0, right_comma));
+        const auto left_given = normalized_tokens(left.substr(left_comma + 1));
+        const auto right_given = normalized_tokens(right.substr(right_comma + 1));
+        return !left_surname.empty() && left_surname == right_surname &&
+            !left_given.empty() && !right_given.empty() &&
+            left_given.front().front() == right_given.front().front();
+    };
+    const auto site_equivalent = [&](const std::string& left, const std::string& right) {
+        if (normalized_value(left) == normalized_value(right)) return true;
+        const auto left_tokens = normalized_tokens(left);
+        const auto right_tokens = normalized_tokens(right);
+        if (left_tokens.size() != 2 || right_tokens.size() != 2 ||
+            left_tokens.front() != right_tokens.front()) return false;
+        const auto country_name = [](const std::string& code) {
+            if (code == "gre") return std::string("greece");
+            if (code == "ind") return std::string("india");
+            return code;
+        };
+        return country_name(left_tokens.back()) == country_name(right_tokens.back());
+    };
+    const auto event_equivalent = [&](const std::string& left, const std::string& right) {
+        if (normalized_value(left) == normalized_value(right)) return true;
+        const auto acronym = [&](const std::string& value) {
+            std::string result;
+            for (const std::string& token : normalized_tokens(value)) {
+                if (token.size() > 1 && !std::isdigit(static_cast<unsigned char>(token.front()))) {
+                    result += token.front();
+                }
+            }
+            return result;
+        };
+        const std::string left_acronym = acronym(left);
+        const std::string right_acronym = acronym(right);
+        const auto contains_token = [&](const std::string& value, const std::string& token) {
+            const auto tokens = normalized_tokens(value);
+            return !token.empty() &&
+                std::find(tokens.begin(), tokens.end(), token) != tokens.end();
+        };
+        return contains_token(left, right_acronym) || contains_token(right, left_acronym);
+    };
+    const auto round_equivalent = [&](const std::string& left, const std::string& right) {
+        if (normalized_value(left) == normalized_value(right)) return true;
+        const size_t left_separator = left.find('.');
+        const size_t right_separator = right.find('.');
+        const std::string left_base = normalized_value(
+            left_separator == std::string::npos ? left : left.substr(0, left_separator));
+        const std::string right_base = normalized_value(
+            right_separator == std::string::npos ? right : right.substr(0, right_separator));
+        return left_base == right_base &&
+            (left_separator != std::string::npos || right_separator != std::string::npos);
+    };
+    const auto metadata_equivalent = [&](const char* key,
+                                         const std::string& actual_value,
+                                         const std::string& expected_value) {
+        if (actual_value.empty() || expected_value.empty()) return false;
+        const std::string header(key);
+        if (header == "Event") return event_equivalent(actual_value, expected_value);
+        if (header == "Site") return site_equivalent(actual_value, expected_value);
+        if (header == "Round") return round_equivalent(actual_value, expected_value);
+        if (header == "White" || header == "Black") {
+            return names_equivalent(actual_value, expected_value);
+        }
+        if (header == "WhiteElo" || header == "BlackElo") {
+            try {
+                return std::abs(std::stoi(actual_value) - std::stoi(expected_value)) <= 1;
+            } catch (const std::exception&) {
+                return false;
+            }
+        }
+        if (header == "Opening") {
+            const std::string actual_opening = normalized_value(actual_value);
+            const std::string expected_opening = normalized_value(expected_value);
+            return actual_opening == expected_opening ||
+                actual_opening.starts_with(expected_opening) ||
+                expected_opening.starts_with(actual_opening);
+        }
+        return normalized_value(actual_value) == normalized_value(expected_value);
+    };
+
+    const auto expect_header = [&](const char* key, const std::string& value) {
+        const auto expected_header = expected.headers.find(key);
+        ASSERT_NE(expected_header, expected.headers.end())
+            << "Answer-key PGN is missing [" << key << "] for " << video_path;
+        EXPECT_TRUE(metadata_equivalent(key, value, expected_header->second))
+            << "Metadata extracted from video does not match [" << key << "] for "
+            << video_path << " (actual=\"" << value << "\", expected=\""
+            << expected_header->second << "\")";
+    };
+
+    expect_header("Event", actual.event);
+    expect_header("Site", actual.site);
+    expect_header("Date", actual.date);
+    expect_header("Round", actual.round);
+    expect_header("White", actual.white);
+    expect_header("Black", actual.black);
+    expect_header("Result", actual.result);
+    expect_header("WhiteElo", actual.white_elo);
+    expect_header("BlackElo", actual.black_elo);
+    expect_header("ECO", actual.eco);
+    expect_header("Opening", actual.opening);
 }
 
 static std::multiset<std::string> extract_all_moves_multiset(const GameData& data) {
@@ -1261,6 +1535,22 @@ static bool verify_game_data_invariants(const GameData& data) {
         fail("video FEN history " + std::to_string(data.video_fens.size()) +
              " does not equal video move count + 1 (" +
              std::to_string(data.video_moves.size() + 1) + ")");
+    }
+    if (data.video_fens.size() == data.video_moves.size() + 1) {
+        for (size_t index = 0; index < data.video_moves.size(); ++index) {
+            if (data.video_moves[index] == "REVERT") continue;
+            try {
+                libchess::Position position(data.video_fens[index]);
+                position.makemove(position.parse_move(data.video_moves[index]));
+                ChessFenUtils::uci_to_san_line(
+                    data.video_moves[index], data.video_fens[index]);
+            } catch (const std::exception& error) {
+                fail("video timeline move " + std::to_string(index + 1) + " (" +
+                     data.video_moves[index] + ") is not legal from its paired FEN: " +
+                     error.what());
+                break;
+            }
+        }
     }
 
     if (!data.fens.empty()) {
@@ -1883,6 +2173,7 @@ TEST_F(DetectorsTest, YellowSquares) {
         const auto label = nlohmann::json::parse(line);
         expected_by_image.emplace(label.at("image").get<std::string>(), label);
     }
+
     if (expected_by_image.empty()) GTEST_SKIP() << "No yellow-square labels found";
 
     std::cout << "\nRunning manifest-driven yellow square diagnostics...\n";
@@ -2208,6 +2499,11 @@ TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
         if (!line.empty()) expected_labels.push_back(nlohmann::json::parse(line));
     }
 
+    std::map<std::string, std::vector<const nlohmann::json*>> labels_by_image;
+    for (const auto& expected : expected_labels) {
+        labels_by_image[expected.at("image").get<std::string>()].push_back(&expected);
+    }
+
     std::ofstream calibration_output;
     if (const char* output_path = std::getenv("CTA_YELLOW_CALIBRATION_FILE");
         output_path != nullptr && *output_path != '\0') {
@@ -2231,28 +2527,30 @@ TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
 
     std::size_t observation_count = 0;
     for (const auto& variant : variants) {
-        for (const auto& expected : expected_labels) {
-            const std::string image_name = expected.at("image").get<std::string>();
+        for (const auto& [image_name, image_labels] : labels_by_image) {
             const cv::Mat image = cv::imread((dataset_dir / image_name).string());
             ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
             const cv::Mat variant_image = make_yellow_calibration_variant(image, variant);
             BoardGeometry located = locate_board(variant_image, board_);
             const bool localized = located.bw > 0 && located.bh > 0;
             if (!localized) {
-                for (const std::string& component : {"origin", "destination", "paired"}) {
-                    ++observation_count;
-                    if (!calibration_output.is_open()) continue;
-                    calibration_output << nlohmann::json{
-                        {"schema_version", 1}, {"detector", "yellow"},
-                        {"image", image_name}, {"component", component},
-                        {"truth", expected.value("truth", std::string("uncertain"))},
-                        {"prediction", "negative"}, {"regime", variant.name},
-                        {"condition", variant.condition},
-                        {"preprocessing_variant", variant.name},
-                        {"geometry_available", false},
-                        {"corner_fraction", variant.corner_fraction},
-                        {"case", expected.value("case", std::string("unspecified"))},
-                    }.dump() << '\n';
+                for (const auto* expected_ptr : image_labels) {
+                    const auto& expected = *expected_ptr;
+                    for (const std::string& component : {"origin", "destination", "paired"}) {
+                        ++observation_count;
+                        if (!calibration_output.is_open()) continue;
+                        calibration_output << nlohmann::json{
+                            {"schema_version", 1}, {"detector", "yellow"},
+                            {"image", image_name}, {"component", component},
+                            {"truth", expected.value("truth", std::string("uncertain"))},
+                            {"prediction", "negative"}, {"regime", variant.name},
+                            {"condition", variant.condition},
+                            {"preprocessing_variant", variant.name},
+                            {"geometry_available", false},
+                            {"corner_fraction", variant.corner_fraction},
+                            {"case", expected.value("case", std::string("unspecified"))},
+                        }.dump() << '\n';
+                    }
                 }
                 continue;
             }
@@ -2288,47 +2586,50 @@ TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
             const double board_background_median = yellow_calibration_median(
                 std::move(all_scores));
 
-            const std::string expected_case = expected.value(
+            for (const auto* expected_ptr : image_labels) {
+                const auto& expected = *expected_ptr;
+
+                const std::string expected_case = expected.value(
                 "case", std::string("unspecified"));
-            const std::string expected_origin = expected.value(
+                const std::string expected_origin = expected.value(
                 "origin", std::string());
-            const std::string expected_destination = expected.value(
+                const std::string expected_destination = expected.value(
                 "destination", std::string());
-            const int expected_origin_index = yellow_calibration_square_index(expected_origin);
-            const int expected_destination_index = yellow_calibration_square_index(expected_destination);
-            const auto adjacent_indices = yellow_calibration_adjacent_squares(
+                const int expected_origin_index = yellow_calibration_square_index(expected_origin);
+                const int expected_destination_index = yellow_calibration_square_index(expected_destination);
+                const auto adjacent_indices = yellow_calibration_adjacent_squares(
                 expected_origin_index, expected_destination_index);
-            nlohmann::json adjacent_scores = nlohmann::json::array();
-            std::vector<double> adjacent_score_values;
-            for (const int adjacent_index : adjacent_indices) {
+                nlohmann::json adjacent_scores = nlohmann::json::array();
+                std::vector<double> adjacent_score_values;
+                for (const int adjacent_index : adjacent_indices) {
                 const double score = raw_scores[static_cast<size_t>(adjacent_index)];
                 adjacent_score_values.push_back(score);
                 adjacent_scores.push_back({
                     {"square", yellow_calibration_square_name(adjacent_index)},
                     {"score", score},
                 });
-            }
-            const double adjacent_score_max = adjacent_score_values.empty()
+                }
+                const double adjacent_score_max = adjacent_score_values.empty()
                 ? 0.0
                 : *std::max_element(adjacent_score_values.begin(), adjacent_score_values.end());
-            const double adjacent_score_mean = adjacent_score_values.empty()
+                const double adjacent_score_mean = adjacent_score_values.empty()
                 ? 0.0
                 : std::accumulate(adjacent_score_values.begin(), adjacent_score_values.end(), 0.0) /
                     static_cast<double>(adjacent_score_values.size());
-            const bool positive_case = expected.value("truth", std::string("uncertain")) == "positive";
-            const std::string post_move_origin_occupancy = positive_case ? "empty" : "unknown";
-            const std::string post_move_destination_occupancy = positive_case ? "occupied" : "unknown";
-            const std::string pre_move_destination_occupancy = expected_case == "capture"
+                const bool positive_case = expected.value("truth", std::string("uncertain")) == "positive";
+                const std::string post_move_origin_occupancy = positive_case ? "empty" : "unknown";
+                const std::string post_move_destination_occupancy = positive_case ? "occupied" : "unknown";
+                const std::string pre_move_destination_occupancy = expected_case == "capture"
                 ? "occupied"
                 : expected_case == "quiet" || expected_case == "double_pawn"
                     ? "empty" : "unknown";
 
-            std::string observed_move;
-            if (located.bw > 0 && located.bh > 0) {
-                observed_move = extract_move_from_yellow_squares(
-                    variant_image, board_, located);
-            }
-            for (const std::string& component : {"origin", "destination", "paired"}) {
+                std::string observed_move;
+                if (located.bw > 0 && located.bh > 0) {
+                    observed_move = extract_move_from_yellow_squares(
+                        variant_image, board_, located);
+                }
+                for (const std::string& component : {"origin", "destination", "paired"}) {
                 const std::string origin = expected.value("origin", std::string());
                 const std::string destination = expected.value("destination", std::string());
                 double origin_score = 0.0;
@@ -2431,6 +2732,7 @@ TEST_F(DetectorsTest, YellowSquareCalibrationRegimes) {
                     {"geometry_offset_y", geometry_dy},
                     {"corner_fraction", variant.corner_fraction},
                 }.dump() << '\n';
+                }
             }
         }
     }
@@ -3480,6 +3782,34 @@ TEST_F(DetectorsTest, GameClockCalibrationRegimes) {
         expected_by_image.emplace(label.at("image").get<std::string>(), label);
     }
 
+    struct ClockCalibrationSource {
+        cv::Mat image;
+        BoardGeometry geometry;
+    };
+    std::map<std::string, ClockCalibrationSource> sources;
+    for (const auto& [image_name, expected] : expected_by_image) {
+        (void)expected;
+        const cv::Mat image = cv::imread((dataset_dir / image_name).string());
+        ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
+        sources.emplace(image_name, ClockCalibrationSource{image, locate_board(image, board_)});
+    }
+
+    const auto geometry_for_variant = [](const BoardGeometry& source_geometry,
+                                         const char* variant_name) {
+        double scale = 1.0;
+        if (std::string(variant_name) == "scaled_75") scale = 0.75;
+        else if (std::string(variant_name) == "font_small") scale = 0.50;
+        else if (std::string(variant_name) == "font_large") scale = 1.25;
+        BoardGeometry geometry = source_geometry;
+        geometry.bx = static_cast<int>(std::lround(source_geometry.bx * scale));
+        geometry.by = static_cast<int>(std::lround(source_geometry.by * scale));
+        geometry.bw = static_cast<int>(std::lround(source_geometry.bw * scale));
+        geometry.bh = static_cast<int>(std::lround(source_geometry.bh * scale));
+        geometry.sq_w = source_geometry.sq_w * scale;
+        geometry.sq_h = source_geometry.sq_h * scale;
+        return geometry;
+    };
+
     const std::array<ClockCalibrationVariant, 12> variants{{
         {"native", "clean"},
         {"scaled_75", "scaling"},
@@ -3504,10 +3834,9 @@ TEST_F(DetectorsTest, GameClockCalibrationRegimes) {
         int observed_count = 0;
 
         for (const auto& [image_name, expected] : expected_by_image) {
-            const cv::Mat image = cv::imread((dataset_dir / image_name).string());
-            ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
-            cv::Mat variant_image = make_clock_calibration_variant(image, variant);
-            const BoardGeometry geometry = locate_board(variant_image, board_);
+            const auto& source = sources.at(image_name);
+            cv::Mat variant_image = make_clock_calibration_variant(source.image, variant);
+            const BoardGeometry geometry = geometry_for_variant(source.geometry, variant.name);
             if (geometry.bw <= 0 || geometry.bh <= 0) {
                 ++missing_count;
                 continue;
@@ -3590,6 +3919,18 @@ TEST_F(DetectorsTest, GameClockCalibrationRoiRegimes) {
         expected_by_image.emplace(label.at("image").get<std::string>(), label);
     }
 
+    struct ClockRoiCalibrationSource {
+        cv::Mat image;
+        BoardGeometry geometry;
+    };
+    std::map<std::string, ClockRoiCalibrationSource> sources;
+    for (const auto& [image_name, expected] : expected_by_image) {
+        (void)expected;
+        const cv::Mat image = cv::imread((dataset_dir / image_name).string());
+        ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
+        sources.emplace(image_name, ClockRoiCalibrationSource{image, locate_board(image, board_)});
+    }
+
     const std::array<ClockRoiCalibrationVariant, 7> variants{{
         {"roi_native", "roi_geometry", 0.00, 0.00, 0.70},
         {"roi_shift_left", "localization_error", -0.08, 0.00, 0.70},
@@ -3606,9 +3947,9 @@ TEST_F(DetectorsTest, GameClockCalibrationRoiRegimes) {
         int complete_correct = 0;
         int observed_count = 0;
         for (const auto& [image_name, expected] : expected_by_image) {
-            const cv::Mat image = cv::imread((dataset_dir / image_name).string());
-            ASSERT_FALSE(image.empty()) << "Could not read labeled image: " << image_name;
-            const BoardGeometry geometry = locate_board(image, board_);
+            const auto& source = sources.at(image_name);
+            const cv::Mat& image = source.image;
+            const BoardGeometry& geometry = source.geometry;
             cv::Mat top_roi;
             cv::Mat bottom_roi;
             if (!clock_rois_for_calibration(
@@ -3697,12 +4038,16 @@ TEST_F(DetectorsTest, SevenPliesExtraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
+
     const std::string pgn_path = find_expected_game_pgn(
         assets_dir_, "seven-plies").string();
     ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
 
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
     expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
@@ -3765,8 +4110,6 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
-    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
-
     std::cout << "\nRunning integration test on medium game with revert...\n";
 
     IntegrationTestResult result;
@@ -3782,8 +4125,12 @@ TEST_F(DetectorsTest, MediumGameWithRevert) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
     expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected baseline from PGN.\n";
@@ -3839,10 +4186,6 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
-    if (!std::filesystem::exists(pgn_path)) {
-        GTEST_SKIP() << "PGN not found: " << pgn_path;
-    }
-
     std::cout << "\nRunning integration test on Full Game 1...\n";
 
     IntegrationTestResult result;
@@ -3857,8 +4200,12 @@ TEST_F(DetectorsTest, FullGame1Extraction) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
     expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     induce_expected_failure_for_diagnostics(expected_moves);
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
@@ -3968,8 +4315,6 @@ TEST_F(DetectorsTest, YiVsEsipenkoExtraction) {
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
-    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
-
     std::cout << "\nRunning integration test on Wei Yi vs Andrey Esipenko...\n";
 
     IntegrationTestResult result;
@@ -3984,8 +4329,12 @@ TEST_F(DetectorsTest, YiVsEsipenkoExtraction) {
         std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
     expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
     const std::vector<std::string>& expected_moves = expected_data.main_line;
     const std::multiset<std::string> expected_all(
         expected_data.all_moves.begin(), expected_data.all_moves.end());
@@ -4038,7 +4387,7 @@ TEST_F(DetectorsTest, YiVsEsipenkoExtraction) {
     result.passed = main_line_passed && complete_output_passed &&
                     timeline_passed && invariants_passed;
     if (result.passed) {
-        std::cout << "PASS: Extracted the partial game and its analysis variation.\n";
+        std::cout << "PASS: Extracted the full game and its analysis variations.\n";
     }
 
     g_test_results.push_back(result);
@@ -4058,10 +4407,6 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
-    if (!std::filesystem::exists(pgn_path)) {
-        GTEST_SKIP() << "PGN not found: " << pgn_path;
-    }
-
     std::cout << "\nRunning integration test on clock times...\n";
 
     IntegrationTestResult result;
@@ -4077,9 +4422,13 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
     result.elapsed_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     result.plies_extracted = static_cast<int>(data.moves.size());
 
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
     // Extract and verify expected moves from PGN
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
     ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
     expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
     std::vector<std::string> expected_moves = expected_data.main_line;
     std::multiset<std::string> expected_all(expected_data.all_moves.begin(), expected_data.all_moves.end());
     std::cout << "  Loaded expected moves from PGN.\n";
@@ -4123,7 +4472,6 @@ TEST_F(DetectorsTest, IntegrationClockTimes) {
 TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
     const std::string video_path = find_game_fixture_file(
         assets_dir_, "analysis-line-and-revert", "video.mp4").string();
-
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
@@ -4144,14 +4492,25 @@ TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
         }
     });
 
-    // Run extraction with immediate cancellation to avoid waiting for the whole video
-    std::atomic<bool> cancel{true};
-    
+    // Complete extraction is intentional: this test also enforces the same
+    // video-derived metadata contract as the integration tests.
+    std::atomic<bool> cancel{false};
+    GameData data;
     try {
-        extractor.extract_moves_from_video(video_path, "test_mem_limit", &cancel);
-    } catch (...) {
-        // It might throw or exit cleanly upon cancellation, either is fine as long as we got the log
+        data = extractor.extract_moves_from_video(video_path, "test_mem_limit", &cancel);
+    } catch (const std::exception& error) {
+        FAIL() << "Memory-limit extraction failed: " << error.what();
     }
+
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
+
+    const std::string pgn_path = find_expected_game_pgn(
+        assets_dir_, "analysis-line-and-revert").string();
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
+    const ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
 
     EXPECT_NE(detected_workers, -1) << "Did not find Map-Reduce launch log message.";
     EXPECT_EQ(detected_workers, 1) << "Memory limit of 250MB should restrict worker count to 1.";
@@ -4165,7 +4524,6 @@ TEST_F(DetectorsTest, MemoryLimitWorkerCount) {
 TEST_F(DetectorsTest, CacheCorrectness) {
     const std::string video_path = find_game_fixture_file(
         assets_dir_, "seven-plies", "video.mp4").string();
-
     if (!std::filesystem::exists(video_path)) {
         GTEST_SKIP() << "Video not found: " << video_path;
     }
@@ -4200,6 +4558,26 @@ TEST_F(DetectorsTest, CacheCorrectness) {
 
     EXPECT_EQ(cache_loads, 1) << "Second run did not load from cache.";
     EXPECT_EQ(multi_pass_searches, 0) << "Second run performed multi-pass search instead of using cache.";
+
+    // The cache behavior run above is deliberately separate from this full
+    // extraction. Metadata must still come from the video-derived FENs.
+    std::atomic<bool> no_cancel{false};
+    GameData data;
+    try {
+        data = extractor.extract_moves_from_video(video_path, "test_cache_metadata", &no_cancel);
+    } catch (const std::exception& error) {
+        FAIL() << "Cache test extraction failed: " << error.what();
+    }
+
+    LichessGameMetadata video_metadata;
+    ASSERT_TRUE(resolve_video_metadata(data, video_metadata, video_path));
+
+    const std::string pgn_path = find_expected_game_pgn(
+        assets_dir_, "seven-plies").string();
+    ASSERT_TRUE(std::filesystem::exists(pgn_path)) << "PGN not found: " << pgn_path;
+    const ExpectedGameData expected_data = load_expected_uci_moves_from_pgn(pgn_path);
+    expect_fixture_metadata_contract(expected_data, pgn_path);
+    expect_video_metadata_matches_answer_key(video_metadata, expected_data, video_path);
 }
 
 #endif // TEST_CACHE_CORRECTNESS

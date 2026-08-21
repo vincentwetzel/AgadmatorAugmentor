@@ -1,13 +1,14 @@
 [Event "FIDE World Cup 2025"]
-[Site "Unknown"]
-[Date "Unknown"]
-[Round "Unknown"]
-[White "Esipenko, Andrey"]
-[Black "Wei, Yi"]
-[WhiteElo "2681"]
-[BlackElo "2752"]
-[ECO "A06"]
-[Opening "Zukertort Opening"]
+[Site "Goa, India"]
+[Date "2025.11.21"]
+[Round "7.1"]
+[White "Wei, Yi"]
+[Black "Esipenko, Andrey"]
+[Result "1/2-1/2"]
+[WhiteElo "2752"]
+[BlackElo "2681"]
+[ECO "C10"]
+[Opening "French Defense: Rubinstein Variation"]
 [WhiteACPL "4"]
 [WhiteAccuracy "97.2"]
 [BlackACPL "5"]
@@ -21,5 +22,45 @@
 6. Nxf6 {[%clk 1:20:50]} Nxf6 {[%clk 1:32:00]}
 7. Bd3 {[%clk 1:20:38]} c5 {[%clk 1:32:11]}
 8. Be3 {[%clk 1:20:38]}
-	(8. dxc5 {[%clk 1:20:38]} Bxc5 {[%clk 1:32:11]} 9. Qe2 {[%clk 1:20:38]})
-	
+	(8. dxc5 {[%clk 1:20:38]} Bxc5 {[%clk 1:32:11]}) {Video audit: the board resets before 9.Qe2; the later database continuation is not shown.}
+8... Qc7 {[%clk 1:32:32]}
+9. Qe2 {[%clk 1:20:33]} a6 {[%clk 1:32:54]}
+10. h4 {[%clk 1:05:55]} Nd5 {[%clk 1:32:54]}
+11. O-O-O {[%clk 1:05:55]} Bd7 {[%clk 1:00:00]}
+	(11... Nxe3 {[%clk 1:32:54]} 12. fxe3 {[%clk 1:05:55]} cxd4 {[%clk 1:32:54]} 13. Ng5 {[%clk 1:05:55]} h6 {[%clk 1:32:54]} 14. Nxf7 {[%clk 1:05:55]} Qxf7 {[%clk 1:32:54]} 15. Rhf1 {[%clk 1:05:55]} Qc7 {[%clk 1:32:54]} 16. Bg6+ {[%clk 1:05:55]} Ke7 {[%clk 1:32:54]} 17. Rxd4 {[%clk 1:05:55]})
+12. Kb1 Nxe3 {[%clk 1:15:10]}
+13. fxe3 {[%clk 0:56:21]} f6 {[%clk 1:03:35]}
+14. g4 {[%clk 0:51:13]} O-O-O {[%clk 1:02:39]}
+15. g5 {[%clk 0:50:46]} Kb8 {[%clk 1:01:14]}
+16. Rhf1 {[%clk 0:45:58]} Bc8 {[%clk 0:58:30]}
+17. gxf6 {[%clk 0:37:26]} gxf6 {[%clk 0:58:24]}
+18. c3 {[%clk 0:37:25]} Rg8 {[%clk 0:53:39]}
+19. Nd2 {[%clk 0:25:02]} f5 {[%clk 0:49:18]}
+20. Nb3 {[%clk 0:25:19]} Rg4 {[%clk 0:44:24]}
+21. h5 {[%clk 0:22:49]} Rh4 {[%clk 0:41:14]}
+22. Nxc5 {[%clk 0:13:33]} Bxc5 {[%clk 0:40:06]}
+23. dxc5 {[%clk 0:14:00]} Qxc5 {[%clk 0:40:10]}
+	(23... Rh2 {[%clk 0:40:06]} 24. Rf2 {[%clk 0:14:00]})
+24. Rf4 {[%clk 0:11:52]} Rh3 {[%clk 0:32:55]}
+25. Rd4 {[%clk 0:12:17]} Rg8 {[%clk 0:32:18]}
+	(25... Rxd4 {[%clk 0:32:55]} 26. exd4 {[%clk 0:12:17]} Qd6 {[%clk 0:32:55]} 27. Bc4 {[%clk 0:12:17]} Qf4 {[%clk 0:32:55]})
+26. e4 {[%clk 0:12:38]} fxe4 {[%clk 0:25:45]}
+	(26... Qc7 {[%clk 0:32:18]} 27. exf5 {[%clk 0:12:38]} Rh2 {[%clk 0:32:18]} 28. Qe3 {[%clk 0:12:38]} Rgg2 {[%clk 0:32:18]} 29. Rb4 {[%clk 0:12:38]} a5 {[%clk 0:32:18]} 30. Rb5 {[%clk 0:12:38]} Bd7 {[%clk 0:32:18]} 31. Rc5 {[%clk 0:12:38]} Rxb2+ {[%clk 0:32:18]} 32. Kc1 {[%clk 0:12:38]} Qd6 {[%clk 0:32:18]} 33. Rxa5 {[%clk 0:12:38]} Kc7 {[%clk 0:32:18]} 34. f6 {[%clk 0:12:38]})
+27. Qxe4 {[%clk 0:08:03]} Qxh5 {[%clk 0:20:39]}
+28. Bxa6 {[%clk 0:04:36]}
+	(28... bxa6 {[%clk 0:20:39]} 29. Rb4+ {[%clk 0:04:36]} Ka7 {[%clk 0:20:39]} 30. Rd7+ {[%clk 0:04:36]} Bxd7 {[%clk 0:20:39]} 31. Qb7# {[%clk 0:04:36]})
+28... e5 {[%clk 0:18:38]}
+29. Rd8 {[%clk 0:04:25]}
+	(30. Rb4 {[%clk 0:04:36]} Qxd1# {[%clk 0:18:38]})
+29... Rxd8 {[%clk 0:14:29]}
+30. Rxd8 {[%clk 0:04:52]}
+	(31... bxa6 {[%clk 0:14:29]} 32. Qb4+ {[%clk 0:04:52]} Kc7 {[%clk 0:14:29]} 33. Qd6+ {[%clk 0:04:52]} Kb7 {[%clk 0:14:29]} 34. Qb4+ {[%clk 0:04:52]} Kc7 {[%clk 0:14:29]} 35. Qd6+ {[%clk 0:04:52]})
+30... Ka7 {[%clk 0:14:30]}
+31. Qa4 {[%clk 0:04:52]} bxa6 {[%clk 0:11:45]}
+	(33... Rh1+ {[%clk 0:14:30]} 34. Kc2 {[%clk 0:04:52]} Qh2+ {[%clk 0:14:30]} 35. Be2+ {[%clk 0:04:52]} Kb8 {[%clk 0:14:30]} 36. Qc4 {[%clk 0:04:52]} Qh3 {[%clk 0:14:30]} 37. Bg4 {[%clk 0:04:52]} Qg2+ 38. Kb3 {[%clk 0:04:52]})
+32. Rd7+ {[%clk 0:05:16]} Bxd7 {[%clk 0:11:57]}
+	(34... Kb8 {[%clk 0:11:45]} 35. Qb3+ {[%clk 0:05:16]} Ka8 {[%clk 0:11:45]} 36. Qd5+ {[%clk 0:05:16]} Kb8 {[%clk 0:11:45]} 37. Qd6+ {[%clk 0:05:16]}) {Video audit: the board resets after 37.Qd6+; the later Lichess continuation is not shown.}
+	(34... Bb7 {[%clk 0:11:45]} 35. Rxb7+ {[%clk 0:05:16]} Kxb7 {[%clk 0:11:45]} 36. Qd7+ {[%clk 0:05:16]} Kb6 {[%clk 0:11:45]} 37. Qd6+ Kb5 {[%clk 0:11:45]} 38. Qd5 {[%clk 0:05:16]} Ka4 {[%clk 0:11:45]} 39. b3+ {[%clk 0:05:16]} Ka3 {[%clk 0:11:45]} 40. Qa5# {[%clk 0:05:16]})
+33. Qxd7+ {[%clk 0:05:41]} Kb6 {[%clk 0:12:18]}
+	(34. Qb5+ Kb5 35. b3) {Video audit: shown at 765.0s-767.2s before the board resets.}
+1/2-1/2

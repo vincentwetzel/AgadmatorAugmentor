@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Master-Game Metadata:** Added full-main-line Lichess resolution for PGN Event, Site, Date, Round, player, result, rating, ECO, and opening headers, excluding analysis branches from identity matching.
+- **Metadata Integration Coverage:** Added answer-key metadata contracts and live Lichess master-game comparisons to video integration tests.
 - **Opening Metadata:** Added a background Lichess Explorer fetcher with cached ECO/opening lookups for verified video FENs.
 - **Opening Overlays:** Added an optional opening-name overlay to analysis videos and the screenshot-based overlay template editor.
 - **Arrow Thickness Templates:** Overlay templates can now persist and edit the base thickness percentage for engine arrows.
@@ -51,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Subtitle Export:** Move subtitles can now be kept as a standalone SRT independently of embedding them in the analysis video; video export also exposes a separate FFmpeg thread limit with a four-thread default.
 - **Thread Setting:** Replaced the fixed FFmpeg decode-thread spin box with a dropdown that offers every detected logical CPU thread count and defaults to the maximum detected value.
 - **Settings Presets:** Replaced several advanced numeric spin boxes with curated dropdowns for engine strength, time cap, node cap, line length, video encoding, output size, quality, and RAM budget.
 - **Runtime Deployment:** The development preset now keeps Qt runtime deployment enabled so GUI builds are runnable from the build output.
@@ -61,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Source Video Cleanup:** The optional post-processing cleanup now moves completed source videos to the trash instead of permanently deleting them.
 - **Test Build Isolation:** `tests/run_tests.py` now uses `build_tests/` by default, supports `CTA_TEST_BUILD_DIR`, reuses a cached Google Test source tree when present, and disables MSBuild file tracking for fewer Windows temp-path issues.
 - **Correctness-First Mapper Default:** Mapper concurrency is capped at one by default; `CTA_MAX_WORKERS` remains available for controlled performance experiments because decoder seek boundaries can vary across workers.
+- **Unicode Path Handling:** Windows filesystem and FFmpeg paths now preserve non-ASCII filenames through explicit UTF-8/native-path conversion.
 
 ### Refactored
 
@@ -78,7 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Replay Subtitle Timing:** SRT generation now skips non-finite timestamps and ignores stale or non-increasing timestamps after analysis reverts, preventing invalid or negative-duration subtitle cues from breaking MP4 muxing.
 - **FFmpeg Error Reporting:** Analysis video composition now captures the tail of FFmpeg output and reports Windows process-launch failures with the underlying system error.
 - **Analysis Video Failure Flow:** Processing now stops after PGN save or analysis-video generation failures instead of continuing as though the batch completed successfully.
-- **Export Helper Video Path:** Restored analysis-video generation and synced subtitle writing inside `VideoExportHelper`, including cleanup of temporary SRT files after export.
+- **Export Helper Video Path:** Restored analysis-video generation and synced subtitle writing inside `VideoExportHelper`, including cleanup of temporary SRT files after export when standalone subtitle retention is not requested.
 - **Analysis Video Composition:** CUDA filter paths are now disabled for alpha-overlay cases that require CPU-compatible formats, while final video mapping explicitly targets the composed output stream and preserves optional source audio.
 - **CLI Input Validation:** Headless positional input now rejects non-video extensions before processing begins.
 - **Move Scoring:** Fixed a false positive where normal rook moves (e.g., `Rc1`) were misidentified as castling (`O-O-O`) due to visual noise accumulation on the king's squares. Applied a baseline penalty to multi-square moves to ensure all involved squares actually changed.

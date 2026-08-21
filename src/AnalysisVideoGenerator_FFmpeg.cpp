@@ -3,6 +3,7 @@
 #include "FFmpegFilterGraph.h"
 #include "FfmpegProcessRunner.h"
 #include "GPUAccelerator.h"
+#include "ExtractorUtils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -70,6 +71,14 @@ bool wait_for_output_file(const std::filesystem::path& output_path,
     }
 
     return false;
+}
+
+std::string normalize_ffmpeg_path(std::string utf8_path) {
+    // FfmpegProcessRunner converts this UTF-8 command line to a Windows wide
+    // command line.  Do not round-trip through filesystem::path here: its
+    // narrow generic_string() conversion uses the active ANSI code page.
+    std::replace(utf8_path.begin(), utf8_path.end(), '\\', '/');
+    return utf8_path;
 }
 
 struct FilterGraphParams {
@@ -188,19 +197,19 @@ bool compose_analysis_video(const std::string& input_video_path,
                             const std::string& vCodec,
                             std::string aCodec,
                             const std::string& crf,
-                            int num_threads,
                             double total_duration_seconds,
+                            bool include_subtitles,
+                            int export_threads,
                             std::atomic<bool>* cancel_flag,
                             const std::function<void(int, const std::string&)>& progress_callback) {
     // Step 2: Have FFmpeg perform the composition
     if (progress_callback) progress_callback(80, "Compositing video streams with FFmpeg...");
 
-    // Use one normalized filesystem path for the FFmpeg command and for the
-    // post-process validation.  On Windows, constructing a path and calling
-    // generic_string() can normalize/convert the path, so checking the raw
-    // input string afterward can inspect a different path than FFmpeg wrote.
-    const std::filesystem::path output_path(actual_output_path);
-    const std::string output_path_arg = output_path.generic_string();
+    // Qt passes paths as UTF-8.  Convert them explicitly before using
+    // filesystem so Windows does not reinterpret non-ASCII names through the
+    // active ANSI code page during post-process validation.
+    const std::filesystem::path output_path = utils::utf8_to_path(actual_output_path);
+    const std::string output_path_arg = normalize_ffmpeg_path(actual_output_path);
 
     int safe_bx = geo.bx - (geo.bx % 2);
     int safe_by = geo.by - (geo.by % 2);
@@ -242,8 +251,9 @@ bool compose_analysis_video(const std::string& input_video_path,
     }
 
     std::string hwaccel_arg = use_hwaccel ? "-hwaccel auto " : "";
-    // Standardize all inputs to generic_string (forward slashes) to prevent escaping bugs in FFmpeg's CLI parser
-    std::string input_args_str = "-y " + hw_init_args + hwaccel_arg + "-i \"" + std::filesystem::path(input_video_path).generic_string() + "\" ";
+    // Keep command-line paths in UTF-8; normalize only slash direction for
+    // FFmpeg's parser.
+    std::string input_args_str = "-y " + hw_init_args + hwaccel_arg + "-i \"" + normalize_ffmpeg_path(input_video_path) + "\" ";
 
     if (overlay_config.board.enabled) {
         input_args_str += "-f concat -safe 0 -i \"" + board_txt_path + "\" ";
@@ -266,8 +276,11 @@ bool compose_analysis_video(const std::string& input_video_path,
         arrows_stream = "[" + std::to_string(stream_idx++) + ":v]";
     }
 
-    std::string srt_path = std::filesystem::path(actual_output_path + ".srt").generic_string();
-    bool has_srt = std::filesystem::exists(srt_path);
+    const std::filesystem::path srt_filesystem_path = utils::utf8_to_path(actual_output_path + ".srt");
+    std::string srt_path = normalize_ffmpeg_path(actual_output_path + ".srt");
+    // Subtitle inclusion is controlled by the user's output setting.  Do not
+    // infer it from a leftover sidecar file from an earlier export.
+    bool has_srt = include_subtitles && std::filesystem::exists(srt_filesystem_path);
     int srt_stream_idx = -1;
     if (has_srt) {
         input_args_str += "-i \"" + srt_path + "\" ";
@@ -342,6 +355,9 @@ bool compose_analysis_video(const std::string& input_video_path,
     // Fallback to copy if codec isn't set
     if (aCodec.empty()) aCodec = "copy";
 
+    const int max_hardware_threads = std::max(1u, std::thread::hardware_concurrency());
+    const int bounded_export_threads = std::clamp(export_threads, 1, max_hardware_threads);
+
     // The filtered [out] stream replaces the source presentation video.  Do
     // not map source video streams here: some MP4 files carry an attached PNG
     // cover image, and treating that image as a normal output video makes
@@ -366,11 +382,12 @@ bool compose_analysis_video(const std::string& input_video_path,
         subtitle_codecs = "-c:s " + srt_codec;
     }
 
-    ffmpeg_cmd = "ffmpeg -threads 0 " + input_args_str + 
-                 "-filter_complex_threads " + std::to_string(num_threads) + " " +
+    ffmpeg_cmd = "ffmpeg " + input_args_str +
+                 "-filter_threads " + std::to_string(bounded_export_threads) + " " +
+                 "-filter_complex_threads " + std::to_string(bounded_export_threads) + " " +
                  "-filter_complex \"" + filter_complex + "\" " +
                  map_args +
-                 "-c:v:0 " + actual_vcodec + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs +
+                 "-c:v:0 " + actual_vcodec + " -threads:v " + std::to_string(bounded_export_threads) + " " + extra_args + " -c:a " + aCodec + " " + subtitle_codecs +
                  " -c:t copy -nostats -progress pipe:1 \"" + output_path_arg + "\"";
 
     std::string ffmpeg_tail;
@@ -382,7 +399,7 @@ bool compose_analysis_video(const std::string& input_video_path,
         if (!wait_for_output_file(output_path, output_size, ec)) {
             std::ostringstream validation_error;
             validation_error << "\nError: FFmpeg exited successfully but output file is missing or empty: "
-                             << output_path.generic_string();
+                             << output_path_arg;
             if (ec) validation_error << " (" << ec.message() << ")";
             if (progress_callback) progress_callback(-1, compose_ffmpeg_failure_message(result, ffmpeg_tail + validation_error.str()));
             return false;

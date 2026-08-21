@@ -635,6 +635,7 @@ if(BUILD_TESTS)
 
     target_link_libraries(test_extract_moves PRIVATE
         chess_extraction_core
+        chess_analysis_core
         GTest::gtest_main
         GTest::gmock_main
     )

@@ -78,10 +78,12 @@ The system optimizes for correctness first. Candidate moves must remain chess-le
 | ID | Requirement |
 |----|-------------|
 | OF-1 | The primary game output must be PGN. Intermediate JSON is not a normal output artifact. |
-| OF-2 | PGN output must include moves, verified timestamps, clock comments when available, optional opening headers, optional engine evaluations, variations, and move-quality annotations. |
-| OF-3 | Optional SRT subtitles must be generated from verified timestamps and SAN notation. |
-| OF-4 | Optional analysis video output must compose static overlays through FFmpeg and preserve source audio when available. |
-| OF-5 | Analysis-video timing may use separate visual-update timestamps so overlays remain synchronized with the source board while PGN timestamps remain settled verification times. |
+| OF-2 | PGN output must include moves, verified timestamps, clock comments when available, fallback identity headers, optional resolved master-game headers, optional opening headers, optional engine evaluations, variations, and move-quality annotations. |
+| OF-3 | Optional SRT subtitles must be generated from verified timestamps and SAN notation; the SRT must be retained when standalone subtitle export is requested and may also be embedded in analysis video. |
+| OF-4 | Master-game metadata resolution must validate the complete verified main-line FEN/move sequence; analysis variations and reverted video states must not be used as the game identity. |
+| OF-5 | Windows paths supplied through Qt must preserve UTF-8 filenames for filesystem access, temporary overlays, and FFmpeg output. |
+| OF-6 | Optional analysis video output must compose static overlays through FFmpeg and preserve source audio when available. |
+| OF-7 | Analysis-video timing may use separate visual-update timestamps so overlays remain synchronized with the source board while PGN timestamps remain settled verification times. |
 
 ## 2. Non-Functional Requirements
 

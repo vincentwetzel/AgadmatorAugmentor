@@ -52,7 +52,7 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Browse or drag-and-drop one or more videos into the queue.
 - Select an output directory.
 - Toggle PGN export, optional PGN move-quality labels, analysis video generation, video move-quality labels, and synced move subtitles.
-- Embed synced SAN move subtitles into the generated analysis video.
+- Choose whether synced SAN move subtitles are embedded in the generated analysis video and whether a standalone external SRT file is saved.
 - Enable optional cleanup that moves the original source video to the trash after that queue item completes successfully.
 - Configure Stockfish MultiPV, analysis strength, time cap, node cap, and variation-length presets.
 - Enable Fast Preview mode for rapid processing with bounded engine limits.
@@ -63,6 +63,7 @@ Run `ChessTube Analyzer.exe` from the build output directory. The GUI can:
 - Override the auto-detected template per queue item.
 - Reorder queued videos and mix different templates in one batch.
 - Select FFmpeg decode threads from 1 through the detected logical CPU count; the maximum detected value is the default.
+- Select separate video export threads from 1 through the detected logical CPU count; four threads is the default to keep the desktop responsive during FFmpeg composition.
 
 The queue stores the selected template configuration with each item right before processing begins. That lets mixed-channel batches keep each video's intended board, eval bar, PV text, opening text, arrow placement, and arrow thickness.
 
@@ -94,9 +95,11 @@ Headless mode accepts one positional video per invocation. `--multi-pv` accepts 
 
 The analyzer writes a PGN file (`<video_name>.pgn`) in the selected output directory, or alongside the source video by default. The PGN includes extracted moves, clock times, and any ECO/opening metadata found through the cached Lichess Explorer lookup. PGN move-quality labels are controlled by their own output toggle and run Stockfish when enabled.
 
+When the verified main-line move sequence matches a Lichess master game, the PGN also receives that game's Event, Site, Date, Round, White, Black, Result, WhiteElo, BlackElo, ECO, and Opening headers when available. The resolver compares the full main line and excludes analysis branches and reverted video states from game identity.
+
 Stable analysis reverts are written as PGN variations. Main-line clock observations retain their provenance; a replayed variation may inherit the branch-point clock for continuity, but an inherited value is not presented as a new OCR observation.
 
-If move subtitles are enabled, the analyzer creates a temporary SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next later move or a short default duration. Non-finite timestamps and timestamps that would create a non-positive cue duration are skipped, which keeps replayed analysis branches from producing invalid subtitle packets. The temporary SRT file is removed after export completes.
+If embedded move subtitles are enabled, the analyzer creates an SRT track from the verified move timestamps and embeds it into the analysis video. Each cue starts at the detected move timestamp, displays SAN notation with move numbers, and runs until the next later move or a short default duration. Non-finite timestamps and timestamps that would create a non-positive cue duration are skipped, which keeps replayed analysis branches from producing invalid subtitle packets. **Save external SRT file** keeps the same track as a standalone SRT alongside the derived analysis output path; it can be enabled independently when a video is not being generated.
 
 If analysis-video generation is enabled, the application also produces an annotated video using the selected overlay template snapshot for that queue item. Engine-backed overlays such as eval bars, PV text, and engine arrows run Stockfish automatically. Opening-name overlays are optional and only display when opening metadata is available. If hardware-accelerated video composition fails, the worker retries with the CPU H.264 encoder before reporting failure.
 

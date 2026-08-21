@@ -19,9 +19,3 @@ representative enough to support production thresholds.
   points with precision/recall and confidence-bin evidence.
 - [ ] Promote only evidence that meets measured targets to strong reducer
   validation; preserve weak, missing, ambiguous, and advisory classifications.
-
-### Integration metadata
-
-- [ ] Upgrade full-game integration tests to require accurate player names,
-  ratings, event names, and other available PGN metadata in addition to moves,
-  variations, clocks, and timestamps. (Deferred.)

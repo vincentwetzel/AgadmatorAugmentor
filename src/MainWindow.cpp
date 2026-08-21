@@ -93,7 +93,7 @@ void MainWindow::browseVideo() {
         defaultDir = QDir::homePath();
     }
 
-    QStringList fileNames = QFileDialog::getOpenFileNames(this, "Select Chess Video(s)", defaultDir, "Video Files (*.mp4 *.mkv *.avi);;All Files (*)");
+    QStringList fileNames = QFileDialog::getOpenFileNames(this, "Select Chess Video(s)", defaultDir, "Video Files (*.mp4 *.mkv *.avi *.mov *.webm);;All Files (*)");
     if (!fileNames.isEmpty()) {
         addVideosToQueue(fileNames);
     }

@@ -5,6 +5,8 @@
 
 namespace cta {
 
+constexpr int kDefaultVideoExportThreads = 4;
+
 struct ProcessingSettings {
     QString videoPath;
     QString outputPath;
@@ -13,12 +15,14 @@ struct ProcessingSettings {
     bool generatePgn = true;
     bool includePgnAnalysis = false;
     bool includePgnMoveAnnotations = false;
-    bool generateSubtitles = false;
+    bool generateSubtitles = false; // Embed generated move subtitles in the analysis video.
+    bool exportExternalSubtitles = false; // Keep a standalone SRT file alongside the output.
     bool enableStockfish = false;
     bool enableMoveAnnotations = true; // Quality labels shown in the analysis video.
     bool generateAnalysisVideo = false;
     int multiPv = 3;
     int ffmpegThreads = 4;
+    int videoExportThreads = kDefaultVideoExportThreads;
     int stockfishDepth = 15;
     int stockfishTime = 0;
     int stockfishNodes = 0;

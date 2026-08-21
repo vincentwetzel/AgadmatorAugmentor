@@ -10,7 +10,7 @@ This roadmap reflects the current implementation. Completed work is summarized s
 | Extraction | Legal-state reducer with adaptive scanning, settled candidates, clock checks, and indexed reverts |
 | Variations | Stable legal analysis branches with state-based pruning and clock provenance |
 | GPU | Optional CUDA/NPP acceleration with CPU fallbacks and CPU move scoring as reference |
-| Tests | Google Test, PGN-backed integration baselines, clock-time coverage, and fixture-independence guard |
+| Tests | Google Test, PGN-backed integration baselines, clock-time coverage, fixture-independence guard, and master-game metadata validation |
 | GUI/headless | Qt6 queue UI plus persisted-settings headless mode |
 | Templates | Built-in and custom channel templates with per-queue snapshots |
 | Diagnostics | Observation replay, first-divergence bundles, source/mapper comparison, geometry stability, temporal clock provenance, advisory detector calibration, and retained test/job logs |
@@ -44,7 +44,8 @@ This roadmap reflects the current implementation. Completed work is summarized s
 ### Output and application
 
 - PGN output includes legal moves, clocks, timestamps, variations, optional opening metadata, and optional Stockfish labels.
-- Optional SRT subtitles use verified timestamps and SAN, then are removed after embedding in analysis video.
+- PGN output resolves matching Lichess master-game identity metadata from the complete verified main line when available.
+- Optional SRT subtitles use verified timestamps and SAN; they can be embedded in analysis video, retained as a standalone file, or both.
 - Analysis video uses static per-state overlays, FFmpeg composition, optional source audio, engine arrows, evaluation, PV, and opening text.
 - Lichess Explorer results are cached in `%APPDATA%\ChessTubeAnalyzer\openings_cache.json` and can use an optional API token.
 - Qt6 GUI, persisted settings, queue-level templates, Fast Preview, cleanup-to-trash, and centralized theme styling are implemented.

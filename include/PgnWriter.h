@@ -22,7 +22,11 @@ public:
     void add_header(const std::string& key, const std::string& value);
     void add_ply(const std::string& uci_move_str, const std::string& clock = "", const std::string& eval_comment = "");
     void add_stockfish_analysis(const std::vector<StockfishResult>& results, int analysis_depth);
-    void push_variation();
+    // Start a variation from its recorded root position.  The root FEN is
+    // required because a variation may be attached after a move that is not
+    // the move being replaced, and undo history is not a reliable branch
+    // boundary for those cases.
+    void push_variation(const std::string& root_fen = "");
     void pop_variation();
 
     std::string build() const;

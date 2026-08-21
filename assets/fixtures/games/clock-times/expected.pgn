@@ -1,9 +1,14 @@
-[Event "Unknown"]
-[Site "Unknown"]
-[Date "Unknown"]
-[Round "Unknown"]
-[White "Unknown"]
-[Black "Unknown"]
+[Event "European Club Cup 2025"]
+[Site "Rhodes, Greece"]
+[Date "2025.10.22"]
+[Round "4"]
+[White "Warmerdam, Max"]
+[Black "Gukesh, Dommaraju"]
+[Result "0-1"]
+[WhiteElo "2582"]
+[BlackElo "2752"]
+[ECO "D30"]
+[Opening "Queen's Gambit Declined"]
 
 1. d4 {[%clk 1:30:34]} d5 {[%clk 1:30:56]}
 2. c4 {[%clk 1:30:59]} e6 {[%clk 1:31:21]}

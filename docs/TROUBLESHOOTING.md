@@ -122,9 +122,33 @@ CUDA/NPP is optional. The project compiles and runs through CPU fallbacks when `
 
 Opening metadata requires network access to Lichess Explorer on Windows. Results are cached under `%APPDATA%\ChessTubeAnalyzer\openings_cache.json`. If the service requires authentication, configure the optional token under **Advanced > Online Services**. A network failure does not prevent local move extraction or PGN generation.
 
+## Master-game identity metadata is unavailable
+
+Event, Site, player, result, rating, ECO, and Opening headers are resolved
+only when Lichess returns a candidate whose complete master-game move/FEN
+sequence matches the verified main line. Analysis branches and reverted video
+states are excluded from this comparison. Check network access, the Lichess
+cache, and the log's metadata-resolution error before investigating the
+extractor. A missing or ambiguous match is non-fatal: PGN export falls back to
+generic identity headers and keeps any opening metadata that was resolved.
+
+The integration tests use the same full-main-line resolver. If they fail at
+metadata lookup while move extraction succeeds, confirm that Lichess is
+reachable and that the fixture's `expected.pgn` contains the intended metadata
+contract; do not add a fixture-specific identity override.
+
+## Non-ASCII input or output paths fail
+
+On Windows, keep the original Qt-selected path and avoid converting it through
+the active ANSI code page. The application performs the required UTF-8/native
+conversion for filesystem and FFmpeg operations. If a path still fails, try a
+shorter directory and confirm that the input, output, template, and temporary
+directories are writable. The resulting analysis video and optional standalone
+SRT use the configured output directory.
+
 ## Where outputs and settings are stored
 
-PGN and analysis-video paths follow the selected output setting: beside the source video by default or in the configured custom directory. Settings, logs, opening cache, and templates are stored under the application's `%APPDATA%\ChessTubeAnalyzer` location. A successful cleanup option moves the source video to the trash; failed or cancelled processing preserves it.
+PGN, analysis-video, and optional standalone SRT paths follow the selected output setting: beside the source video by default or in the configured custom directory. Settings, logs, opening cache, and templates are stored under the application's `%APPDATA%\ChessTubeAnalyzer` location. A successful cleanup option moves the source video to the trash; failed or cancelled processing preserves it.
 
 Application logs are in `%APPDATA%\ChessTubeAnalyzer\logs`; per-video job
 logs are in its `jobs` subdirectory. **Advanced** logging controls configure

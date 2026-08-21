@@ -101,6 +101,21 @@ compiled. Integration expectations come from sample PGN files. Production code
 must remain fixture-independent; the runner scans `src/` and `include/` for
 known fixture-specific override patterns before running.
 
+Every test that analyzes a video under the external media `games` directory
+also validates the fixture's PGN metadata contract. A missing, empty, or
+malformed Event, Site, Date, Round, White, Black, Result, WhiteElo, BlackElo,
+ECO, or Opening header fails the video test. The local
+`AllAnswerKeyPgnsContainMetadata` test checks this contract without decoding a
+video; video integration tests additionally perform the live Lichess lookup.
+
+The metadata comparison is intentionally separate from extraction correctness:
+the video test first verifies legal moves, timestamps, clocks, and variations,
+then resolves the verified main-line FEN/move sequence against Lichess master
+games. Do not use the analysis-inclusive `video_fens` sequence for identity
+matching, because it may contain reverts and branches. A network or service
+failure should be reported as a metadata-lookup failure, not hidden by
+relaxing the answer-key contract.
+
 ## Diagnostic replay
 
 For a long fixture, bound the replay and write a timestamp window to TSV:
@@ -208,9 +223,9 @@ python tests\run_tests.py --compare-source-runs ^
 
 The source-run comparison is exact for reducer and detector evidence. It
 ignores only diagnostic artifact paths, which are expected to differ between
-runs, and reports the first differing JSON path when determinism fails. A
-bounded Full Game 1 window was repeated twice; both runs emitted 44 records and
-matched with no first divergence.
+runs, and reports the first differing JSON path when determinism fails. Record
+the result from the current build and fixture; run-specific record counts do
+not belong in the architecture or release contract.
 
 The first-divergence workflow can be exercised without changing production
 extraction by enabling the test-only failure probe:
@@ -225,9 +240,9 @@ fail and the runner creates a diagnostic failure bundle. It is useful for
 validating the reporting path, not for changing expected results in normal
 tests.
 
-The diagnostic validation was also run from a clean `build_tests_clean`
-directory. The dependency source was kept local so the command does not rely
-on network access:
+For a clean diagnostic validation, use a fresh `build_tests_clean` directory.
+The dependency source can be kept local so the build does not rely on a
+GoogleTest download:
 
 ```powershell
 $env:TEMP = "E:\coding_workspaces\CPP\chess-tube-analyzer\tmp\msbuild-temp"
@@ -245,18 +260,13 @@ python tests\run_tests.py --replay-bundle `
   build_tests_clean\diagnostics\first_divergence_bundle
 ```
 
-The build succeeded, the focused C++ diagnostics set passed 5/5, the Python
-diagnostic contracts passed 52/52, and the intentional bounded probe produced
-a valid bundle whose replay comparison passed. The Python diagnostic contract
-suite now contains 52 tests. The underlying integration test
-still fails intentionally because the probe stops before the expected full
-game, which is the expected result for this validation workflow.
-
-The current full-game seed reaches its first ordinary extraction divergence
-around ply 36, so a normal run may still fail while producing useful evidence.
-The induced run is a separate workflow check: it swaps only test-side expected
-moves and confirms that the first-divergence report, bounded JSONL, and bundle
-are created without changing production extraction.
+Report the focused C++ test count, Python test count, and replay-bundle result
+from the current environment in the handoff. The induced run is a separate
+workflow check: it swaps only test-side expected moves and confirms that the
+first-divergence report, bounded JSONL, and bundle are created without
+changing production extraction. A bounded run that stops before the expected
+fixture endpoint is expected to fail its integration assertion; that failure
+is useful only when the bundle itself is the subject of the test.
 
 Diagnostic quality reports preserve uncertainty as separate fields. Every
 record is normalized to `ACCEPT`, `WAIT_FOR_SETTLE`, `REJECT`, `AMBIGUOUS`,

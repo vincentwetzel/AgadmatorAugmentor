@@ -32,6 +32,8 @@ public:
      * @param stockfish_results Analysis data from Stockfish
      * @param arrow_thickness_pct Thickness of engine arrows as a percentage
      * @param overlay_config The visual overlay configuration (positions, scales, toggles)
+     * @param include_subtitles Whether to embed the generated move-subtitle track
+     * @param export_threads Maximum FFmpeg threads used for video composition and encoding
      * @param cancel_flag Atomic flag to signal cancellation
      * @param progress_callback Optional callback to report completion percentage and status text
      */
@@ -44,6 +46,8 @@ public:
                                  const std::vector<std::string>& opening_names,
                                  int arrow_thickness_pct,
                                  const VideoOverlayConfig& overlay_config,
+                                 bool include_subtitles,
+                                 int export_threads,
                                  std::atomic<bool>* cancel_flag,
                                  std::function<void(int, const std::string&)> progress_callback = nullptr);
 

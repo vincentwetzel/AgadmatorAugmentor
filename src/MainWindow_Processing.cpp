@@ -163,7 +163,7 @@ void MainWindow::onStartCancelClicked() {
     } else {
         if (!hasQueuedItems()) { appendLog("Error: Please add at least one queued video to process."); return; }
         auto settings = gatherSettings();
-        if (!settings.generatePgn && !settings.enableStockfish && !settings.generateAnalysisVideo) { appendLog("Error: No output options selected. Please select at least one of the generation modes."); return; }
+        if (!settings.generatePgn && !settings.enableStockfish && !settings.generateAnalysisVideo && !settings.exportExternalSubtitles) { appendLog("Error: No output options selected. Please select at least one of the generation modes."); return; }
 
         isProcessing_ = true;
         cancelRequested_ = false;

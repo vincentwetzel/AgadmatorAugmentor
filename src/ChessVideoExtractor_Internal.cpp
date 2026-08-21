@@ -194,6 +194,63 @@ void adjust_sliding_target(int& to_sq, const char*& to_name, int from_sq, const 
         return piece != ' ' && piece != '.';
     };
 
+    // A long slider candidate can overrun the registered landing by one
+    // square when its endpoint diff includes the moving-piece shadow.  When
+    // that far endpoint has no yellow registration, inspect the intervening
+    // legal squares before accepting it.  This is deliberately asymmetric:
+    // an already registered far endpoint remains authoritative, so a normal
+    // long rook or queen move cannot be shortened by path noise.
+    int line_step = 0;
+    if (from_rank == to_rank && to_file != from_file) {
+        line_step = to_file > from_file ? 1 : -1;
+    } else if (from_file == to_file && to_rank != from_rank) {
+        line_step = to_rank > from_rank ? 8 : -8;
+    }
+    if (line_step != 0 && !is_occupied(board_map[to_sq]) &&
+        std::max(std::abs(to_file - from_file), std::abs(to_rank - from_rank)) > 1) {
+        const double endpoint_yellow = validation::check_yellowness(board_bgr, geo, to_name);
+        constexpr double kRegisteredEndpointYellow = 35.0;
+        constexpr double kEndpointYellowImprovement = 10.0;
+        if (endpoint_yellow < kRegisteredEndpointYellow) {
+            int registered_intermediate = -1;
+            double registered_yellow = endpoint_yellow;
+            for (int candidate_sq = to_sq - line_step;
+                 candidate_sq != from_sq;
+                 candidate_sq -= line_step) {
+                if (candidate_sq < 0 || candidate_sq >= 64 ||
+                    (line_step == 1 || line_step == -1) &&
+                        (candidate_sq >> 3) != from_rank) {
+                    break;
+                }
+                const char* candidate_name = utils::sq_name(candidate_sq);
+                char candidate_uci[5] = {
+                    from_name[0], from_name[1], candidate_name[0], candidate_name[1], '\0'};
+                try {
+                    (void)pos_ptr->parse_move(candidate_uci);
+                } catch (...) {
+                    continue;
+                }
+                const double candidate_yellow =
+                    validation::check_yellowness(board_bgr, geo, candidate_name);
+                if (candidate_yellow >= kRegisteredEndpointYellow &&
+                    candidate_yellow >= endpoint_yellow + kEndpointYellowImprovement &&
+                    candidate_yellow > registered_yellow) {
+                    registered_intermediate = candidate_sq;
+                    registered_yellow = candidate_yellow;
+                }
+            }
+            if (registered_intermediate >= 0) {
+                trace_endpoint_decision(
+                    "INTERMEDIATE_REGISTERED", registered_intermediate, endpoint_yellow,
+                    endpoint_yellow + sq_diffs[to_sq], registered_yellow,
+                    registered_yellow + sq_diffs[registered_intermediate], false);
+                to_sq = registered_intermediate;
+                to_name = utils::sq_name(registered_intermediate);
+                return;
+            }
+        }
+    }
+
     // During a slider animation the piece can be rendered on an empty
     // intermediate square before the registered landing square is visible.
     // A neighboring square may then have a larger yellow/color score purely

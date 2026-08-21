@@ -624,6 +624,59 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
         }
         const size_t incoming_count = var_data.moves.size();
+        // A short analysis continuation can be demoted before the outer
+        // analysis tail that leads to it.  When that outer tail arrives,
+        // merge the later continuation at its legally reconstructed terminal
+        // state so the result remains representable from a final main-line
+        // branch root.
+        if (!var_data.moves.empty() && !var_data.fens.empty() &&
+            !var_data.timestamps.empty()) {
+            try {
+                libchess::Position terminal_position(var_data.fens.front());
+                for (const std::string& move : var_data.moves) {
+                    terminal_position.makemove(terminal_position.parse_move(move));
+                }
+                const std::string terminal_key = visual_fen_key(terminal_position.get_fen());
+                bool merged_later_continuation = false;
+                for (auto existing_it = data.variations.begin();
+                     existing_it != data.variations.end() && !merged_later_continuation;
+                     ++existing_it) {
+                    auto& existing_siblings = existing_it->second;
+                    for (size_t existing_index = 0;
+                         existing_index < existing_siblings.size(); ++existing_index) {
+                        const VariationData& continuation = existing_siblings[existing_index];
+                        if (continuation.moves.empty() || continuation.fens.empty() ||
+                            continuation.timestamps.empty() ||
+                            visual_fen_key(continuation.fens.front()) != terminal_key ||
+                            continuation.timestamps.front() <= var_data.timestamps.back() + 0.05) {
+                            continue;
+                        }
+                        var_data.moves.insert(var_data.moves.end(),
+                                              continuation.moves.begin(), continuation.moves.end());
+                        var_data.timestamps.insert(var_data.timestamps.end(),
+                                                   continuation.timestamps.begin(), continuation.timestamps.end());
+                        var_data.fens.insert(var_data.fens.end(),
+                                             continuation.fens.begin(), continuation.fens.end());
+                        var_data.scores.insert(var_data.scores.end(),
+                                               continuation.scores.begin(), continuation.scores.end());
+                        var_data.clocks.insert(var_data.clocks.end(),
+                                               continuation.clocks.begin(), continuation.clocks.end());
+                        existing_siblings.erase(existing_siblings.begin() +
+                                                static_cast<std::ptrdiff_t>(existing_index));
+                        variation_trace_events.push_back(
+                            "kind=variation_terminal_continuation_joined;parent=" +
+                            std::to_string(parent_ply) + ";continuation_parent=" +
+                            std::to_string(existing_it->first) + ";moves=" +
+                            std::to_string(var_data.moves.size()));
+                        merged_later_continuation = true;
+                        break;
+                    }
+                }
+            } catch (...) {
+                // The ordinary variation validation below retains the
+                // original tail if its terminal state cannot be replayed.
+            }
+        }
         const size_t sibling_count_before = data.variations.contains(parent_ply)
             ? data.variations.at(parent_ply).size() : 0;
         prune_superseded_variations(parent_ply, var_data.moves);
@@ -964,6 +1017,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     std::optional<size_t> ignore_replay_reverts_before_ply;
     bool postgame_replay_mode = false;
     bool postgame_boundary_from_clock_gap = false;
+    bool persistent_young_inverse_in_branch = false;
     struct PreservedMainline {
         std::vector<std::string> moves;
         std::vector<double> timestamps;
@@ -1011,6 +1065,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         stale_clock_tail_start_ply.reset();
         suppressed_stale_branch = false;
         suppressed_stale_first_move.clear();
+        persistent_young_inverse_in_branch = false;
     };
     auto tail_has_unreliable_moved_clock = [&](size_t start_ply) {
         if (start_ply == 0 || start_ply >= data.clocks.size() ||
@@ -1925,6 +1980,174 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 if (best_history_idx >= 0 && best_history_idx < static_cast<int>(revert_history_ply_counts.size())) {
                     size_t best_ply = revert_history_ply_counts[best_history_idx];
 
+                    // Do not commit an undo solely because one settled frame
+                    // resembles an old board. A streamer can briefly render
+                    // a stale board before restoring the active position, or
+                    // while the real line is already producing its next move.
+                    // Look ahead for either case before mutating reducer
+                    // state.
+                    //
+                    // This is deliberately board-state based. It does not
+                    // consult fixture names, expected moves, or an opening
+                    // database, and it still allows a genuine reset to be
+                    // committed when the following frames belong to the old
+                    // position instead.
+                    std::optional<std::string> active_continuation;
+                    bool active_state_resumed = false;
+                    constexpr double kRevertContinuationLookaheadSeconds = 6.0;
+                    constexpr double kRevertActiveStateResumeMeanDiff = 4.0;
+                    constexpr double kRevertContinuationMinScore = 80.0;
+                    constexpr double kRevertContinuationMinYellowness = 28.0;
+                    constexpr double kRevertContinuationMinCombinedYellowness = 70.0;
+                    // Small rewinds are the normal analysis-line mechanism
+                    // and should retain their immediate revert semantics.
+                    // Confirmation is reserved for a board-level jump that
+                    // would otherwise discard a substantial verified prefix.
+                    constexpr size_t kConfirmedRevertMinimumPlyGap = 8;
+                    const bool substantial_rewind =
+                        data.moves.size() >= best_ply + kConfirmedRevertMinimumPlyGap;
+                    if (substantial_rewind &&
+                        data.fens.size() == data.moves.size() + 1 &&
+                        !revert_mgr.get_latest_gray().empty()) {
+                        const libchess::Position active_position(data.fens.back());
+                        cv::Mat future_diff;
+                        for (size_t lookahead = i + 1;
+                             lookahead < candidates.size(); ++lookahead) {
+                            const CandidateFrame& future_cf = candidates[lookahead];
+                            if (future_cf.t - t > kRevertContinuationLookaheadSeconds) {
+                                break;
+                            }
+                            if (future_cf.board_gray.empty()) {
+                                continue;
+                            }
+
+                            GPUAccelerator::absdiff(
+                                future_cf.board_gray, revert_mgr.get_latest_gray(), future_diff);
+                            const double future_active_mean = cv::mean(future_diff)[0];
+                            if (future_active_mean < kRevertActiveStateResumeMeanDiff) {
+                                active_state_resumed = true;
+                                trace_candidate(
+                                    "REVERT_DEFERRED_FOR_ACTIVE_STATE", t,
+                                    data.moves.size(), data.fens.back(), "", 0.0,
+                                    max_sd, 0.0, 0.0,
+                                    "history_index=" + std::to_string(best_history_idx) +
+                                    ";source_ply=" + std::to_string(best_ply) +
+                                    ";lookahead_t=" + std::to_string(future_cf.t) +
+                                    ";active_mean=" + std::to_string(future_active_mean));
+                                break;
+                            }
+                            if (future_cf.board_bgr.empty()) {
+                                continue;
+                            }
+                            const std::vector<double> future_sq_means =
+                                compute_all_square_means(future_diff, *geo_, margin_h_, margin_w_);
+                            const ExtractedMoveScore future_best =
+                                MoveScorer::score_moves_for_board(active_position, future_sq_means);
+                            if (future_best.from_sq < 0 || future_best.to_sq < 0 ||
+                                future_best.score < kRevertContinuationMinScore) {
+                                continue;
+                            }
+
+                            const char* future_from = utils::sq_name(future_best.from_sq);
+                            const char* future_to = utils::sq_name(future_best.to_sq);
+                            const double future_y_from = validation::check_yellowness(
+                                future_cf.board_bgr, *geo_, future_from);
+                            const double future_y_to = validation::check_yellowness(
+                                future_cf.board_bgr, *geo_, future_to);
+                            if (future_y_from < kRevertContinuationMinYellowness ||
+                                future_y_to < kRevertContinuationMinYellowness ||
+                                future_y_from + future_y_to <
+                                    kRevertContinuationMinCombinedYellowness) {
+                                continue;
+                            }
+
+                            std::string future_move = std::string(future_from) + future_to;
+                            if (future_best.promotion != '\0') {
+                                future_move += future_best.promotion;
+                            }
+                            try {
+                                libchess::Position validation_position(active_position);
+                                (void)validation_position.parse_move(future_move);
+                            } catch (...) {
+                                continue;
+                            }
+
+                            // A visually plausible successor must not keep a
+                            // stale analysis branch alive when its mover's
+                            // clock has clearly jumped forward. The ordinary
+                            // reducer independently confirms this condition
+                            // before accepting a move; here one direct reading
+                            // is sufficient only to decline a speculative
+                            // lookahead and let the observed historical reset
+                            // be reduced normally.
+                            const std::string continuation_moved_player =
+                                active_position.turn() == libchess::Side::White
+                                    ? "white" : "black";
+                            const size_t continuation_clock_index =
+                                continuation_moved_player == "white" ? 0 : 1;
+                            const auto continuation_previous_seconds =
+                                parse_clock_seconds(last_moved_clock[continuation_clock_index]);
+                            if (!future_cf.clock_top_bgr.empty() &&
+                                !future_cf.clock_bot_bgr.empty() &&
+                                continuation_previous_seconds) {
+                                const std::string continuation_active =
+                                    detect_active_clock_from_rois(
+                                        future_cf.clock_top_bgr,
+                                        future_cf.clock_bot_bgr);
+                                const ClockState continuation_clocks =
+                                    extract_clocks_for_moved_player_from_rois(
+                                        future_cf.clock_top_bgr,
+                                        future_cf.clock_bot_bgr,
+                                        continuation_moved_player, nullptr,
+                                        continuation_active);
+                                const std::string& continuation_clock =
+                                    continuation_moved_player == "white"
+                                        ? continuation_clocks.white_time
+                                        : continuation_clocks.black_time;
+                                const auto continuation_seconds =
+                                    parse_clock_seconds(continuation_clock);
+                                if (continuation_seconds &&
+                                    *continuation_seconds -
+                                        *continuation_previous_seconds >= 180) {
+                                    trace_candidate(
+                                        "REVERT_CONTINUATION_CLOCK_REGRESSION",
+                                        t, data.moves.size(), data.fens.back(),
+                                        future_move, future_best.score, max_sd,
+                                        future_y_from, future_y_to,
+                                        "history_index=" +
+                                            std::to_string(best_history_idx) +
+                                        ";source_ply=" +
+                                            std::to_string(best_ply) +
+                                        ";lookahead_t=" +
+                                            std::to_string(future_cf.t) +
+                                        ";previous=" +
+                                            last_moved_clock[continuation_clock_index] +
+                                        ";current=" + continuation_clock);
+                                    continue;
+                                }
+                            }
+                            if (!active_continuation) {
+                                active_continuation = std::move(future_move);
+                                trace_candidate(
+                                    "REVERT_DEFERRED_FOR_FUTURE_CONTINUATION", t,
+                                    data.moves.size(), data.fens.back(), *active_continuation,
+                                    future_best.score, max_sd, future_y_from, future_y_to,
+                                    "history_index=" + std::to_string(best_history_idx) +
+                                    ";source_ply=" + std::to_string(best_ply) +
+                                    ";lookahead_t=" + std::to_string(future_cf.t));
+                            }
+                        }
+                    }
+                    if (active_state_resumed) {
+                        // This candidate is the transient old-board flash.
+                        // Keeping the verified state intact is justified only
+                        // by a direct reappearance of that board. A plausible
+                        // move from the active state is not sufficient: an
+                        // analysis line can continue immediately after a
+                        // genuine reset has appeared on screen.
+                        continue;
+                    }
+
                     // When the UI returns to a canonical historical successor,
                     // a short analysis alternative can have been shown from
                     // that successor's immediate predecessor.  Recover only
@@ -1983,11 +2206,13 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                     alternative_y_from + alternative_y_to >=
                                         kAdjacentAlternativeMinCombinedYellowness;
                                 bool legal_alternative = false;
+                                std::string alternative_after_fen;
                                 try {
                                     libchess::Position alternative_position(
                                         data.fens[alternative_parent]);
                                     alternative_position.makemove(
                                         alternative_position.parse_move(alternative_move));
+                                    alternative_after_fen = alternative_position.get_fen();
                                     legal_alternative = true;
                                 } catch (...) {
                                     legal_alternative = false;
@@ -2015,7 +2240,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                         add_variation(alternative_parent,
                                                       std::move(alternative_variation));
                                         data.video_timestamps.push_back(t);
-                                        data.video_fens.push_back(data.fens[alternative_parent]);
+                                        data.video_fens.push_back(alternative_after_fen);
                                         data.video_moves.push_back(alternative_move);
                                         trace_candidate(
                                             "ADJACENT_HISTORICAL_VARIATION", t,
@@ -2447,6 +2672,23 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     continue;
                 }
 
+                // Replacing a short transient tail is the normal analysis
+                // handoff case.  Replacing a long, already verified tail is
+                // much riskier: a later analysis diagram can happen to match
+                // an old position and score only marginally above the active
+                // transition.  Demand decisive visual separation before
+                // demoting that much chronology.  This remains purely
+                // state/observation driven and still permits a genuine reset
+                // whose replacement transition is overwhelmingly stronger.
+                constexpr size_t kLongHandoffTailMinimumPlies = 8;
+                constexpr double kLongHandoffScoreAdvantage = 25.0;
+                const size_t handoff_tail_plies = data.moves.size() - source_ply;
+                if (handoff_tail_plies >= kLongHandoffTailMinimumPlies &&
+                    historical_move.score < active_visual_best.score +
+                        kLongHandoffScoreAdvantage) {
+                    continue;
+                }
+
                 // A stale branch can be visually closer to the current frame
                 // than the retained source even when the source transition is
                 // much more strongly registered.  Do not discard that source
@@ -2458,8 +2700,60 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     source_ply == preserved_replay_mainline->replay_parent + 1 &&
                     historical_move.score >= active_visual_best.score + 30.0 &&
                     historical_full_mean < active_full_mean + 2.0;
+                bool clock_rejoins_historical_source = false;
+                if (has_clocks && source_ply < data.clocks.size() &&
+                    !cf.clock_top_bgr.empty() && !cf.clock_bot_bgr.empty()) {
+                    const bool historical_mover_is_white =
+                        libchess::Position(data.fens[source_ply]).turn() ==
+                        libchess::Side::White;
+                    const std::string historical_mover =
+                        historical_mover_is_white ? "white" : "black";
+                    const ClockState observed_handoff_clocks =
+                        extract_clocks_for_moved_player_from_rois(
+                            cf.clock_top_bgr, cf.clock_bot_bgr,
+                            historical_mover, nullptr);
+                    const std::string& observed_clock = historical_mover_is_white
+                        ? observed_handoff_clocks.white_time
+                        : observed_handoff_clocks.black_time;
+                    const std::string& source_clock = historical_mover_is_white
+                        ? data.clocks[source_ply].white_time
+                        : data.clocks[source_ply].black_time;
+                    const std::string& active_clock = historical_mover_is_white
+                        ? last_moved_clock[0]
+                        : last_moved_clock[1];
+                    const auto observed_seconds = parse_clock_seconds(observed_clock);
+                    const auto source_seconds = parse_clock_seconds(source_clock);
+                    const auto active_seconds = parse_clock_seconds(active_clock);
+                    constexpr int kHistoricalClockRejoinToleranceSeconds = 10;
+                    constexpr int kHistoricalClockRegressionSeconds = 180;
+                    clock_rejoins_historical_source =
+                        observed_seconds && source_seconds && active_seconds &&
+                        std::abs(*observed_seconds - *source_seconds) <=
+                            kHistoricalClockRejoinToleranceSeconds &&
+                        *observed_seconds - *active_seconds >=
+                            kHistoricalClockRegressionSeconds;
+                }
+                // An analysis board can reset and immediately replay the
+                // same geometric move from an earlier state.  The active
+                // and historical candidates then share endpoints, so score
+                // alone cannot distinguish them; the old source can have a
+                // slightly larger whole-board residual from the discarded
+                // tail.  Accept that only for a short tail, a strong shared
+                // legal transition, and a still-close historical frame.  It
+                // keeps the recovery tied to observed board state rather
+                // than assuming a particular game or variation structure.
+                const bool same_transition_after_short_tail =
+                    handoff_tail_plies >= 2 && handoff_tail_plies <= 4 &&
+                    historical_move.from_sq == active_visual_best.from_sq &&
+                    historical_move.to_sq == active_visual_best.to_sq &&
+                    historical_move.promotion == active_visual_best.promotion &&
+                    historical_move.score >= 90.0 &&
+                    active_visual_best.score >= 90.0 &&
+                    historical_full_mean < active_full_mean + 1.75 &&
+                    clock_rejoins_historical_source;
                 if (historical_full_mean + 0.5 >= active_full_mean &&
-                    !decisive_historical_transition) {
+                    !decisive_historical_transition &&
+                    !same_transition_after_short_tail) {
                     continue;
                 }
 
@@ -3009,6 +3303,32 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             const double settle_start_t = t;
             const double initial_best_score = best.score;
             double visual_move_t = t;
+            // A capture landing can remain highlighted after the board has
+            // already advanced the capturing piece's opponent to its real
+            // reply. If that stale landing narrowly wins the initial score,
+            // the preceding capture origin also remains different from the
+            // settled board image. It is residual motion, not a third move,
+            // when a stronger legal retarget uses the same moving piece.
+            int stale_capture_previous_origin_sq = -1;
+            if (!data.moves.empty() && data.moves.back().size() >= 4 &&
+                best.score < kMinCoalescedFollowupScore) {
+                const std::string& previous_move = data.moves.back();
+                const int previous_from_sq =
+                    (previous_move[0] - 'a') + (previous_move[1] - '1') * 8;
+                const int previous_to_sq =
+                    (previous_move[2] - 'a') + (previous_move[3] - '1') * 8;
+                const std::array<char, 64> pre_move_board =
+                    utils::expand_fen(pos_ptr_->get_fen());
+                const char moving_piece = pre_move_board[best.from_sq];
+                const char target_piece = pre_move_board[best.to_sq];
+                const bool candidate_captures_enemy =
+                    target_piece != ' ' && target_piece != '.' &&
+                    std::isupper(static_cast<unsigned char>(moving_piece)) !=
+                        std::isupper(static_cast<unsigned char>(target_piece));
+                if (best.to_sq == previous_to_sq && candidate_captures_enemy) {
+                    stale_capture_previous_origin_sq = previous_from_sq;
+                }
+            }
             const auto settle_already_accepted = [&]() {
                 return diagnostic_evidence_context.settle_decision.rfind("accepted_", 0) == 0;
             };
@@ -3098,10 +3418,17 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                        (square_rank - origin_rank) * first_delta_file;
                         };
                         bool unrelated_motion = false;
+                        int unrelated_motion_square = -1;
+                        double unrelated_motion_diff = 0.0;
                         for (int sq = 0; sq < 64; ++sq) {
                             if (settle_sq_means[sq] > 25.0) { // Tolerate large piece shadow/animation spillover
                                 if (sq == settle_best_tmp.from_sq || sq == settle_best_tmp.to_sq) continue;
                                 if (sq == best.from_sq || sq == best.to_sq) continue;
+                                if (sq == stale_capture_previous_origin_sq &&
+                                    settle_best_tmp.from_sq == best.from_sq &&
+                                    settle_best_tmp.to_sq != best.to_sq) {
+                                    continue;
+                                }
                                 if (settle_best_tmp.from_sq == best.from_sq &&
                                     is_intermediate_slider_path_square(
                                         best.from_sq, best.to_sq, settle_best_tmp.to_sq, sq)) {
@@ -3123,6 +3450,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                 if (((best.to_sq & 7) | (best.from_sq & 0x38)) == sq) continue;
                                 
                                 unrelated_motion = true;
+                                unrelated_motion_square = sq;
+                                unrelated_motion_diff = settle_sq_means[sq];
                                 break;
                             }
                         }
@@ -3140,7 +3469,13 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                 "initial=" + move_name(best) +
                                 ";initial_score=" + std::to_string(best.score) +
                                 ";settle_score=" + std::to_string(settle_best_tmp.score) +
-                                ";unrelated=" + std::to_string(unrelated_motion ? 1 : 0));
+                                ";unrelated=" + std::to_string(unrelated_motion ? 1 : 0) +
+                                ";unrelated_square=" +
+                                (unrelated_motion_square >= 0
+                                    ? std::string(utils::sq_name(unrelated_motion_square))
+                                    : std::string("none")) +
+                                ";unrelated_diff=" +
+                                std::to_string(unrelated_motion_diff));
                         }
                         
                         const char settle_moving_piece = static_cast<char>(
@@ -3883,6 +4218,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
 
             bool accepted_strong_inverse = false;
+            bool accepted_persistent_young_inverse = false;
             const std::optional<size_t> recent_inverse_index =
                 extractor_detail::find_recent_inverse_move_index(data.moves, from_name, to_name);
             if (recent_inverse_index) {
@@ -3914,9 +4250,40 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                 // reverses has remained on screen long enough, or while an
                 // already-confirmed analysis replay is being reconstructed.
                 constexpr double kSettledInverseMinAgeSeconds = 10.0;
+                constexpr double kPersistentInverseMinAgeSeconds = 1.0;
+                constexpr double kPersistentInverseLookaheadSeconds = 4.0;
+                bool inverse_state_persists = false;
+                if (!sliding_inverse && !postgame_replay_branch &&
+                    !persistent_young_inverse_in_branch &&
+                    inverse_age < kSettledInverseMinAgeSeconds &&
+                    strong_registered_inverse && !immediate_inverse_bounce) {
+                    // A quick non-sliding return can be either a cursor/UI
+                    // artifact or the middle of a deliberately explored
+                    // analysis line.  Require the *observed post-move board*
+                    // to remain stable for a second before accepting it.  The
+                    // later exact board reset remains the authority that
+                    // demotes that provisional tail to a variation.
+                    for (size_t lookahead = i + 1;
+                         lookahead < candidates.size(); ++lookahead) {
+                        const CandidateFrame& future_cf = candidates[lookahead];
+                        const double age = future_cf.t - t;
+                        if (age > kPersistentInverseLookaheadSeconds) break;
+                        if (age < kPersistentInverseMinAgeSeconds ||
+                            future_cf.board_gray.empty()) continue;
+                        static thread_local cv::Mat future_inverse_diff;
+                        GPUAccelerator::absdiff(
+                            board_gray, future_cf.board_gray, future_inverse_diff);
+                        if (cv::mean(future_inverse_diff)[0] <
+                            kRevertFullImageMeanDiff) {
+                            inverse_state_persists = true;
+                            break;
+                        }
+                    }
+                }
                 const bool settled_non_sliding_inverse =
                     sliding_inverse || postgame_replay_branch ||
-                    inverse_age >= kSettledInverseMinAgeSeconds;
+                    inverse_age >= kSettledInverseMinAgeSeconds ||
+                    inverse_state_persists;
                 if (!strong_registered_inverse || immediate_inverse_bounce ||
                     !settled_non_sliding_inverse) {
                     if (trace_stream.is_open()) {
@@ -3934,13 +4301,16 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                             (!data.timestamps.empty()
                                 ? std::to_string(t - data.timestamps.back())
                                 : std::string{"-1"}) +
-                            ";inverse_age=" + std::to_string(inverse_age));
+                            ";inverse_age=" + std::to_string(inverse_age) +
+                            ";persists=" +
+                            std::to_string(inverse_state_persists ? 1 : 0));
                     }
                     validation_rejection_reason = "inverse_validation";
                     all_validations_passed = false;
                     break;
                 }
                 accepted_strong_inverse = true;
+                accepted_persistent_young_inverse = inverse_state_persists;
             }
 
             if (!data.moves.empty() && !data.timestamps.empty() && (t - data.timestamps.back()) < 1.0) {
@@ -3963,7 +4333,12 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         double y_to = validation::check_yellowness(board_bgr, *geo_, to_name);
                         strong_immediate_recapture =
                             recaptures_previous_destination && captures_enemy &&
-                            y_from >= 25.0 && y_to >= 35.0 && (y_from + y_to) >= 85.0;
+                            y_from >= 25.0 && y_to >= 35.0 && (y_from + y_to) >= 85.0 &&
+                            // The previous move's destination remains
+                            // highlighted during animation. Do not turn that
+                            // stale pair into a capture unless the board diff
+                            // itself is decisive.
+                            best.score >= 60.0;
                         if (!strong_immediate_recapture) {
                             validation_rejection_reason = "immediate_recapture_not_strong";
                             all_validations_passed = false;
@@ -4336,8 +4711,11 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             ClockState clocks;
             auto clock_start = std::chrono::steady_clock::now();
             std::string moved_player = (pos_ptr_->turn() == libchess::Side::White) ? "white" : "black";
+            const std::string expected_active_after_move =
+                (moved_player == "white") ? "black" : "white";
             const int moved_clock_idx = (moved_player == "white") ? 0 : 1;
             std::string previous_moved_clock = last_moved_clock[moved_clock_idx];
+            std::string direct_moved_clock;
             bool moved_time_observed = false;
             bool moved_time_missing = false;
             bool moved_time_contextually_reconciled = false;
@@ -4345,7 +4723,7 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             if (has_clocks && !cf.clock_top_bgr.empty() && !cf.clock_bot_bgr.empty()) {
                 clocks = extract_clocks_for_moved_player_from_rois(
                     cf.clock_top_bgr, cf.clock_bot_bgr, moved_player, clock_cache_.get(), active_clock_player);
-                const std::string direct_moved_clock =
+                direct_moved_clock =
                     (moved_player == "white") ? clocks.white_time : clocks.black_time;
                 // Keep direct OCR provenance separate from the contextual
                 // clock selected below. A contextual value can legitimately
@@ -4620,7 +4998,6 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     }
                 };
 
-                const std::string expected_active_after_move = (moved_player == "white") ? "black" : "white";
                 const std::string immediate_moved_clock = moved_clock_from(clocks);
                 const bool immediate_is_stale = immediate_moved_clock == previous_moved_clock;
                 const bool immediate_is_plausible = plausible_clock_after_move(immediate_moved_clock, previous_moved_clock);
@@ -4840,6 +5217,89 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                     all_validations_passed = false;
                     break;
                 }
+            }
+
+            // A stable forward jump in the moving-side clock cannot be a
+            // game move. OCR is allowed to be noisy, so require a stable UI
+            // active-side reading and a nearby independent clock reading
+            // before vetoing the visually legal candidate. Normally the
+            // active side has flipped, but an unchanged active side combined
+            // with the same confirmed jump is also reset evidence: a live
+            // move cannot leave its mover's clock running.
+            const auto direct_moved_seconds = parse_clock_seconds(direct_moved_clock);
+            const auto previous_direct_moved_seconds = parse_clock_seconds(previous_moved_clock);
+            const bool clock_active_side_supports_regression =
+                clocks.active_player == expected_active_after_move ||
+                clocks.active_player == moved_player;
+            if (has_clocks && direct_moved_seconds && previous_direct_moved_seconds &&
+                *direct_moved_seconds - *previous_direct_moved_seconds >= 180 &&
+                clock_active_side_supports_regression &&
+                !historical_handoff_clock_override) {
+                constexpr double kClockRegressionConfirmationWindowSeconds = 4.0;
+                constexpr int kClockRegressionMinimumConfirmations = 2;
+                int regression_confirmations = 1;
+                for (size_t lookahead = i + 1; lookahead < candidates.size(); ++lookahead) {
+                    const CandidateFrame& future_cf = candidates[lookahead];
+                    if (future_cf.t - t > kClockRegressionConfirmationWindowSeconds) {
+                        break;
+                    }
+                    if (future_cf.clock_top_bgr.empty() || future_cf.clock_bot_bgr.empty()) {
+                        continue;
+                    }
+                    const std::string future_active = detect_active_clock_from_rois(
+                        future_cf.clock_top_bgr, future_cf.clock_bot_bgr);
+                    if (future_active != clocks.active_player) {
+                        continue;
+                    }
+                    const ClockState future_clocks = extract_clocks_for_moved_player_from_rois(
+                        future_cf.clock_top_bgr, future_cf.clock_bot_bgr, moved_player, nullptr,
+                        future_active);
+                    const std::string& future_moved_clock =
+                        (moved_player == "white") ? future_clocks.white_time : future_clocks.black_time;
+                    const auto future_moved_seconds = parse_clock_seconds(future_moved_clock);
+                    if (!future_moved_seconds ||
+                        *future_moved_seconds - *previous_direct_moved_seconds < 180 ||
+                        std::abs(*future_moved_seconds - *direct_moved_seconds) > 90) {
+                        continue;
+                    }
+                    ++regression_confirmations;
+                    if (regression_confirmations >= kClockRegressionMinimumConfirmations) {
+                        validation_rejection_reason = "confirmed_clock_regression";
+                        validation_rejection_detail =
+                            "previous=" + previous_moved_clock +
+                            ";current=" + direct_moved_clock +
+                            ";confirmations=" + std::to_string(regression_confirmations) +
+                            ";moved=" + moved_player +
+                            ";active=" + clocks.active_player;
+                        all_validations_passed = false;
+                        break;
+                    }
+                }
+                if (!all_validations_passed) {
+                    break;
+                }
+            }
+
+            // Keep a confirmed clock-vetoed root out of the main line while
+            // its unchanged visual registration remains on screen.  A later
+            // plausible reading clears this naturally by allowing the move
+            // through; otherwise the speculative observer records any real
+            // follow-up as a variation.
+            const bool replaying_clock_vetoed_root =
+                !clock_vetoed_tail.empty() &&
+                t - clock_vetoed_started_at <= 20.0 &&
+                last_validation_before_fen == clock_vetoed_base_fen &&
+                last_validation_move == clock_vetoed_tail.front().move;
+            const bool clock_still_regressed =
+                !direct_moved_seconds || !previous_direct_moved_seconds ||
+                *direct_moved_seconds - *previous_direct_moved_seconds >= 180;
+            if (replaying_clock_vetoed_root && clock_still_regressed) {
+                validation_rejection_reason = "pending_clock_vetoed_replay";
+                validation_rejection_detail =
+                    "age=" + std::to_string(t - clock_vetoed_started_at) +
+                    ";move=" + last_validation_move;
+                all_validations_passed = false;
+                break;
             }
             const std::string reconciled_moved_clock =
                 (moved_player == "white") ? clocks.white_time : clocks.black_time;
@@ -5112,6 +5572,19 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                     ";preferred=" + preferred_time);
                 }
             }
+            if (accepted_persistent_young_inverse) {
+                // A verified reset will decide whether this becomes an
+                // analysis variation.  Until then, keep ordinary reducer
+                // behavior but reject a second young inverse in the same
+                // unresolved tail: that pattern is normally stale UI state.
+                persistent_young_inverse_in_branch = true;
+                trace_candidate(
+                    "PERSISTENT_YOUNG_INVERSE", t, data.moves.size(),
+                    pos_ptr_->get_fen(), move_uci, best.score, max_sd,
+                    validation::check_yellowness(board_bgr, *geo_, from_name),
+                    validation::check_yellowness(board_bgr, *geo_, to_name),
+                    "matching_ply=" + std::to_string(*recent_inverse_index));
+            }
             data.moves.push_back(move_uci);
             data.timestamps.push_back(t);
             if (record_move_in_timeline) {
@@ -5336,7 +5809,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         }
         if (!all_validations_passed &&
             (validation_rejection_reason == "future_clock_drop" ||
-             validation_rejection_reason == "clock_jump") &&
+             validation_rejection_reason == "clock_jump" ||
+             validation_rejection_reason == "confirmed_clock_regression") &&
             last_validation_score >= 80.0 &&
             !last_validation_from.empty() && !last_validation_to.empty()) {
             const double vetoed_y_from = validation::check_yellowness(
@@ -5412,7 +5886,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
             }
         } else if (!all_validations_passed &&
                    (validation_rejection_reason == "future_clock_drop" ||
-                    validation_rejection_reason == "clock_jump")) {
+                    validation_rejection_reason == "clock_jump" ||
+                    validation_rejection_reason == "confirmed_clock_regression")) {
             trace_candidate(
                 "CLOCK_VETOED_BRANCH_SKIP", t, data.moves.size(),
                 pos_ptr_->get_fen(), last_validation_move,
@@ -5702,12 +6177,34 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                         if (inner.fens.empty() || inner.moves.empty()) continue;
 
                         std::optional<size_t> join_offset;
+                        bool joins_after_outer_tail = false;
                         for (size_t offset = 1;
                              offset < outer.fens.size() && offset < outer.moves.size();
                              ++offset) {
                             if (outer.fens[offset] == inner.fens.front()) {
                                 join_offset = offset;
                                 break;
+                            }
+                        }
+                        if (!join_offset && !outer.fens.empty()) {
+                            // VariationData records the position before each
+                            // move, so its terminal position is not stored.
+                            // Reconstruct it to retain a later analysis line
+                            // that starts immediately after the outer tail.
+                            try {
+                                libchess::Position terminal_position(outer.fens.front());
+                                for (const std::string& outer_move : outer.moves) {
+                                    terminal_position.makemove(
+                                        terminal_position.parse_move(outer_move));
+                                }
+                                if (visual_fen_key(terminal_position.get_fen()) ==
+                                    visual_fen_key(inner.fens.front())) {
+                                    join_offset = outer.moves.size();
+                                    joins_after_outer_tail = true;
+                                }
+                            } catch (...) {
+                                // The established root validation will reject
+                                // an unreplayable variation later.
                             }
                         }
                         if (!join_offset) continue;
@@ -5725,7 +6222,13 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
                                 inner.moves.begin(), inner.moves.end(),
                                 outer.moves[outer_move]) != inner.moves.end();
                         }
-                        if (!suffix_overlaps_continuation) continue;
+                        const bool terminal_continuation_is_later =
+                            joins_after_outer_tail && !outer.timestamps.empty() &&
+                            !inner.timestamps.empty() &&
+                            inner.timestamps.front() > outer.timestamps.back() + 0.05;
+                        if (!suffix_overlaps_continuation && !terminal_continuation_is_later) {
+                            continue;
+                        }
 
                         VariationData joined = outer;
                         joined.moves.resize(*join_offset);
@@ -5967,6 +6470,125 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         }
     }
 
+    // Replays and historical handoffs can create a variation while a
+    // temporary line is active, then restore a different durable main line.
+    // Re-anchor every retained branch to an equivalent final main-line state
+    // and rebuild its FEN sequence by legal replay. A branch with no such
+    // state is not representable by GameData's main-line parent map, so omit
+    // it rather than returning an invalid parent/FEN combination.
+    std::map<size_t, std::vector<VariationData>> normalized_variations;
+    for (const auto& [original_parent, variations] : data.variations) {
+        for (const VariationData& original_variation : variations) {
+            if (original_variation.moves.empty() ||
+                original_variation.timestamps.size() != original_variation.moves.size()) {
+                variation_trace_events.push_back(
+                    "kind=variation_unrepresentable_suppressed;parent=" +
+                    std::to_string(original_parent) + ";reason=" +
+                    (original_variation.moves.empty() ? "empty" : "timestamp_count"));
+                continue;
+            }
+
+            const std::string recorded_root = !original_variation.fens.empty()
+                ? original_variation.fens.front()
+                : (original_parent < data.fens.size()
+                    ? data.fens[original_parent] : std::string{});
+            std::optional<size_t> normalized_parent;
+            if (!recorded_root.empty()) {
+                for (size_t main_ply = 0; main_ply < data.fens.size(); ++main_ply) {
+                    if (visual_fen_key(data.fens[main_ply]) ==
+                        visual_fen_key(recorded_root)) {
+                        normalized_parent = main_ply;
+                        break;
+                    }
+                }
+            }
+            if (!normalized_parent) {
+                variation_trace_events.push_back(
+                    "kind=variation_unrepresentable_suppressed;parent=" +
+                    std::to_string(original_parent) + ";reason=root_not_in_final_mainline");
+                continue;
+            }
+
+            VariationData normalized_variation = original_variation;
+            size_t shared_main_prefix = 0;
+            while (shared_main_prefix < normalized_variation.moves.size() &&
+                   *normalized_parent + shared_main_prefix < data.moves.size() &&
+                   normalized_variation.moves[shared_main_prefix] ==
+                       data.moves[*normalized_parent + shared_main_prefix]) {
+                ++shared_main_prefix;
+            }
+            if (shared_main_prefix == normalized_variation.moves.size()) {
+                variation_trace_events.push_back(
+                    "kind=variation_exact_mainline_replay_suppressed;parent=" +
+                    std::to_string(original_parent) + ";main_ply=" +
+                    std::to_string(*normalized_parent) + ";plies=" +
+                    std::to_string(shared_main_prefix));
+                continue;
+            }
+            if (shared_main_prefix > 0) {
+                const size_t rebased_parent = *normalized_parent + shared_main_prefix;
+                normalized_variation.moves.erase(
+                    normalized_variation.moves.begin(),
+                    normalized_variation.moves.begin() + shared_main_prefix);
+                normalized_variation.timestamps.erase(
+                    normalized_variation.timestamps.begin(),
+                    normalized_variation.timestamps.begin() + shared_main_prefix);
+                if (normalized_variation.scores.size() >= shared_main_prefix) {
+                    normalized_variation.scores.erase(
+                        normalized_variation.scores.begin(),
+                        normalized_variation.scores.begin() + shared_main_prefix);
+                } else {
+                    normalized_variation.scores.clear();
+                }
+                if (normalized_variation.clocks.size() >= shared_main_prefix) {
+                    normalized_variation.clocks.erase(
+                        normalized_variation.clocks.begin(),
+                        normalized_variation.clocks.begin() + shared_main_prefix);
+                } else {
+                    normalized_variation.clocks.clear();
+                }
+                normalized_variation.fens.clear();
+                variation_trace_events.push_back(
+                    "kind=variation_shared_mainline_prefix_trimmed;from_parent=" +
+                    std::to_string(*normalized_parent) + ";to_parent=" +
+                    std::to_string(rebased_parent) + ";plies=" +
+                    std::to_string(shared_main_prefix));
+                *normalized_parent = rebased_parent;
+            }
+            try {
+                libchess::Position variation_position(data.fens[*normalized_parent]);
+                std::vector<std::string> canonical_fens;
+                canonical_fens.reserve(normalized_variation.moves.size());
+                for (const std::string& move : normalized_variation.moves) {
+                    canonical_fens.push_back(variation_position.get_fen());
+                    variation_position.makemove(variation_position.parse_move(move));
+                }
+                normalized_variation.fens = std::move(canonical_fens);
+            } catch (...) {
+                variation_trace_events.push_back(
+                    "kind=variation_unrepresentable_suppressed;parent=" +
+                    std::to_string(original_parent) + ";reason=illegal_from_final_root");
+                continue;
+            }
+
+            if (normalized_variation.scores.size() > normalized_variation.moves.size()) {
+                normalized_variation.scores.resize(normalized_variation.moves.size());
+            }
+            if (normalized_variation.clocks.size() > normalized_variation.moves.size()) {
+                normalized_variation.clocks.resize(normalized_variation.moves.size());
+            }
+            if (*normalized_parent != original_parent) {
+                variation_trace_events.push_back(
+                    "kind=variation_reanchored;from_parent=" +
+                    std::to_string(original_parent) + ";to_parent=" +
+                    std::to_string(*normalized_parent));
+            }
+            normalized_variations[*normalized_parent].push_back(
+                std::move(normalized_variation));
+        }
+    }
+    data.variations = std::move(normalized_variations);
+
     // A variation whose opening moved clock was completely unreadable must
     // not manufacture annotations from a cached parent clock. A parsed but
     // temporally suspect reading is different: it still identifies the
@@ -6059,7 +6681,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     // verified state graph may be added.
     struct DurableTimelineObservation {
         std::string move;
-        std::string fen;
+        std::string before_fen;
+        std::string after_fen;
         double timestamp = 0.0;
     };
     std::vector<DurableTimelineObservation> durable_observations;
@@ -6067,53 +6690,121 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
     for (size_t move_index = 0; move_index < data.moves.size(); ++move_index) {
         durable_observations.push_back({
             data.moves[move_index],
+            data.fens[move_index],
             move_index + 1 < data.fens.size() ? data.fens[move_index + 1] : data.fens.back(),
             move_index < data.timestamps.size() ? data.timestamps[move_index] : 0.0});
     }
     for (const auto& [parent_ply, variations] : data.variations) {
         for (const VariationData& variation : variations) {
+            const std::string variation_root_fen = !variation.fens.empty()
+                ? variation.fens.front()
+                : (parent_ply < data.fens.size() ? data.fens[parent_ply] : std::string{});
+            const bool variation_has_terminal_fen =
+                variation.fens.size() == variation.moves.size() + 1;
             for (size_t move_index = 0; move_index < variation.moves.size(); ++move_index) {
+                std::string before_fen;
+                std::string after_fen;
+                if (!variation_root_fen.empty()) {
+                    try {
+                        libchess::Position variation_position(variation_root_fen);
+                        for (size_t replay_index = 0; replay_index <= move_index; ++replay_index) {
+                            if (replay_index == move_index) {
+                                before_fen = variation_position.get_fen();
+                            }
+                            variation_position.makemove(
+                                variation_position.parse_move(variation.moves[replay_index]));
+                        }
+                        after_fen = variation_position.get_fen();
+                    } catch (...) {
+                        // add_variation validates legal paths before they reach
+                        // this reconciliation pass. Keep the recorded state as
+                        // a diagnostic fallback if an older branch lacks a
+                        // replayable root.
+                        before_fen = move_index < variation.fens.size()
+                            ? variation.fens[move_index] : variation_root_fen;
+                        after_fen = move_index < variation.fens.size()
+                            ? (variation_has_terminal_fen && move_index + 1 < variation.fens.size()
+                                ? variation.fens[move_index + 1] : variation.fens[move_index])
+                            : variation_root_fen;
+                    }
+                }
                 durable_observations.push_back({
                     variation.moves[move_index],
-                    move_index < variation.fens.size() ? variation.fens[move_index] :
-                        (parent_ply < data.fens.size() ? data.fens[parent_ply] : data.fens.back()),
+                    before_fen.empty() ? (parent_ply < data.fens.size()
+                        ? data.fens[parent_ply] : data.fens.back()) : before_fen,
+                    after_fen.empty() ? (parent_ply < data.fens.size()
+                        ? data.fens[parent_ply] : data.fens.back()) : after_fen,
                     move_index < variation.timestamps.size() ? variation.timestamps[move_index] :
                         (parent_ply < data.timestamps.size() ? data.timestamps[parent_ply] : 0.0)});
             }
         }
     }
-    std::unordered_map<std::string, int> timeline_move_counts;
-    for (const std::string& move : data.video_moves) {
-        if (move != "REVERT") ++timeline_move_counts[move];
-    }
-    size_t reconciled_timeline_moves = 0;
-    for (const DurableTimelineObservation& observation : durable_observations) {
-        int& available = timeline_move_counts[observation.move];
-        if (available > 0) {
-            --available;
-            continue;
+    struct TimelineEntry {
+        std::string before_fen;
+        std::string after_fen;
+        double timestamp = 0.0;
+        std::string move;
+    };
+    std::vector<TimelineEntry> timeline;
+    timeline.reserve(data.video_moves.size() + data.variations.size());
+    std::vector<bool> durable_observation_used(durable_observations.size(), false);
+    bool timeline_fens_repaired = false;
+    for (size_t index = 0; index < data.video_moves.size(); ++index) {
+        const double video_timestamp = index < data.video_timestamps.size()
+            ? data.video_timestamps[index] : 0.0;
+        const std::string existing_before_fen = index < data.video_fens.size()
+            ? data.video_fens[index]
+            : (data.video_fens.empty() ? std::string{} : data.video_fens.back());
+        const std::string existing_after_fen = index + 1 < data.video_fens.size()
+            ? data.video_fens[index + 1]
+            : (data.video_fens.empty() ? std::string{} : data.video_fens.back());
+        size_t best_observation = durable_observations.size();
+        double best_timestamp_distance = std::numeric_limits<double>::max();
+        if (data.video_moves[index] != "REVERT") {
+            for (size_t observation_index = 0;
+                 observation_index < durable_observations.size(); ++observation_index) {
+                if (durable_observation_used[observation_index] ||
+                    durable_observations[observation_index].move != data.video_moves[index]) {
+                    continue;
+                }
+                const double observation_timestamp = durable_observations[observation_index].timestamp;
+                const double timestamp_distance =
+                    std::isfinite(video_timestamp) && std::isfinite(observation_timestamp)
+                        ? std::abs(video_timestamp - observation_timestamp) : 0.0;
+                if (best_observation == durable_observations.size() ||
+                    timestamp_distance < best_timestamp_distance) {
+                    best_observation = observation_index;
+                    best_timestamp_distance = timestamp_distance;
+                }
+            }
         }
-        data.video_moves.push_back(observation.move);
-        data.video_fens.push_back(observation.fen);
-        data.video_timestamps.push_back(observation.timestamp);
+
+        std::string before_fen = existing_before_fen;
+        std::string after_fen = existing_after_fen;
+        if (best_observation < durable_observations.size()) {
+            durable_observation_used[best_observation] = true;
+            before_fen = durable_observations[best_observation].before_fen;
+            after_fen = durable_observations[best_observation].after_fen;
+            timeline_fens_repaired = timeline_fens_repaired ||
+                before_fen != existing_before_fen || after_fen != existing_after_fen;
+        }
+        timeline.push_back({
+            before_fen,
+            after_fen,
+            video_timestamp,
+            data.video_moves[index]});
+    }
+
+    size_t reconciled_timeline_moves = 0;
+    for (size_t observation_index = 0;
+         observation_index < durable_observations.size(); ++observation_index) {
+        if (durable_observation_used[observation_index]) continue;
+        const DurableTimelineObservation& observation = durable_observations[observation_index];
+        timeline.push_back({observation.before_fen, observation.after_fen,
+                            observation.timestamp, observation.move});
         ++reconciled_timeline_moves;
     }
-    if (reconciled_timeline_moves > 0) {
-        struct TimelineEntry {
-            std::string fen;
-            double timestamp = 0.0;
-            std::string move;
-        };
-        std::vector<TimelineEntry> timeline;
-        timeline.reserve(data.video_moves.size());
-        for (size_t index = 0; index < data.video_moves.size(); ++index) {
-            timeline.push_back({
-                index + 1 < data.video_fens.size()
-                    ? data.video_fens[index + 1]
-                    : (data.video_fens.empty() ? std::string{} : data.video_fens.back()),
-                index < data.video_timestamps.size() ? data.video_timestamps[index] : 0.0,
-                data.video_moves[index]});
-        }
+    if (reconciled_timeline_moves > 0 || timeline_fens_repaired) {
         std::stable_sort(timeline.begin(), timeline.end(),
                          [](const TimelineEntry& left, const TimelineEntry& right) {
                              return left.timestamp < right.timestamp;
@@ -6129,7 +6820,8 @@ GameData ChessVideoExtractor::extract_moves_from_video(const std::string& video_
         data.video_moves.reserve(timeline.size());
         data.video_fens.push_back(initial_video_fen);
         for (const TimelineEntry& entry : timeline) {
-            data.video_fens.push_back(entry.fen);
+            data.video_fens.back() = entry.before_fen;
+            data.video_fens.push_back(entry.after_fen);
             data.video_timestamps.push_back(entry.timestamp);
             data.video_moves.push_back(entry.move);
         }

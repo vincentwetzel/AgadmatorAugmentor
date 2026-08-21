@@ -29,6 +29,7 @@ std::function<void(const std::string&)> LichessSyncHelper::getFenCallback() {
 
 void LichessSyncHelper::waitAndProcess(const GameData& gameData, std::atomic<bool>* cancelFlag) {
     emit logMessage("Waiting for background Lichess opening data to finish...");
+    results_ = {};
 
     std::atomic<bool> fetcher_done{false};
     std::thread monitor_thread([this, &fetcher_done, cancelFlag, &gameData]() {
@@ -41,6 +42,10 @@ void LichessSyncHelper::waitAndProcess(const GameData& gameData, std::atomic<boo
             while (fen_idx < gameData.video_fens.size()) {
                 LichessOpening info = opening_fetcher_.get_opening(gameData.video_fens[fen_idx]);
                 if (info.total_games == -1) break; // Not fetched yet
+
+                if (info.game_metadata.found) {
+                    results_.gameMetadata = info.game_metadata;
+                }
 
                 QString move_str = (fen_idx < gameData.video_moves.size()) ? QString::fromStdString(gameData.video_moves[fen_idx]) : QString("FEN %1").arg(fen_idx);
 
@@ -91,7 +96,21 @@ void LichessSyncHelper::waitAndProcess(const GameData& gameData, std::atomic<boo
     if (monitor_thread.joinable()) {
         monitor_thread.join();
     }
-    
+
+    // Game identity must follow the verified main line. The video timeline
+    // intentionally includes analysis branches and REVERT markers, which are
+    // useful for overlays but cannot be replayed as one Lichess game.
+    opening_fetcher_.resolve_game_metadata(gameData.fens, gameData.moves);
+
+    results_.gameMetadata = {};
+    for (const std::string& fen : gameData.fens) {
+        const LichessOpening info = opening_fetcher_.get_opening(fen);
+        if (info.game_metadata.found) {
+            results_.gameMetadata = info.game_metadata;
+            break;
+        }
+    }
+
     results_.videoOpeningNames.assign(gameData.video_fens.size(), "");
     for (size_t i = 0; i < gameData.video_fens.size(); ++i) {
         LichessOpening info = opening_fetcher_.get_opening(gameData.video_fens[i]);

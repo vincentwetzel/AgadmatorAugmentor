@@ -92,6 +92,10 @@ void SettingsDialog::connectAutoSaveSignals() {
         }
         saveSettings();
     });
+    connect(ui.externalSubtitlesToggle, &ToggleSwitch::toggled, this, [this](bool checked) {
+        emit logMessage(checked ? "External SRT export enabled" : "External SRT export disabled");
+        saveSettings();
+    });
     connect(ui.analysisVideoToggle, &ToggleSwitch::toggled, this, [this](bool checked) { 
         emit logMessage(checked ? "Analysis Video generation enabled" : "Analysis Video generation disabled");
         if (!checked && ui.subtitlesToggle->isChecked()) {
@@ -108,6 +112,7 @@ void SettingsDialog::connectAutoSaveSignals() {
         saveSettings();
     });
     connect(ui.threadComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
+    connect(ui.videoExportThreadsComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     connect(ui.multiPvComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { saveSettings(); });
     
     connect(ui.stockfishPathBtn, &QPushButton::clicked, this, [this]() {

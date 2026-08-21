@@ -2,6 +2,7 @@
 #include "ChessVideoExtractor.h"
 #include "PgnWriter.h"
 #include "SysUtils.h"
+#include "ExtractorUtils.h"
 #include <CLI/CLI.hpp>
 #include <iostream>
 #include <fstream>
@@ -140,7 +141,7 @@ int main(int argc, char* argv[]) {
             std::filesystem::create_directories(out_path.parent_path());
         }
         
-        std::ofstream pgnFile(output);
+        std::ofstream pgnFile(cta::utils::utf8_to_path(output));
         if (pgnFile.is_open()) {
             pgnFile << pgnContent;
             pgnFile.close();

@@ -58,8 +58,10 @@ void SettingsDialog::loadSettings() {
     ui.pgnAnalysisToggle->setChecked(generatePgn && includePgnAnalysis);
     ui.pgnAnnotationsToggle->setChecked(generatePgn && includePgnMoveAnnotations && includePgnAnalysis);
     const bool generateSubtitles = settings.value("generateSubtitles", false).toBool();
+    const bool exportExternalSubtitles = settings.value("exportExternalSubtitles", false).toBool();
     const bool generateAnalysisVideo = settings.value("generateAnalysisVideo", false).toBool() || generateSubtitles;
     ui.subtitlesToggle->setChecked(generateSubtitles);
+    ui.externalSubtitlesToggle->setChecked(exportExternalSubtitles);
     ui.analysisVideoToggle->setChecked(generateAnalysisVideo);
     ui.videoAnnotationsToggle->setChecked(generateAnalysisVideo && settings.value("analysis/enableMoveAnnotations", false).toBool());
     ui.pgnAnalysisToggle->setEnabled(generatePgn);
@@ -71,6 +73,8 @@ void SettingsDialog::loadSettings() {
     ui.multiPvComboBox->setCurrentIndex(multiPvIdx >= 0 ? multiPvIdx : 2);
     const int defaultThreads = cta::SysUtils::max_hardware_thread_count();
     setThreadComboValue(ui.threadComboBox, settings.value("ffmpegThreads", defaultThreads).toInt());
+    const int defaultExportThreads = std::min(kDefaultVideoExportThreads, defaultThreads);
+    setThreadComboValue(ui.videoExportThreadsComboBox, settings.value("videoExportThreads", defaultExportThreads).toInt());
     
     { int idx = ui.depthComboBox->findData(settings.value("stockfishDepth", 15).toInt()); ui.depthComboBox->setCurrentIndex(idx >= 0 ? idx : ui.depthComboBox->findData(15)); }
     { int idx = ui.timeComboBox->findData(settings.value("stockfishTime", 0).toInt()); ui.timeComboBox->setCurrentIndex(idx >= 0 ? idx : ui.timeComboBox->findData(0)); }
@@ -139,9 +143,11 @@ void SettingsDialog::saveSettings() {
     settings.setValue("analysis/includePgnAnalysis", ui.pgnAnalysisToggle->isChecked());
     settings.setValue("pgnAnnotationsToggle", ui.pgnAnnotationsToggle->isChecked());
     settings.setValue("generateSubtitles", ui.subtitlesToggle->isChecked());
+    settings.setValue("exportExternalSubtitles", ui.externalSubtitlesToggle->isChecked());
     settings.setValue("generateAnalysisVideo", ui.analysisVideoToggle->isChecked());
     settings.setValue("multiPv", ui.multiPvComboBox->currentData().toInt());
     settings.setValue("ffmpegThreads", ui.threadComboBox->currentData().toInt());
+    settings.setValue("videoExportThreads", ui.videoExportThreadsComboBox->currentData().toInt());
     settings.setValue("themeMode", ui.themeComboBox->currentIndex());
     settings.setValue("analysis/enableMoveAnnotations", ui.videoAnnotationsToggle->isChecked());
     settings.setValue("removeOriginalVideo", ui.removeOriginalToggle->isChecked());
@@ -176,11 +182,13 @@ void SettingsDialog::populateSettings(ProcessingSettings& s) const {
     s.includePgnMoveAnnotations = ui.pgnExportToggle->isChecked() && ui.pgnAnalysisToggle->isChecked() && ui.pgnAnnotationsToggle->isChecked();
     s.includePgnAnalysis = ui.pgnExportToggle->isChecked() && (ui.pgnAnalysisToggle->isChecked() || s.includePgnMoveAnnotations);
     s.generateSubtitles = ui.subtitlesToggle->isChecked();
+    s.exportExternalSubtitles = ui.externalSubtitlesToggle->isChecked();
     s.enableMoveAnnotations = ui.analysisVideoToggle->isChecked() && enableMoveAnnotations;
     s.enableStockfish = s.includePgnAnalysis || s.includePgnMoveAnnotations || enableMoveAnnotations;
     s.generateAnalysisVideo = ui.analysisVideoToggle->isChecked() || ui.subtitlesToggle->isChecked();
     s.multiPv = ui.multiPvComboBox->currentData().toInt();
     s.ffmpegThreads = ui.threadComboBox->currentData().toInt();
+    s.videoExportThreads = ui.videoExportThreadsComboBox->currentData().toInt();
     s.stockfishDepth = ui.depthComboBox->currentData().toInt();
     s.stockfishTime = ui.timeComboBox->currentData().toInt();
     s.stockfishNodes = ui.nodesComboBox->currentData().toInt();
@@ -203,12 +211,14 @@ void SettingsDialog::applySettingsToUi(const ProcessingSettings& settings) {
     ui.pgnAnalysisToggle->setEnabled(settings.generatePgn);
     ui.pgnAnnotationsToggle->setEnabled(settings.generatePgn && settings.includePgnAnalysis);
     ui.subtitlesToggle->setChecked(settings.generateSubtitles);
+    ui.externalSubtitlesToggle->setChecked(settings.exportExternalSubtitles);
     ui.analysisVideoToggle->setChecked(settings.generateAnalysisVideo);
     ui.videoAnnotationsToggle->setChecked(settings.generateAnalysisVideo && settings.enableMoveAnnotations);
     ui.videoAnnotationsToggle->setEnabled(settings.generateAnalysisVideo);
     int idx = ui.multiPvComboBox->findData(settings.multiPv);
     if (idx >= 0) ui.multiPvComboBox->setCurrentIndex(idx);
     setThreadComboValue(ui.threadComboBox, settings.ffmpegThreads);
+    setThreadComboValue(ui.videoExportThreadsComboBox, settings.videoExportThreads);
     { int idx = ui.depthComboBox->findData(settings.stockfishDepth); if (idx >= 0) ui.depthComboBox->setCurrentIndex(idx); }
     { int idx = ui.timeComboBox->findData(settings.stockfishTime); if (idx >= 0) ui.timeComboBox->setCurrentIndex(idx); }
     { int idx = ui.nodesComboBox->findData(settings.stockfishNodes); if (idx >= 0) ui.nodesComboBox->setCurrentIndex(idx); }

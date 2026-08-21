@@ -15,6 +15,7 @@ struct LichessSyncResults {
     std::string finalEco;
     std::string finalOpeningName;
     std::vector<std::string> videoOpeningNames;
+    LichessGameMetadata gameMetadata;
 };
 
 class LichessSyncHelper : public QObject {

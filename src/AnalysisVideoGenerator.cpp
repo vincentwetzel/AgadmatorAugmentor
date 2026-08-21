@@ -23,6 +23,7 @@
 #include <sstream>
 #include <opencv2/imgcodecs.hpp>
 #include "ChessFenUtils.h"
+#include "ExtractorUtils.h"
 #include "ImageWriteUtils.h"
 #include "AnalysisVideoRenderUtils.h"
 #include "AnalysisVideoGenerator_FFmpeg.h"
@@ -47,6 +48,8 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                                                      const std::vector<std::string>& opening_names,
                                                      int arrow_thickness_pct,
                                                      const VideoOverlayConfig& overlay_config,
+                                                     bool include_subtitles,
+                                                     int export_threads,
                                                      std::atomic<bool>* cancel_flag,
                                                      std::function<void(int, const std::string&)> progress_callback) {
     // Try FFmpeg hardware acceleration first for quick metadata retrieval.
@@ -174,7 +177,10 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
     // Step 1: Render static images for each move and create FFmpeg concat demuxer files.
     // This drops the workload from O(Frames) (e.g., 36,000) to O(Moves) (e.g., 50),
     // speeding up generation by roughly 1000x and avoiding massive temp video files.
-    std::filesystem::path temp_dir = std::filesystem::path(actual_output_path).parent_path() / "temp_overlays";
+    // The output path originates in Qt as UTF-8.  Use the shared conversion
+    // before asking filesystem for its parent so non-ASCII filenames do not
+    // get reinterpreted through the Windows ANSI code page.
+    std::filesystem::path temp_dir = utils::utf8_to_path(actual_output_path).parent_path() / "temp_overlays";
     std::filesystem::create_directories(temp_dir);
 
     // RAII cleaner to ensure temp files are wiped even if an exception is thrown or generation fails early
@@ -396,8 +402,9 @@ bool AnalysisVideoGenerator::generate_analysis_video(const std::string& input_vi
                                   board_txt_path, bar_txt_path, text_txt_path, opening_txt_path, main_arrows_txt_path,
                                   draw_main_arrows, width, height, debug_w, debug_h, text_w, text_h,
                                   bar_w, bar_h, opening_w, opening_h, resolution, vCodec, aCodec, crf,
-                                  num_threads,
                                   (total_frames > 0 && fps > 0.0) ? static_cast<double>(total_frames) / fps : 0.0,
+                                  include_subtitles,
+                                  export_threads,
                                   cancel_flag, progress_callback);
 }
 

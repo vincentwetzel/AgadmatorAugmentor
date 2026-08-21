@@ -72,6 +72,7 @@ private:
         ToggleSwitch* pgnAnalysisToggle = nullptr;
         ToggleSwitch* pgnAnnotationsToggle = nullptr;
         ToggleSwitch* subtitlesToggle = nullptr;
+        ToggleSwitch* externalSubtitlesToggle = nullptr;
         ToggleSwitch* analysisVideoToggle = nullptr;
         ToggleSwitch* videoAnnotationsToggle = nullptr;
         ToggleSwitch* removeOriginalToggle = nullptr;
@@ -81,6 +82,7 @@ private:
         QComboBox* themeComboBox = nullptr;
         QComboBox* debugLevelComboBox = nullptr;
         QComboBox* threadComboBox = nullptr;
+        QComboBox* videoExportThreadsComboBox = nullptr;
         QComboBox* depthComboBox = nullptr;
         QComboBox* timeComboBox = nullptr;
         QComboBox* nodesComboBox = nullptr;

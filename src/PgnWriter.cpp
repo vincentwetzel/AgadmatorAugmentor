@@ -3,11 +3,11 @@
 #include "StockfishAnalyzer.h"
 #include "ChessFenUtils.h"
 #include <sstream>
-#include <iostream> // Required for std::cerr
 #include <iomanip> // For std::fixed, std::setprecision
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <stdexcept>
 
 namespace cta {
 
@@ -124,8 +124,8 @@ void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& cloc
             san_move = ChessFenUtils::build_san(current_pos, move, pure_uci) + annotation;
             current_pos.makemove(move);
         } catch (const std::exception& e) {
-            std::cerr << "Warning: Failed to parse or convert move " << pure_uci << ": " << e.what() << std::endl;
-            san_move = uci_move_str; // Fallback to UCI on error
+            throw std::runtime_error(
+                "Failed to convert UCI move '" + pure_uci + "' to SAN: " + e.what());
         }
 
         // The PgnPly struct members are ordered {san, clock, evaluation_comment}.
@@ -135,15 +135,24 @@ void PgnWriter::add_ply(const std::string& uci_move_str, const std::string& cloc
         active_lines_.back()->push_back(ply);
 }
 
-void PgnWriter::push_variation() {
+void PgnWriter::push_variation(const std::string& root_fen) {
     if (active_lines_.empty() || active_lines_.back()->empty()) return;
     auto* current_line = active_lines_.back();
     auto& last_ply = current_line->back();
 
-    // Save current position state before branching
-    libchess::Position& pos_to_branch_from = active_lines_.size() > 1 ? pos_stack_.back() : pos_;
-    libchess::Position new_var_pos = pos_to_branch_from;
-    new_var_pos.undomove(); // Undo the last move to start the variation from the same board state
+    libchess::Position new_var_pos;
+    if (!root_fen.empty()) {
+        // VariationData records the exact position before its first move.
+        // Replaying from that FEN also handles branches whose parent is not
+        // the last move currently visible in the output line.
+        new_var_pos.set_fen(root_fen);
+    } else {
+        // Retain the legacy behavior for callers that do not have a root FEN.
+        libchess::Position& pos_to_branch_from =
+            active_lines_.size() > 1 ? pos_stack_.back() : pos_;
+        new_var_pos = pos_to_branch_from;
+        new_var_pos.undomove();
+    }
     pos_stack_.push_back(new_var_pos);
 
     // Create and switch to the new variation line
@@ -219,7 +228,14 @@ std::string PgnWriter::build() const {
 
     // Build Moves Recursively
     build_line(oss, main_line_, 1, 0);
-    oss << "\n*\n";
+    std::string result = "*";
+    for (const auto& [key, value] : headers_) {
+        if (key == "Result" && (value == "1-0" || value == "0-1" || value == "1/2-1/2" || value == "*")) {
+            result = value;
+            break;
+        }
+    }
+    oss << "\n" << result << "\n";
 
     return oss.str();
 }

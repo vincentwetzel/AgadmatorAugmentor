@@ -15,20 +15,43 @@ TEST_TARGET = "test_extract_moves"
 
 
 class TeeStream:
-    """Mirror runner output to the console and the durable test-run log."""
+    """Mirror runner output with timestamps to the console and test-run log."""
 
     def __init__(self, console, log_file):
         self.console = console
         self.log_file = log_file
+        self._pending = ""
 
     def write(self, text):
-        self.console.write(text)
-        self.log_file.write(text)
+        if not text:
+            return 0
+
+        self._pending += text
+        lines = self._pending.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            self._pending = lines.pop()
+        else:
+            self._pending = ""
+
+        for line in lines:
+            timestamped_line = self._timestamp_line(line)
+            self.console.write(timestamped_line)
+            self.log_file.write(timestamped_line)
         return len(text)
 
     def flush(self):
+        if self._pending:
+            timestamped_line = self._timestamp_line(self._pending)
+            self.console.write(timestamped_line)
+            self.log_file.write(timestamped_line)
+            self._pending = ""
         self.console.flush()
         self.log_file.flush()
+
+    @staticmethod
+    def _timestamp_line(line):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        return f"[{timestamp}] {line}"
 
 
 class TestRunLog:
@@ -58,6 +81,10 @@ class TestRunLog:
         sys.stderr = TeeStream(self._original_stderr, self.file)
 
     def close(self):
+        if self._original_stdout is not None:
+            sys.stdout.flush()
+        if self._original_stderr is not None:
+            sys.stderr.flush()
         if self._original_stdout is not None:
             sys.stdout = self._original_stdout
         if self._original_stderr is not None:
@@ -89,6 +116,42 @@ def run_logged_process(command, cwd, env, check=False):
     return return_code
 
 
+def run_logged_process_with_timeout(
+    command, cwd, env, timeout_seconds, return_output=False
+):
+    """Run a test process with a hard upper bound and retain its output."""
+    print("$ " + " ".join(str(part) for part in command))
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        remaining_output, _ = process.communicate()
+        combined_output = (error.output or "") + (remaining_output or "")
+        if error.output:
+            print(error.output, end="")
+        if remaining_output:
+            print(remaining_output, end="")
+        print(
+            f"\nTest process timed out after {timeout_seconds:.0f} seconds "
+            "and was terminated."
+        )
+        return (124, combined_output) if return_output else 124
+
+    if output:
+        print(output, end="")
+    return (process.returncode, output or "") if return_output else process.returncode
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Configure, build, and run the ChessTube Analyzer tests."
@@ -106,6 +169,12 @@ def parse_args():
         "--no-build",
         action="store_true",
         help="Run an already-built test executable without configuring or compiling.",
+    )
+    parser.add_argument(
+        "--test-timeout",
+        type=float,
+        default=600.0,
+        help="Maximum seconds for the test executable (default: 600).",
     )
     parser.add_argument(
         "--stop-after",
@@ -371,13 +440,161 @@ def validate_compact_observations(observations, bundle_dir):
     return findings
 
 
-def run_test_process(exe_path, exe_dir, env, gtest_filter, logged=False):
+def run_test_process(
+    exe_path,
+    exe_dir,
+    env,
+    gtest_filter,
+    logged=False,
+    timeout_seconds=None,
+    return_output=False,
+):
     run_cmd = [exe_path]
     if gtest_filter:
         run_cmd.append("--gtest_filter=" + gtest_filter)
+    if logged and timeout_seconds is not None:
+        return run_logged_process_with_timeout(
+            run_cmd, exe_dir, env, timeout_seconds, return_output=return_output
+        )
     if logged:
-        return run_logged_process(run_cmd, exe_dir, env, check=False)
-    return subprocess.run(run_cmd, cwd=exe_dir, env=env, check=False).returncode
+        return_code = run_logged_process(run_cmd, exe_dir, env, check=False)
+        return (return_code, "") if return_output else return_code
+    return_code = subprocess.run(
+        run_cmd, cwd=exe_dir, env=env, check=False
+    ).returncode
+    return (return_code, "") if return_output else return_code
+
+
+_GTEST_RUNNING_RE = re.compile(
+    r"\[==========\]\s+Running\s+(\d+)\s+tests?\s+from\s+(\d+)\s+test suites?\."
+)
+_GTEST_STATUS_RE = re.compile(
+    r"^\[\s*(OK|FAILED|SKIPPED)\s*\]\s+(.+?)(?:\s+\(\d+\s+ms\))?$"
+)
+_GTEST_TOTAL_TIME_RE = re.compile(r"^\[==========\].*\((\d+)\s+ms total\)$")
+
+
+def parse_test_suite_summary(output, return_code=0):
+    """Extract a stable suite summary from GoogleTest output."""
+    lines = (output or "").splitlines()
+    tests_run = None
+    test_suites = None
+    gtest_elapsed_ms = None
+    passed_tests = []
+    failed_tests = []
+    skipped_tests = []
+    failure_details = {}
+    current_test = None
+    current_test_lines = []
+
+    def finish_test():
+        nonlocal current_test, current_test_lines
+        if current_test in failed_tests and current_test_lines:
+            details = []
+            for detail_line in current_test_lines:
+                stripped = detail_line.strip()
+                if not stripped or stripped.startswith("[ RUN"):
+                    continue
+                if stripped.startswith("[") and "error:" not in stripped.lower():
+                    continue
+                if stripped not in details:
+                    details.append(stripped)
+            if details:
+                failure_details[current_test] = details[:4]
+        current_test = None
+        current_test_lines = []
+
+    for line in lines:
+        running_match = _GTEST_RUNNING_RE.search(line)
+        if running_match:
+            tests_run = int(running_match.group(1))
+            test_suites = int(running_match.group(2))
+
+        elapsed_match = _GTEST_TOTAL_TIME_RE.search(line)
+        if elapsed_match:
+            gtest_elapsed_ms = int(elapsed_match.group(1))
+
+        if line.startswith("[ RUN      ] "):
+            finish_test()
+            current_test = line[len("[ RUN      ] "):].strip()
+            current_test_lines = []
+            continue
+
+        if current_test is not None:
+            current_test_lines.append(line)
+
+        status_match = _GTEST_STATUS_RE.match(line)
+        if not status_match:
+            continue
+        status, test_name = status_match.groups()
+        if re.match(r"^\d+\s+tests?\b", test_name) or "listed below" in test_name:
+            continue
+        if status == "OK":
+            if test_name not in passed_tests:
+                passed_tests.append(test_name)
+        elif status == "FAILED":
+            if test_name not in failed_tests:
+                failed_tests.append(test_name)
+        else:
+            if test_name not in skipped_tests:
+                skipped_tests.append(test_name)
+        finish_test()
+
+    finish_test()
+    # GoogleTest may omit the per-test footer when a process is terminated.
+    # Preserve the declared count while exposing only statuses actually seen.
+    if tests_run is None:
+        tests_run = len(passed_tests) + len(failed_tests) + len(skipped_tests)
+    if test_suites is None:
+        test_suites = 0
+
+    if return_code == 124:
+        status = "TIMEOUT"
+    elif return_code != 0 or failed_tests:
+        status = "FAIL"
+    else:
+        status = "PASS"
+
+    return {
+        "status": status,
+        "return_code": return_code,
+        "tests_run": tests_run,
+        "test_suites": test_suites,
+        "tests_passed": len(passed_tests),
+        "tests_failed": len(failed_tests),
+        "tests_skipped": len(skipped_tests),
+        "passed_tests": passed_tests,
+        "failed_tests": failed_tests,
+        "skipped_tests": skipped_tests,
+        "failure_details": failure_details,
+        "gtest_elapsed_ms": gtest_elapsed_ms,
+    }
+
+
+def print_test_suite_summary(summary):
+    """Print the wrapper-level summary after a test invocation completes."""
+    print("\n==================== SUITE SUMMARY ====================")
+    print(f"Status: {summary['status']}")
+    print(f"Tests run: {summary['tests_run']}")
+    print(f"Tests passed: {summary['tests_passed']}")
+    print(f"Tests failed: {summary['tests_failed']}")
+    print(f"Tests skipped: {summary['tests_skipped']}")
+    print(f"Test suites: {summary['test_suites']}")
+    if summary["gtest_elapsed_ms"] is not None:
+        print(f"GoogleTest elapsed: {summary['gtest_elapsed_ms'] / 1000.0:.3f}s")
+    print(f"Process exit code: {summary['return_code']}")
+
+    if summary["failed_tests"]:
+        print("Failed tests:")
+        for test_name in summary["failed_tests"]:
+            print(f"  - {test_name}")
+            for detail in summary["failure_details"].get(test_name, []):
+                print(f"      {detail}")
+    elif summary["status"] == "TIMEOUT":
+        print("Failed tests: unavailable (process timed out before completion)")
+    else:
+        print("Failed tests: none")
+    print("=======================================================")
 
 
 def read_diagnostic_records(path):
@@ -3956,6 +4173,14 @@ def main():
     build_env = os.environ.copy()
     build_env["TEMP"] = temp_dir
     build_env["TMP"] = temp_dir
+    # The test executable runs from the build output directory, so its
+    # relative media-path fallback cannot discover the documented sibling
+    # media repository. Supply that default here while honoring an explicit
+    # CTA_MEDIA_ROOT selected by the caller.
+    if not build_env.get("CTA_MEDIA_ROOT"):
+        sibling_media_root = Path(root_dir).parent / "chess-tube-analyzer-media"
+        if (sibling_media_root / "games").is_dir():
+            build_env["CTA_MEDIA_ROOT"] = str(sibling_media_root)
     failure_report = args.failure_report or os.path.join(
         build_dir, "diagnostics", "first_divergence.json"
     )
@@ -4074,15 +4299,27 @@ def main():
     
     print("\nStarting Test Run...\n" + "="*40)
     try:
-        return_code = run_test_process(exe_path, exe_dir, build_env, args.gtest_filter, logged=True)
+        return_code, test_output = run_test_process(
+            exe_path,
+            exe_dir,
+            build_env,
+            args.gtest_filter,
+            logged=True,
+            timeout_seconds=args.test_timeout,
+            return_output=True,
+        )
     except FileNotFoundError:
         print(f"\nCould not find the compiled executable at: {exe_path}")
         sys.exit(1)
 
+    suite_summary = parse_test_suite_summary(test_output, return_code)
+
     if return_code == 0:
         if args.induce_failure:
             print("Failure probe did not induce a test failure.")
+            print_test_suite_summary(suite_summary)
             sys.exit(1)
+        print_test_suite_summary(suite_summary)
         sys.exit(0)
 
     print(f"\nTest run finished with exit code {return_code}.")
@@ -4090,6 +4327,7 @@ def main():
         if os.path.exists(invariant_report):
             print(f"Invariant diagnostics: {os.path.abspath(invariant_report)}")
         print("No first-divergence report was produced; bounded replay skipped.")
+        print_test_suite_summary(suite_summary)
         sys.exit(return_code)
 
     try:
@@ -4098,6 +4336,7 @@ def main():
         anchor = float(report.get("anchor_timestamp", 0.0))
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"Could not read first-divergence report: {error}")
+        print_test_suite_summary(suite_summary)
         sys.exit(return_code)
 
     window_start = max(0.0, anchor - 5.0)
@@ -4138,7 +4377,12 @@ def main():
         f"{window_start:.3f}s to {window_end:.3f}s"
     )
     bounded_return_code = run_test_process(
-        exe_path, exe_dir, bounded_env, args.gtest_filter, logged=True
+        exe_path,
+        exe_dir,
+        bounded_env,
+        args.gtest_filter,
+        logged=True,
+        timeout_seconds=args.test_timeout,
     )
     if os.path.exists(bounded_diagnostic):
         preliminary_records, preliminary_errors = read_diagnostic_records(
@@ -4170,7 +4414,12 @@ def main():
                 bounded_env["CTA_TRACE_END"] = str(refined_end)
                 bounded_env["CTA_STOP_AFTER_SECONDS"] = str(refined_end)
                 bounded_return_code = run_test_process(
-                    exe_path, exe_dir, bounded_env, args.gtest_filter, logged=True
+                    exe_path,
+                    exe_dir,
+                    bounded_env,
+                    args.gtest_filter,
+                    logged=True,
+                    timeout_seconds=args.test_timeout,
                 )
                 window_start, window_end = refined_start, refined_end
     print(f"Diagnostic JSONL: {os.path.abspath(bounded_diagnostic)}")
@@ -4254,9 +4503,12 @@ def main():
     if args.induce_failure:
         if not bundle_created:
             print("Failure probe produced no diagnostic bundle.")
+            print_test_suite_summary(suite_summary)
             sys.exit(1)
         print("Intentional failure workflow verified: first-divergence bundle created.")
+        print_test_suite_summary(suite_summary)
         sys.exit(0)
+    print_test_suite_summary(suite_summary)
     sys.exit(return_code)
 
 if __name__ == "__main__":

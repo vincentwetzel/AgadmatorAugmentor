@@ -104,6 +104,17 @@ broader migration.
   serialization.
 - Tests may identify fixtures and assert known expected results. Production code
   may not use those test-only identifiers to select behavior.
+- Treat every test assertion as part of the product contract. Do not weaken,
+  delete, disable, or narrow an assertion merely because the current
+  implementation, extracted output, or diagnostic trace does not satisfy it.
+  A mismatch is a defect to investigate and fix in production code.
+- Change a fixture's expected output or assertion scope only when the intended
+  fixture contract has independently changed and the new ground truth has been
+  verified from the source asset or specification. Document that intentional
+  contract change in the test or fixture update; never derive a new oracle from
+  the implementation under test. In particular, an integration test that
+  asserts observed analysis variations must continue to fail when the reducer
+  produces different variations.
 - Prefer deterministic tests and test the smallest relevant module before an
   integration run. Include edge cases such as empty input, cancellation,
   malformed resources, promotions, reverts, missing clocks, and terminal chess
@@ -134,6 +145,8 @@ Before considering a change complete, verify:
    branches.
 4. Ownership, ordering, cancellation, and error behavior are clear.
 5. Relevant tests/builds were run, or the limitation is reported.
-6. The diff contains no unrelated formatting, generated files, secrets, or
+6. No assertion or fixture oracle was relaxed to conceal an implementation
+   mismatch; any intentional contract change is independently evidenced and
+   documented.
+7. The diff contains no unrelated formatting, generated files, secrets, or
    accidental behavior changes.
-

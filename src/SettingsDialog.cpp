@@ -211,14 +211,15 @@ void SettingsDialog::setupUi() {
     outputsLayout->addWidget(pgnGroup);
 
     auto* videoOutputGroup = new QGroupBox("Analysis video output");
-    videoOutputGroup->setToolTip("Choose whether to create an annotated video and add synchronized move subtitles.");
+    videoOutputGroup->setToolTip("Choose whether to create an annotated video, embed synchronized move subtitles, or save a standalone SRT file.");
     auto* videoOutputLayout = new QVBoxLayout(videoOutputGroup);
     videoOutputLayout->addWidget(createHelpText(
         "Video appearance and encoding are configured on the Video Export tab. Engine overlays automatically request the analysis they need.",
         "Explains where to configure the analysis video."
     ));
     videoOutputLayout->addWidget(createToggleRow("Create analysis video", "Create a new video with the configured board, evaluation, opening, and engine overlays.", ui.analysisVideoToggle, false));
-    videoOutputLayout->addWidget(createToggleRow("Add move subtitles", "Add synchronized move subtitles to the analysis video. Enabling this also creates the analysis video.", ui.subtitlesToggle, false));
+    videoOutputLayout->addWidget(createToggleRow("Embed move subtitles", "Embed synchronized SAN move subtitles in the analysis video. This also creates the analysis video when enabled; turn it off for a video without generated move subtitles.", ui.subtitlesToggle, false));
+    videoOutputLayout->addWidget(createToggleRow("Save external SRT file", "Keep a standalone SRT file alongside the output video. This is independent of embedding subtitles in the video.", ui.externalSubtitlesToggle, false));
     videoOutputLayout->addWidget(createToggleRow("Add move quality labels", "Add labels such as Book, !!, !, ?!, and ? to move text in the analysis video. This requires engine analysis.", ui.videoAnnotationsToggle, false));
     outputsLayout->addWidget(videoOutputGroup);
     outputsLayout->addStretch();
@@ -405,6 +406,20 @@ void SettingsDialog::setupUi() {
             ? QString("%1 threads (maximum, default)").arg(threadCount)
             : QString("%1 thread%2").arg(threadCount).arg(threadCount == 1 ? "" : "s");
         ui.threadComboBox->addItem(label, threadCount);
+    }
+
+    ui.videoExportThreadsComboBox = createComboBoxRow(
+        advancedGroupLayout,
+        "Video export threads:",
+        "CPU threads used while composing and encoding the analysis video. Lower values keep the computer more responsive.",
+        "videoExportThreadsComboBox",
+        "Set the CPU limit for FFmpeg video export. Four threads is a good balance; lower it if the computer still feels sluggish.");
+    ui.videoExportThreadsComboBox->clear();
+    for (int threadCount = 1; threadCount <= maxThreads; ++threadCount) {
+        const QString label = threadCount == maxThreads
+            ? QString("%1 threads (maximum)").arg(threadCount)
+            : QString("%1 thread%2").arg(threadCount).arg(threadCount == 1 ? "" : "s");
+        ui.videoExportThreadsComboBox->addItem(label, threadCount);
     }
 
     ui.debugLevelComboBox = createComboBoxRow(advancedGroupLayout, "Debug images:", "Save diagnostic images while processing. Useful when checking why a move was or was not detected.", "", "Choose how many debug images to save. Full diagnostics can use significant disk space.");

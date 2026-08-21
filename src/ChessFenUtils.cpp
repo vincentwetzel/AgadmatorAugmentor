@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm> // For std::clamp
+#include <stdexcept>
 
 namespace cta {
 namespace ChessFenUtils {
@@ -98,8 +99,9 @@ namespace ChessFenUtils {
                 san_line += build_san(pos, m, uci_move);
                 pos.makemove(m);
             }
-        } catch (...) {
-            return uci_line; // fallback to original string on parsing error
+        } catch (const std::exception& error) {
+            throw std::runtime_error(
+                "Failed to convert UCI line '" + uci_line + "' to SAN: " + error.what());
         }
         return san_line.empty() ? uci_line : san_line;
     }

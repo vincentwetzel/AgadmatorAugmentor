@@ -9,7 +9,7 @@
 #include <QDir>
 #include <QSettings>
 #include <QStandardPaths>
-#include <fstream>
+#include <QFile>
 #include <cmath>
 #include <algorithm>
 #include <sstream>
@@ -88,7 +88,8 @@ bool VideoExportHelper::exportAll(const ProcessingSettings& settings,
     QString outPath = QDir(pgnInfo.absolutePath()).filePath(QFileInfo(settings.videoPath).completeBaseName() + "_analysis" + extension);
     QString subtitlePath;
 
-    if (settings.generateSubtitles) {
+    const bool needsSubtitleFile = settings.generateSubtitles || settings.exportExternalSubtitles;
+    if (needsSubtitleFile) {
         emit logMessage("Generating synced move subtitles...");
         QDir().mkpath(pgnInfo.absolutePath());
         subtitlePath = outPath + ".srt";
@@ -101,8 +102,8 @@ bool VideoExportHelper::exportAll(const ProcessingSettings& settings,
         success = generateVideo(settings, gameData, sfResults, lichessResults, geo, outPath, subtitlePath, cancelFlag);
     }
 
-    if (settings.generateSubtitles && !subtitlePath.isEmpty()) {
-        QFile::remove(subtitlePath); // Cleanup the temporary subtitle file once embedded
+    if (!settings.exportExternalSubtitles && !subtitlePath.isEmpty()) {
+        QFile::remove(subtitlePath); // The SRT is temporary when it is only embedded.
     }
 
     return success;
@@ -110,18 +111,29 @@ bool VideoExportHelper::exportAll(const ProcessingSettings& settings,
 
 bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const GameData& gameData, const StockfishAnalysisResults& sfResults, const LichessSyncResults& lichessResults) {
     PgnWriter pgn;
-    pgn.add_header("Event", "Unknown");
-    pgn.add_header("Site", "Unknown");
-    pgn.add_header("Date", "Unknown");
-    pgn.add_header("Round", "Unknown");
-    pgn.add_header("White", sfResults.whiteEstimatedElo > 0 ? "Unknown (~" + std::to_string(sfResults.whiteEstimatedElo) + ")" : "Unknown");
-    pgn.add_header("Black", sfResults.blackEstimatedElo > 0 ? "Unknown (~" + std::to_string(sfResults.blackEstimatedElo) + ")" : "Unknown");
-    
-    if (sfResults.whiteEstimatedElo > 0) pgn.add_header("WhiteElo", std::to_string(sfResults.whiteEstimatedElo));
-    if (sfResults.blackEstimatedElo > 0) pgn.add_header("BlackElo", std::to_string(sfResults.blackEstimatedElo));
-    if (!lichessResults.finalEco.empty()) {
-        pgn.add_header("ECO", lichessResults.finalEco);
-        pgn.add_header("Opening", lichessResults.finalOpeningName);
+    const auto& metadata = lichessResults.gameMetadata;
+    pgn.add_header("Event", metadata.event.empty() ? "Unknown" : metadata.event);
+    pgn.add_header("Site", metadata.site.empty() ? "Unknown" : metadata.site);
+    pgn.add_header("Date", metadata.date.empty() ? "Unknown" : metadata.date);
+    pgn.add_header("Round", metadata.round.empty() ? "Unknown" : metadata.round);
+    pgn.add_header("White", metadata.white.empty()
+        ? (sfResults.whiteEstimatedElo > 0 ? "Unknown (~" + std::to_string(sfResults.whiteEstimatedElo) + ")" : "Unknown")
+        : metadata.white);
+    pgn.add_header("Black", metadata.black.empty()
+        ? (sfResults.blackEstimatedElo > 0 ? "Unknown (~" + std::to_string(sfResults.blackEstimatedElo) + ")" : "Unknown")
+        : metadata.black);
+    pgn.add_header("Result", metadata.result.empty() ? "*" : metadata.result);
+
+    if (!metadata.white_elo.empty()) pgn.add_header("WhiteElo", metadata.white_elo);
+    else if (sfResults.whiteEstimatedElo > 0) pgn.add_header("WhiteElo", std::to_string(sfResults.whiteEstimatedElo));
+    if (!metadata.black_elo.empty()) pgn.add_header("BlackElo", metadata.black_elo);
+    else if (sfResults.blackEstimatedElo > 0) pgn.add_header("BlackElo", std::to_string(sfResults.blackEstimatedElo));
+
+    const std::string eco = metadata.eco.empty() ? lichessResults.finalEco : metadata.eco;
+    const std::string opening = metadata.opening.empty() ? lichessResults.finalOpeningName : metadata.opening;
+    if (!eco.empty()) {
+        pgn.add_header("ECO", eco);
+        pgn.add_header("Opening", opening);
     }
 
     if (sfResults.whiteAcpl >= 0) {
@@ -137,43 +149,53 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
         pgn.add_header("BlackAccuracy", ss.str());
     }
 
-    for (size_t i = 0; i < gameData.moves.size(); ++i) {
-        std::string clockStr;
-        size_t clockIdx = i + 1;
-        const auto* clk_ptr = (clockIdx < gameData.clocks.size()) ? &gameData.clocks[clockIdx] : (i < gameData.clocks.size()) ? &gameData.clocks[i] : nullptr;
-        clockStr = clk_ptr ? ((i % 2 == 0) ? clk_ptr->white_time : clk_ptr->black_time) : "0:00:00";
-        
-        std::string main_eval_str = (settings.includePgnAnalysis && !sfResults.mainLineResults.empty() && i + 1 < sfResults.mainLineResults.size() && !sfResults.mainLineResults[i + 1].lines.empty())
-            ? ChessFenUtils::format_eval_string(sfResults.mainLineResults[i + 1].lines[0], sfResults.mainLineResults[i + 1].fen) : "";
-        
-        std::string move_with_annotation = gameData.moves[i];
-        if (settings.includePgnMoveAnnotations && i < sfResults.moveAnnotations.size()) {
-            move_with_annotation += sfResults.moveAnnotations[i];
-        }
-        pgn.add_ply(move_with_annotation, Utils::format_clock_string(clockStr), main_eval_str);
+    try {
+        for (size_t i = 0; i < gameData.moves.size(); ++i) {
+            std::string clockStr;
+            size_t clockIdx = i + 1;
+            const auto* clk_ptr = (clockIdx < gameData.clocks.size()) ? &gameData.clocks[clockIdx] : (i < gameData.clocks.size()) ? &gameData.clocks[i] : nullptr;
+            clockStr = clk_ptr ? ((i % 2 == 0) ? clk_ptr->white_time : clk_ptr->black_time) : "0:00:00";
 
-        auto it = gameData.variations.find(i);
-        if (it != gameData.variations.end()) {
-            for (const auto& var_data : it->second) {
-                pgn.push_variation();
-                for (size_t j = 0; j < var_data.moves.size(); ++j) {
-                    std::string var_clock_str = "0:00:00";
-                    if (j < var_data.clocks.size()) var_clock_str = ((i + j) % 2 == 0) ? var_data.clocks[j].white_time : var_data.clocks[j].black_time;
-                    std::string eval_str = "";
-                    if (settings.includePgnAnalysis && j + 1 < var_data.fens.size()) {
-                        auto cache_it = sfResults.fenCache.find(var_data.fens[j + 1]);
-                        if (cache_it != sfResults.fenCache.end() && !cache_it->second.lines.empty()) eval_str = ChessFenUtils::format_eval_string(cache_it->second.lines[0], cache_it->second.fen);
+            std::string main_eval_str = (settings.includePgnAnalysis && !sfResults.mainLineResults.empty() && i + 1 < sfResults.mainLineResults.size() && !sfResults.mainLineResults[i + 1].lines.empty())
+                ? ChessFenUtils::format_eval_string(sfResults.mainLineResults[i + 1].lines[0], sfResults.mainLineResults[i + 1].fen) : "";
+
+            std::string move_with_annotation = gameData.moves[i];
+            if (settings.includePgnMoveAnnotations && i < sfResults.moveAnnotations.size()) {
+                move_with_annotation += sfResults.moveAnnotations[i];
+            }
+            pgn.add_ply(move_with_annotation, Utils::format_clock_string(clockStr), main_eval_str);
+
+            auto it = gameData.variations.find(i);
+            if (it != gameData.variations.end()) {
+                for (const auto& var_data : it->second) {
+                    const std::string variation_root_fen = !var_data.fens.empty()
+                        ? var_data.fens.front()
+                        : (i < gameData.fens.size() ? gameData.fens[i] : std::string{});
+                    pgn.push_variation(variation_root_fen);
+                    for (size_t j = 0; j < var_data.moves.size(); ++j) {
+                        std::string var_clock_str = "0:00:00";
+                        if (j < var_data.clocks.size()) var_clock_str = ((i + j) % 2 == 0) ? var_data.clocks[j].white_time : var_data.clocks[j].black_time;
+                        std::string eval_str = "";
+                        if (settings.includePgnAnalysis && j + 1 < var_data.fens.size()) {
+                            auto cache_it = sfResults.fenCache.find(var_data.fens[j + 1]);
+                            if (cache_it != sfResults.fenCache.end() && !cache_it->second.lines.empty()) eval_str = ChessFenUtils::format_eval_string(cache_it->second.lines[0], cache_it->second.fen);
+                        }
+                        pgn.add_ply(var_data.moves[j], Utils::format_clock_string(var_clock_str), eval_str);
                     }
-                    pgn.add_ply(var_data.moves[j], Utils::format_clock_string(var_clock_str), eval_str);
+                    pgn.pop_variation();
                 }
-                pgn.pop_variation();
             }
         }
+    } catch (const std::exception& pgn_error) {
+        emit error(QString("Failed to generate PGN: %1")
+                       .arg(QString::fromStdString(pgn_error.what())));
+        return false;
     }
     
-    std::ofstream pgnFile(settings.outputPath.toStdString());
-    if (pgnFile.is_open()) {
-        pgnFile << pgn.build();
+    QFile pgnFile(settings.outputPath);
+    if (pgnFile.open(QIODevice::WriteOnly)) {
+        pgnFile.write(QByteArray::fromStdString(pgn.build()));
+        pgnFile.close();
         emit logMessage("Saved PGN to: " + settings.outputPath);
         return true;
     }
@@ -182,8 +204,8 @@ bool VideoExportHelper::generatePgn(const ProcessingSettings& settings, const Ga
 }
 
 bool VideoExportHelper::generateSubtitles(const ProcessingSettings& settings, const GameData& gameData, const QString& subtitlePath) {
-    std::ofstream srtFile(subtitlePath.toStdString());
-    if (!srtFile.is_open()) {
+    QFile srtFile(subtitlePath);
+    if (!srtFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
         emit error(QString("Failed to save subtitles to: %1").arg(subtitlePath));
         return false;
     }
@@ -241,18 +263,28 @@ bool VideoExportHelper::generateSubtitles(const ProcessingSettings& settings, co
 
         // Use 1-based ply index to map correctly to PgnWriter-style move numbers
         int ply_index = (full_move - 1) * 2 + (is_white ? 1 : 2);
-        std::string san_move = ChessFenUtils::uci_to_san_line(gameData.video_moves[i], fen);
+        std::string san_move;
+        try {
+            san_move = ChessFenUtils::uci_to_san_line(gameData.video_moves[i], fen);
+        } catch (const std::exception& conversion_error) {
+            emit error(QString("Failed to generate subtitles: %1")
+                           .arg(QString::fromStdString(conversion_error.what())));
+            return false;
+        }
 
-        srtFile << sub_index++ << "\n";
-        srtFile << Utils::format_srt_timestamp(start_t) << " --> " << Utils::format_srt_timestamp(end_t) << "\n";
-        srtFile << Utils::move_to_subtitle_text(ply_index, san_move) << "\n\n";
+        srtFile.write(QByteArray::number(sub_index++));
+        srtFile.write("\n");
+        srtFile.write(Utils::format_srt_timestamp(start_t).c_str());
+        srtFile.write(" --> ");
+        srtFile.write(Utils::format_srt_timestamp(end_t).c_str());
+        srtFile.write("\n");
+        srtFile.write(Utils::move_to_subtitle_text(ply_index, san_move).c_str());
+        srtFile.write("\n\n");
     }
 
     // FFmpeg fails if the SRT file is completely empty
     if (sub_index == 1) {
-        srtFile << "1\n";
-        srtFile << "00:00:00,000 --> 00:00:01,000\n";
-        srtFile << "Analysis Started\n\n";
+        srtFile.write("1\n00:00:00,000 --> 00:00:01,000\nAnalysis Started\n\n");
     }
 
     return true; 
@@ -292,6 +324,8 @@ bool VideoExportHelper::generateVideo(const ProcessingSettings& settings, const 
         lichessResults.videoOpeningNames,
         settings.overlayConfig.arrowThicknessPct, // arrow thickness pct
         settings.overlayConfig,
+        settings.generateSubtitles,
+        settings.videoExportThreads,
         cancelFlag,
         progress_cb
     );

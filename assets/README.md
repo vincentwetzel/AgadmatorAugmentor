@@ -9,7 +9,9 @@ The asset tree is divided by purpose:
 - `fixtures/games/<fixture-name>/` contains small PGN integration baselines.
   Large integration videos live outside the repository under the matching
   sibling `chess-tube-analyzer-media/games/<fixture-name>/` directory and are
-  selected by the test suite through `CTA_MEDIA_ROOT`.
+  selected by the test suite through `CTA_MEDIA_ROOT`. The `expected.pgn`
+  files provide both the move/clock baseline and the metadata contract used by
+  the integration tests.
 - `templates/` contains the built-in overlay template JSON files copied beside
   the GUI executable at build time.
 - `icons/` contains small UI assets used by video rendering.

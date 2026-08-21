@@ -23,6 +23,133 @@ def report_for(expected_move="d2d4"):
 
 
 class DiagnosticClassificationTests(unittest.TestCase):
+    def test_parse_test_suite_summary_reports_success_totals(self):
+        output = """\
+[==========] Running 2 tests from 1 test suite.
+[ RUN      ] PassingTest.First
+[       OK ] PassingTest.First (1 ms)
+[ RUN      ] PassingTest.Second
+[       OK ] PassingTest.Second (2 ms)
+[==========] 2 tests from 1 test suite ran. (4 ms total)
+[  PASSED  ] 2 tests.
+"""
+
+        summary = RUNNER.parse_test_suite_summary(output, return_code=0)
+
+        self.assertEqual(summary["status"], "PASS")
+        self.assertEqual(summary["tests_run"], 2)
+        self.assertEqual(summary["test_suites"], 1)
+        self.assertEqual(summary["tests_passed"], 2)
+        self.assertEqual(summary["tests_failed"], 0)
+        self.assertEqual(summary["tests_skipped"], 0)
+        self.assertEqual(summary["gtest_elapsed_ms"], 4)
+
+    def test_parse_test_suite_summary_reports_totals_and_failed_details(self):
+        output = """\
+[==========] Running 3 tests from 2 test suites.
+[ RUN      ] PassingTest.Works
+[       OK ] PassingTest.Works (1 ms)
+[ RUN      ] FailingTest.Broken
+tests/example.cpp(42): error: expected true, actual false
+[  FAILED  ] FailingTest.Broken (2 ms)
+[ RUN      ] SkippedTest.NotAvailable
+[  SKIPPED ] SkippedTest.NotAvailable (0 ms)
+[==========] 3 tests from 2 test suites ran. (7 ms total)
+[  PASSED  ] 1 test.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] FailingTest.Broken
+"""
+
+        summary = RUNNER.parse_test_suite_summary(output, return_code=1)
+
+        self.assertEqual(summary["status"], "FAIL")
+        self.assertEqual(summary["tests_run"], 3)
+        self.assertEqual(summary["test_suites"], 2)
+        self.assertEqual(summary["tests_passed"], 1)
+        self.assertEqual(summary["tests_failed"], 1)
+        self.assertEqual(summary["tests_skipped"], 1)
+        self.assertEqual(summary["failed_tests"], ["FailingTest.Broken"])
+        self.assertEqual(summary["gtest_elapsed_ms"], 7)
+        self.assertIn(
+            "tests/example.cpp(42): error: expected true, actual false",
+            summary["failure_details"]["FailingTest.Broken"],
+        )
+
+    def test_parse_test_suite_summary_marks_timeout_without_completed_footer(self):
+        output = """\
+[==========] Running 2 tests from 1 test suite.
+[ RUN      ] SlowTest.NeverFinishes
+"""
+
+        summary = RUNNER.parse_test_suite_summary(output, return_code=124)
+
+        self.assertEqual(summary["status"], "TIMEOUT")
+        self.assertEqual(summary["tests_run"], 2)
+        self.assertEqual(summary["tests_passed"], 0)
+        self.assertEqual(summary["tests_failed"], 0)
+        self.assertIsNone(summary["gtest_elapsed_ms"])
+
+    def test_print_test_suite_summary_includes_failed_test_names(self):
+        output = StringIO()
+        summary = {
+            "status": "FAIL",
+            "return_code": 1,
+            "tests_run": 2,
+            "test_suites": 1,
+            "tests_passed": 1,
+            "tests_failed": 1,
+            "tests_skipped": 0,
+            "failed_tests": ["Example.Fails"],
+            "skipped_tests": [],
+            "passed_tests": ["Example.Passes"],
+            "failure_details": {"Example.Fails": ["assertion failed"]},
+            "gtest_elapsed_ms": 12,
+        }
+
+        with redirect_stdout(output):
+            RUNNER.print_test_suite_summary(summary)
+
+        rendered = output.getvalue()
+        self.assertIn("SUITE SUMMARY", rendered)
+        self.assertIn("Tests run: 2", rendered)
+        self.assertIn("Tests passed: 1", rendered)
+        self.assertIn("Tests failed: 1", rendered)
+        self.assertIn("Example.Fails", rendered)
+        self.assertIn("assertion failed", rendered)
+
+    def test_tee_stream_timestamps_each_complete_output_line(self):
+        console = StringIO()
+        log_file = StringIO()
+        stream = RUNNER.TeeStream(console, log_file)
+
+        stream.write("first\nsecond\n")
+        stream.flush()
+
+        output = console.getvalue()
+        self.assertEqual(output, log_file.getvalue())
+        lines = output.splitlines()
+        self.assertEqual(len(lines), 2)
+        for line, message in zip(lines, ("first", "second")):
+            self.assertRegex(
+                line,
+                rf"^\[\d{{2}}:\d{{2}}:\d{{2}}\] {message}$",
+            )
+
+    def test_tee_stream_timestamps_partial_writes_as_one_line(self):
+        console = StringIO()
+        log_file = StringIO()
+        stream = RUNNER.TeeStream(console, log_file)
+
+        stream.write("partial")
+        stream.write(" line")
+        stream.write("\n")
+        stream.flush()
+
+        self.assertEqual(console.getvalue(), log_file.getvalue())
+        self.assertRegex(
+            console.getvalue(),
+            r"^\[\d{2}:\d{2}:\d{2}\] partial line\n$",
+        )
     def test_test_run_log_cycles_to_the_requested_retention_count(self):
         root = Path("build_tests") / "tmp" / "test_run_log_cycle"
         shutil.rmtree(root, ignore_errors=True)
